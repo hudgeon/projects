@@ -661,7 +661,7 @@ async function collectProject(
   config: Config,
   item: Item,
   sessions: Session[],
-  sources: Pick<Project["sources"], "codex" | "claude" | "grok">,
+  sources: Pick<Project["sources"], "codex" | "claude">,
   now: number,
 ): Promise<Project> {
   const root = path.resolve(config.root, item.directory);
@@ -883,15 +883,7 @@ export async function collect(
       ? claude(config.home, now)
       : unused("Claude"),
   ]);
-  const sources = {
-    codex: c.source,
-    claude: a.source,
-    grok: source(
-      "unsupported",
-      "Grok session adapter not yet verified on this machine.",
-      now,
-    ),
-  };
+  const sources = { codex: c.source, claude: a.source };
   const projects: Project[] = [];
   // Bound concurrency across repositories; each subprocess has its own deadline.
   const items = await discover(config);

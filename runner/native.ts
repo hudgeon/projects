@@ -135,9 +135,9 @@ export function stopProcess(child: ChildProcessWithoutNullStreams) {
   timer.unref();
 }
 export class NativeStopError extends Error {}
-// A failure with a known cause: its message is what the user reads, its reason the
-// safe category telemetry keeps.
-export class NativeFailure extends Error {
+// A failure with a known cause, from a native session or the runner itself: its
+// message is what the user reads, its reason the safe category telemetry keeps.
+export class Failure extends Error {
   constructor(
     readonly reason: FailureReason,
     message: string,
@@ -208,18 +208,24 @@ function turnFailure(info: unknown, acted: boolean): Error {
     "turn_failed",
     "Codex turn failed or was interrupted; completion is unverified.",
   ];
-  return new NativeFailure(reason, message);
+  return new Failure(reason, message);
 }
 // Which request Codex refused, so a failure names its step.
-const refused: Record<string, string> = {
-  initialize:
+const opening: [FailureReason, string] = [
+  "session_rejected",
+  "Codex could not open the session. Inspect its native session and configuration.",
+];
+const refused: Record<string, [FailureReason, string]> = {
+  initialize: [
+    "native_unavailable",
     "Codex would not start a session. Check its installation and local login.",
-  "thread/start":
-    "Codex could not open the session. Inspect its native session and configuration.",
-  "thread/resume":
-    "Codex could not open the session. Inspect its native session and configuration.",
-  "turn/start":
+  ],
+  "thread/start": opening,
+  "thread/resume": opening,
+  "turn/start": [
+    "turn_rejected",
     "Codex rejected the turn. Inspect its native session and configuration.",
+  ],
 };
 export function nativeProcessStopped(pid: number | null): boolean {
   if (!pid || pid <= 1) return false;
@@ -360,7 +366,12 @@ function readLines(
   child.stdout.on("data", (chunk: string) => {
     buffer += chunk;
     if (buffer.length > 8_000_000) {
-      fail(Error("Native response exceeded the protocol limit."));
+      fail(
+        new Failure(
+          "protocol_error",
+          "Native response exceeded the protocol limit.",
+        ),
+      );
       return;
     }
     let index: number;
@@ -371,13 +382,19 @@ function readLines(
       try {
         receive(object(JSON.parse(line)));
       } catch {
-        fail(Error("Native session returned an invalid protocol message."));
+        fail(
+          new Failure(
+            "protocol_error",
+            "Native session returned an invalid protocol message.",
+          ),
+        );
       }
     }
   });
   child.on("error", () =>
     fail(
-      Error(
+      new Failure(
+        "native_unavailable",
         "Native agent could not start. Check its installation and local login.",
       ),
     ),
@@ -493,7 +510,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       const id = next++;
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(Error(`Codex ${method} timed out.`));
+        reject(new Failure("native_timeout", `Codex ${method} timed out.`));
       }, timeout);
       pending.set(id, { resolve, reject, timer });
       methods.set(id, method);
@@ -509,14 +526,16 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         if (!entry) return;
         clearTimeout(entry.timer);
         pending.delete(message.id);
-        if (message.error)
+        if (message.error) {
+          const known = refused[methods.get(message.id) ?? ""];
           entry.reject(
-            Error(
-              refused[methods.get(message.id) ?? ""] ??
-                "Codex rejected a session request. Inspect its native session and configuration.",
-            ),
+            known
+              ? new Failure(...known)
+              : Error(
+                  "Codex rejected a session request. Inspect its native session and configuration.",
+                ),
           );
-        else entry.resolve(object(message.result));
+        } else entry.resolve(object(message.result));
         return;
       }
       const p = object(message.params);
@@ -585,7 +604,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         }
         if (denied) {
           rejectTurn(
-            Error(
+            new Failure(
+              "permission_required",
               "Codex needs an approval or answer outside the runner's authority. Inspect the native session.",
             ),
           );
@@ -596,14 +616,24 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
           o.onActivity?.({ kind: "turn", state: "finished" });
           finish(JSON.parse(finalText));
         } catch {
-          rejectTurn(Error("Codex did not return a valid structured result."));
+          rejectTurn(
+            new Failure(
+              "invalid_result",
+              "Codex did not return a valid structured result.",
+            ),
+          );
         }
       }
     },
     fail,
   );
   child.on("close", () =>
-    fail(Error("Codex exited before confirming the turn result.")),
+    fail(
+      new Failure(
+        "native_exited",
+        "Codex exited before confirming the turn result.",
+      ),
+    ),
   );
   try {
     if (child.pid) await o.onProcess?.(child.pid);
@@ -635,9 +665,13 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     );
     const thread = object(started.thread);
     if (typeof thread.id !== "string")
-      throw Error("Codex did not identify its session.");
+      throw new Failure(
+        "protocol_error",
+        "Codex did not identify its session.",
+      );
     if (o.sessionId && object(thread.status).type === "active")
-      throw Error(
+      throw new Failure(
+        "session_active",
         "Codex session is already active; do not overlap its current turn.",
       );
     threadId = thread.id;
@@ -860,35 +894,35 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
       o.signal.removeEventListener("abort", abort);
       if (denied)
         reject(
-          new NativeFailure(
+          new Failure(
             "permission_required",
             "Claude needs an approval or answer outside the runner's authority. Inspect the native session.",
           ),
         );
       else if (subtype === "error_max_turns")
         reject(
-          new NativeFailure(
+          new Failure(
             "turn_limit",
             "Claude reached its turn limit before finishing. Send a follow-up to continue.",
           ),
         );
       else if (failed)
         reject(
-          new NativeFailure(
+          new Failure(
             "turn_failed",
             "Claude's turn failed; completion is unverified. Inspect the native session.",
           ),
         );
       else if (!received)
         reject(
-          new NativeFailure(
+          new Failure(
             "native_exited",
             "Claude exited before confirming the turn result.",
           ),
         );
       else if (code !== 0 || result === undefined)
         reject(
-          new NativeFailure(
+          new Failure(
             "invalid_result",
             "Claude did not return a valid structured result. Check the native session.",
           ),

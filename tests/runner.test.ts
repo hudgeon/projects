@@ -11,7 +11,7 @@ import {
   browserTools,
   hiddenBrowserTools,
   NativeBusyError,
-  NativeFailure,
+  Failure,
   NativeStopError,
   parseProgressNote,
   type NativeOptions,
@@ -372,7 +372,7 @@ test("a conversation's master runs in the app the user chose, and a session stay
 test("implementation goes straight to a change child, and the master reads a compact view of active work", async () => {
   const dir = await fixture(), o = engineOptions(dir), prompts: string[] = [];
   const now = Date.now(), ok = {state: "ok" as const, message: "Fine", observedAt: now};
-  const sources = {git: ok, github: ok, codex: ok, claude: ok, grok: {...ok, state: "unsupported" as const, message: "Not verified"}};
+  const sources = {git: ok, github: ok, codex: {...ok, state: "unsupported" as const, message: "Not used here"}, claude: ok};
   const worktree = {path: dir, branch: "main", changed: 0, conflicts: 0, ahead: 0, behind: 0, isPrimary: true, error: null};
   const session = {id: "s", title: "Live work", app: "Codex" as const, cwd: dir, updatedAt: now - 60_000, state: "running" as const, evidence: ""};
   // A removed folder is evidence only while its commit holds unpushed work.
@@ -498,7 +498,7 @@ test("after a move, a failed turn on the Laptop recovers only the Laptop's own w
     calls.push(opts);
     await opts.onSession("laptop-master-session");
     await opts.onProcess?.(4321);
-    if (limited-- > 0) throw new NativeFailure("usage_limit", "Your Codex usage limit is reached. Send a follow-up after it resets.");
+    if (limited-- > 0) throw new Failure("usage_limit", "Your Codex usage limit is reached. Send a follow-up after it resets.");
     return complete;
   };
   try {
@@ -1383,7 +1383,8 @@ test("a failed save is recorded once per failing stretch with a safe reason, and
   let saves = 0, masters = 0;
   o.save = async () => {
     saves++;
-    throw Error("Git could not verify or prepare this workspace. Inspect the repository before retrying.");
+    await git(dir, ["not-a-git-command"]);
+    throw Error("unreachable");
   };
   o.saveMs = 20;
   o.report = async (p) => { reports.push(structuredClone(p)); };
@@ -1421,22 +1422,33 @@ test("every native and runner failure carries a precise cause the user can act o
       const binary = await fakeBinary(dir, agent, mode);
       await assert.rejects(
         nativeTurn({agent, cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: false, signal: AbortSignal.timeout(5000), binaries: {[agent]: binary}, onSession: async () => {}}),
-        (error: unknown) => error instanceof NativeFailure && error.reason === reason && message.test(error.message),
+        (error: unknown) => error instanceof Failure && error.reason === reason && message.test(error.message),
         `${agent} ${mode}`,
       );
     }
-    // The runner's own refusals are named too, not left as a native error.
-    for (const [failure, reason] of [
-      ["Workspace ownership changed; inspect its repository and branch before continuing.", "workspace_changed"],
-      ["Git could not verify or prepare this workspace. Inspect the repository before retrying.", "git_failed"],
+    // The runner's own refusals are named by their type, not their text.
+    const gitFails = async () => { await git(dir, ["not-a-git-command"]); throw Error("unreachable"); };
+    for (const [workspace, prepare, reason, failure] of [
+      [randomUUID(), prepareWorkspace, "workspace_changed", /^The requested workspace does not belong to this conversation/],
+      ["new", gitFails, "git_failed", /^Git could not verify or prepare this workspace/],
     ] as const) {
       const o = engineOptions(dir), reports: Progress[] = [];
       o.report = async (p) => { reports.push(structuredClone(p)); };
-      o.prepare = async () => { throw Error(failure); };
+      o.prepare = prepare;
+      o.turn = async (opts) => { await opts.onSession(randomUUID()); return dispatch(workspace); };
+      await executeRun(o);
+      assert.equal(reports.at(-1)!.telemetry?.find((e) => e.event === "execution_interrupted")?.reason, reason);
+      assert.match(reports.at(-1)!.summary, failure, "the user reads the plain cause");
+    }
+    // A stop the runner made names the interruption, not the failure it caused.
+    for (const [stop, reason] of [["claim-lost", "claim_lost"], ["cancelled", "cancelled"]] as const) {
+      const o = engineOptions(dir), reports: Progress[] = [], control = new AbortController();
+      o.signal = control.signal;
+      o.report = async (p) => { reports.push(structuredClone(p)); };
+      o.prepare = async () => { control.abort(stop); throw new Failure("report_failed", "Runner request failed (409)."); };
       o.turn = async (opts) => { await opts.onSession(randomUUID()); return dispatch(); };
       await executeRun(o);
       assert.equal(reports.at(-1)!.telemetry?.find((e) => e.event === "execution_interrupted")?.reason, reason);
-      assert.equal(reports.at(-1)!.summary, failure, "the user reads the plain cause");
     }
   } finally { await rm(dir, {recursive: true, force: true}); }
 });

@@ -144,10 +144,12 @@ type ThreadConversation = Pick<
   RunSummary,
   "id" | "emailThread" | "archivedAt" | "createdAt" | "updatedAt" | "state"
 >;
-// Where each thread stands for the owner. A requested archive or unsubscribe
-// clears it at once (a failed one returns it); a current conversation is
-// handling it unless it failed or was stopped; a Done conversation handled it
-// unless someone wrote again afterwards.
+// Where each thread in the inbox stands for the owner. A thread read only
+// because work links it, and already out of the inbox, waits on nobody. A
+// requested archive or unsubscribe clears it at once (a failed one returns
+// it); a current conversation is handling it unless it failed or was
+// stopped; a Done conversation handled it unless someone wrote again
+// afterwards.
 export function inboxQueue<T extends ThreadConversation>(
   inbox: Inbox,
   issues: Issue[],
@@ -162,7 +164,11 @@ export function inboxQueue<T extends ThreadConversation>(
     )
       latest.set(run.emailThread, run);
   const requested = new Map(actions.map((a) => [a.threadId, a]));
-  return inboxRows(inbox, issues).map((row) => {
+  // Reads from older collectors do not say; their threads are in the inbox.
+  const waiting = inboxRows(inbox, issues).filter(
+    (row) => row.thread.inInbox !== false,
+  );
+  return waiting.map((row) => {
     const conversation = latest.get(row.thread.id);
     // A request made before the latest message cannot clear a newer email.
     const action = requested.get(row.thread.id);

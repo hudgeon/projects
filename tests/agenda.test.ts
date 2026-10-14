@@ -427,6 +427,17 @@ test("each email shows whether a conversation is handling it, handled it or it s
   assert.equal(state([conversation("a", { emailThread: "fedcba654321" })]), "todo", "joined by thread ID only");
 });
 
+test("an email that has left the inbox leaves the queue, though its work item still follows it", () => {
+  const archived = { threadId: thread.id, action: "archive" as const, requestedAt: 150, state: "done" as const, message: null, updatedAt: 160 };
+  const queue = (over: Partial<Inbox["threads"][number]>) =>
+    inboxQueue({ ...inbox, threads: [{ ...thread, ...over }] }, [], [], [archived]).map((item) => item.state);
+  assert.deepEqual(queue({ inInbox: true }), ["clearing"], "until a read sees it archived");
+  assert.deepEqual(queue({ inInbox: false }), [], "archived in Gmail");
+  assert.deepEqual(queue({}), ["clearing"], "an older collector's read keeps its threads");
+  const linked = issue(9, { emailLinks: [{ threadId: thread.id, reviewedMessageId: null }] });
+  assert.equal(inboxRows({ ...inbox, threads: [{ ...thread, inInbox: false }] }, [linked])[0].reviewed, false, "its work item still sees the unread message");
+});
+
 test("the latest message becomes plain text without quoted history or rendered HTML", () => {
   assert.equal(latestOnly("Sounds good.\r\n\r\nOn Mon, 12 Oct 2026 at 10:10, Rob Smith <\nrob@example.com> wrote:\n> earlier"), "Sounds good.");
   assert.equal(latestOnly("Yes.\n\nFrom: Rob\nSent: Monday\nSubject: Re: plan\nolder"), "Yes.");

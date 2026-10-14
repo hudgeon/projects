@@ -391,7 +391,7 @@ function ProjectRow({
               {observations.map((o) => (
                 <div key={o.host}>
                   <strong>{hostName(o.host)}</strong>
-                  {(["codex", "claude", "grok"] as const).map((key) => (
+                  {(["codex", "claude"] as const).map((key) => (
                     <p key={key}>
                       <span className="source-name">{key}</span>{" "}
                       {o.project.sources[key].message}

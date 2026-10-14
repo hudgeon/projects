@@ -100,6 +100,22 @@ test("unavailable/stale and failed checks cannot become a clean result", () => {
     false,
   );
 });
+test("an older collector's placeholder source still publishes; any other unknown source is refused", () => {
+  const now = Date.now();
+  const project = fixture(now);
+  const unused = { state: "unsupported", message: "Not verified", observedAt: now };
+  const publishes = (sources: Record<string, unknown>) =>
+    snapshotSchema.safeParse({
+      version: 1,
+      host: "studio",
+      collectedAt: now,
+      projects: [{ ...project, sources }],
+      unassignedSessions: [],
+    }).success;
+  assert.equal(publishes(project.sources), true);
+  assert.equal(publishes({ ...project.sources, grok: unused }), true);
+  assert.equal(publishes({ ...project.sources, other: unused }), false);
+});
 test("work is located by session, changed checkout and open PR; quiet projects have none", () => {
   const now = Date.now();
   const source = { state: "ok" as const, message: "", observedAt: now };
@@ -175,7 +191,6 @@ test("work is located by session, changed checkout and open PR; quiet projects h
       github: source,
       codex: source,
       claude: source,
-      grok: source,
     },
   };
   const obs = [{ project, host: "studio", at: now }];
@@ -249,7 +264,6 @@ test("a machine is clean only when fresh with nothing uncommitted, unpushed, clu
       github: source,
       codex: source,
       claude: source,
-      grok: source,
     },
   });
   const snapshot = (worktrees: Worktree[], collectedAt = now) => ({
@@ -379,7 +393,6 @@ test("a session restarts in its own app; only a plain ID becomes a shell command
     command: `claude --resume ${id}`,
     link: null,
   });
-  assert.equal(restart("Grok", id), null);
   for (const bad of ["", "-rf", "a b", "a;rm -rf ~", "$(id)", "a/b", "a`b`"])
     assert.equal(restart("Claude", bad), null, bad);
 });
@@ -430,7 +443,6 @@ function fixture(now: number, over: Partial<Project> = {}): Project {
       github: source,
       codex: source,
       claude: source,
-      grok: source,
     },
     ...over,
   };

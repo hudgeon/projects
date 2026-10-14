@@ -38,8 +38,8 @@ holding its messages, claim, receipts, progress, screenshots and browser.
 Each connected machine runs two background services:
 
 - the **collector** publishes a snapshot every two minutes: repositories,
-  worktrees, native sessions, pull requests and, on the machine on duty, work
-  items and the inbox;
+  worktrees, native sessions, pull requests, work items (with `workRepo` set)
+  and, on the machine on duty, the inbox;
 - the **runner** claims conversations over outbound HTTPS and runs the native
   sessions for them.
 
@@ -65,12 +65,12 @@ and each machine's runner IDs map to conversation owners of its own, so one
 machine can never act on another's claim.
 
 Machines are ordered. The first machine heard from in the last five minutes is
-**on duty**: it reads work items and the inbox, applies Mark done and inbox
-requests and publishes the daily review. Every collector asks the Worker
-whether it is on duty before each scan, so exactly one machine applies each
-request. New conversations go to the first machine whose runner called in the
-last two minutes (an idle runner claims every two seconds and a busy one
-heartbeats every ten, so a restart or short network drop hands nothing over).
+**on duty**: it reads the inbox, applies Mark done and inbox requests and
+publishes the daily review. Every collector asks the Worker whether it is on
+duty before each scan, so exactly one machine applies each request. New
+conversations go to the first machine whose runner called in the last two
+minutes (an idle runner claims every two seconds and a busy one heartbeats
+every ten, so a restart or short network drop hands nothing over).
 A conversation stays on the machine that claimed it, where its native sessions,
 journal and worktrees live.
 
@@ -195,12 +195,13 @@ minutes or thirty in all; no Cloudflare credential reaches a machine.
 With `workRepo` set, a work item is a GitHub issue labelled `work` in that
 repository: its type is the kind of work, its milestone the initiative,
 `customer:` labels who drives it and `repo:` labels the repositories it
-touches. There is no second backlog. The machine on duty reads open issues and
-those closed in the last three weeks; a failed or truncated read is
-unavailable, never an empty list. **Bigger work** on Today groups them by
-customer and initiative, with each item's status, next step and signals
-(conversations, new email, failing checks, due date), parsed from an optional
-**Current position** block in the issue body.
+touches. There is no second backlog. Every machine with `workRepo` set reads
+open issues and those closed in the last three weeks on each scan and keeps its
+own copy for its hooks; Projects shows the newest successful read, and a failed
+or truncated read is unavailable, never an empty list. **Bigger work** on Today
+groups them by customer and initiative, with each item's status, next step and
+signals (conversations, new email, failing checks, due date), parsed from an
+optional **Current position** block in the issue body.
 
 **Mark done** stores only the issue number; the machine on duty closes the
 issue with its signed-in GitHub CLI on its next run and reports back. The

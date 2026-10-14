@@ -17,6 +17,7 @@ import {
 } from "../src/run-model";
 import { executeRun, savePrivate } from "./engine";
 import { connectorAccess } from "./connectors";
+import { Failure } from "./native";
 import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
@@ -175,7 +176,10 @@ async function main() {
         signal: AbortSignal.timeout(15000),
       });
       if (!response.ok)
-        throw Error(`Runner request failed (${response.status}).`);
+        throw new Failure(
+          "report_failed",
+          `Runner request failed (${response.status}).`,
+        );
       const result = (await response.json()) as Record<string, unknown>;
       const failure = failures.get(failureKey);
       if (failure) {
@@ -413,7 +417,10 @@ async function main() {
                 input.mime !== image.mime ||
                 decoded.metadata.sha256 !== image.sha256
               )
-                throw Error("Screenshot content could not be verified.");
+                throw new Failure(
+                  "screenshot_failed",
+                  "Screenshot content could not be verified.",
+                );
               return input;
             },
             messages: async () => {

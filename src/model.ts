@@ -21,7 +21,7 @@ export const sessionSchema = z
   .object({
     id,
     title: text,
-    app: z.enum(["Codex", "Claude", "Grok"]),
+    app: z.enum(["Codex", "Claude"]),
     cwd: z.string().max(1000),
     updatedAt: time,
     state: z.enum(["running", "waiting", "idle", "open", "unknown"]),
@@ -91,7 +91,9 @@ export const projectSchema = z
         github: sourceSchema,
         codex: sourceSchema,
         claude: sourceSchema,
-        grok: sourceSchema,
+        // Older collectors also send a placeholder for an app nothing reads;
+        // it is accepted so their snapshots still publish, and never shown.
+        grok: sourceSchema.optional(),
       })
       .strict(),
   })
@@ -254,10 +256,9 @@ export function hostName(host: string) {
 // existing session.
 export function restart(app: Session["app"], id: string) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,79}$/.test(id)) return null;
-  if (app === "Codex")
-    return { command: `codex resume ${id}`, link: `codex://threads/${id}` };
-  if (app === "Claude") return { command: `claude --resume ${id}`, link: null };
-  return null;
+  return app === "Codex"
+    ? { command: `codex resume ${id}`, link: `codex://threads/${id}` }
+    : { command: `claude --resume ${id}`, link: null };
 }
 function branchFor(cwd: string, worktrees: Worktree[]) {
   const match = worktreeFor(cwd, worktrees);

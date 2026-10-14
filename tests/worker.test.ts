@@ -953,6 +953,12 @@ test("the Studio leaves a thread in the inbox when someone wrote after the archi
   const mine = { ...inbox, threads: [{ ...thread, lastSentByMe: true }] };
   assert.equal((await applyInboxAction(request, mine, gws)).state, "done", "the user's own later reply still archives");
   assert.equal(calls.length, 1);
+  // A read that missed the thread says where it is only when it is complete.
+  const later = { ...request, requestedAt: thread.updatedAt + 1 };
+  const missed = { ...inbox, threads: inbox.threads.filter((t) => t.id !== thread.id) };
+  assert.equal((await applyInboxAction(later, { ...missed, state: "incomplete" }, gws)).state, "queued");
+  assert.deepEqual(await applyInboxAction(later, missed, gws), { ...later, state: "done", message: "Already out of the inbox." });
+  assert.equal(calls.length, 1, "neither touches Gmail");
 });
 test("the Studio closes a queued issue and reports it; without GitHub it stays queued", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "project-overview-studio-"));
@@ -2184,7 +2190,7 @@ function archiveSnapshot(host: "studio" | "laptop", at = Date.now()): Snapshot {
     id: "acme/fixture", name: "Fixture", repo: "acme/fixture", description: "", latestMerge: null,
     progress: {summary: "", next: [], completed: 0, total: 0, source: "", updatedAt: null},
     worktrees: [], pulls: [], sessions: [session, {...session, app: "Claude"}],
-    sources: {git: source, github: source, codex: source, claude: source, grok: source},
+    sources: {git: source, github: source, codex: source, claude: source},
   }]};
 }
 

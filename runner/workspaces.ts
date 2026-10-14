@@ -11,7 +11,7 @@ import {
   unpushedCommits,
   type Config,
 } from "../collector/collect";
-import { nativeEnv } from "./native";
+import { Failure, nativeEnv } from "./native";
 import {
   LIVE_FILES,
   type Child,
@@ -43,7 +43,8 @@ export async function git(
     });
     return result.stdout.trim();
   } catch {
-    throw Error(
+    throw new Failure(
+      "git_failed",
       "Git could not verify or prepare this workspace. Inspect the repository before retrying.",
     );
   }
@@ -302,7 +303,8 @@ export async function prepareWorkspace(
   if (task.workspace !== "new") {
     let existing = previous.find((child) => child.id === task.workspace);
     if (!existing || existing.projectId !== project.id)
-      throw Error(
+      throw new Failure(
+        "workspace_changed",
         "The requested workspace does not belong to this conversation and project.",
       );
     // Another machine's worktree: reuse a copy restored here before, or
@@ -332,7 +334,8 @@ export async function prepareWorkspace(
       existing = { ...existing, cwd: local, sessionId: null, state: "completed" };
     }
     if (["running", "unknown"].includes(existing.state))
-      throw Error(
+      throw new Failure(
+        "workspace_changed",
         "The existing session must be reconciled before its workspace can be reused.",
       );
     if (
@@ -340,10 +343,14 @@ export async function prepareWorkspace(
       existing.mode === "read" &&
       existing.cwd === project.cwd
     )
-      throw Error("Changes require a new worktree, not the primary checkout.");
+      throw new Failure(
+        "workspace_changed",
+        "Changes require a new worktree, not the primary checkout.",
+      );
     const cwd = await realpath(existing.cwd);
     if (cwd !== existing.cwd)
-      throw Error(
+      throw new Failure(
+        "workspace_changed",
         "The workspace path has moved; inspect it before continuing.",
       );
     const common = await git(project.cwd, [
@@ -365,7 +372,8 @@ export async function prepareWorkspace(
       ])) !== common ||
       (branch !== existing.branch && !(owned && branch))
     )
-      throw Error(
+      throw new Failure(
+        "workspace_changed",
         "Workspace ownership changed; inspect its repository and branch before continuing.",
       );
     return {

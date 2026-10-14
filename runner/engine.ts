@@ -26,7 +26,7 @@ import {
 import {
   nativeTurn,
   NativeBusyError,
-  NativeFailure,
+  Failure,
   NativeStopError,
   nativeProcessStopped,
   type NativeOptions,
@@ -267,7 +267,8 @@ export async function executeRun(o: EngineOptions) {
       .parse(JSON.parse(await readFile(file, "utf8")));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      throw Error(
+      throw new Failure(
+        "journal_problem",
         "The local execution journal needs inspection; no work was started.",
       );
   }
@@ -295,7 +296,8 @@ export async function executeRun(o: EngineOptions) {
       },
     };
   if (!journal && o.run.progress)
-    throw Error(
+    throw new Failure(
+      "journal_problem",
       "The local execution journal is missing. Inspect the existing native session; automatic replay is disabled.",
     );
   if (!journal)
@@ -335,12 +337,14 @@ export async function executeRun(o: EngineOptions) {
       generation: o.run.generation,
     });
   };
+  // A failure's type names its reason, never its text, and no message or stack
+  // leaves this machine. A stop the runner made names the interruption it
+  // caused, except a native process not confirmed stopped or a busy model.
   const failureReason = (
     error: unknown,
   ): NonNullable<ExecutionEvent["reason"]> => {
     if (error instanceof NativeStopError) return "process_unconfirmed";
     if (error instanceof NativeBusyError) return "model_busy";
-    if (error instanceof NativeFailure) return error.reason;
     if (o.signal.aborted)
       return o.signal.reason === "shutdown"
         ? "shutdown"
@@ -348,69 +352,7 @@ export async function executeRun(o: EngineOptions) {
           ? "cancelled"
           : "claim_lost";
     if (error instanceof z.ZodError) return "invalid_result";
-    if (!(error instanceof Error)) return "native_error";
-    // Classify only known adapter errors; no message or stack leaves this
-    // machine.
-    switch (error.message) {
-      case "Codex needs an approval or answer outside the runner's authority. Inspect the native session.":
-        return "permission_required";
-      case "Codex session is already active; do not overlap its current turn.":
-        return "session_active";
-      case "Native agent could not start. Check its installation and local login.":
-        return "native_unavailable";
-      case "Native response exceeded the protocol limit.":
-      case "Native session returned an invalid protocol message.":
-        return "protocol_error";
-      case "Your Codex usage limit is reached. Send a follow-up after it resets.":
-        return "usage_limit";
-      case "Codex could not open the session. Inspect its native session and configuration.":
-        return "session_rejected";
-      case "Codex rejected the turn. Inspect its native session and configuration.":
-        return "turn_rejected";
-      case "Codex would not start a session. Check its installation and local login.":
-        return "native_unavailable";
-      case "Codex exited before confirming the turn result.":
-        return "native_exited";
-      case "Codex turn failed or was interrupted; completion is unverified.":
-        return "turn_failed";
-      case "Codex did not identify its session.":
-        return "protocol_error";
-      case "Git could not verify or prepare this workspace. Inspect the repository before retrying.":
-        return "git_failed";
-      case "The requested workspace does not belong to this conversation and project.":
-      case "The existing session must be reconciled before its workspace can be reused.":
-      case "Changes require a new worktree, not the primary checkout.":
-      case "The workspace path has moved; inspect it before continuing.":
-      case "Workspace ownership changed; inspect its repository and branch before continuing.":
-      case "The recovery workspace is outside this conversation's registered project.":
-        return "workspace_changed";
-      case "Master returned an inconsistent decision.":
-      case "Master did not provide a task.":
-      case "Master selected a project outside this request.":
-      case "Master selected an agent outside this request.":
-        return "decision_rejected";
-      case "Conversation reached its child-session limit. Review the results before starting another conversation.":
-        return "child_limit";
-      case "Screenshot content could not be loaded.":
-      case "Screenshot content could not be verified.":
-        return "screenshot_failed";
-      case "The local execution journal needs inspection; no work was started.":
-      case "The local execution journal is missing. Inspect the existing native session; automatic replay is disabled.":
-      case "An older job cannot replace a newer local turn.":
-      case "The saved child receipt needs inspection; no work was replayed.":
-      case "The interrupted master has no saved native session identity; automatic replay is disabled.":
-      case "The interrupted child has no saved native session identity. Inspect it before retrying; automatic replay is disabled.":
-        return "journal_problem";
-      case "Codex did not return a valid structured result.":
-      case "Claude did not confirm a structured result. Check the native session for a blocked permission or failed turn.":
-        return "invalid_result";
-      default:
-        return /^Codex [a-z/]+ timed out\.$/i.test(error.message)
-          ? "native_timeout"
-          : /^Runner request failed \(\d{3}\)\.$/.test(error.message)
-            ? "report_failed"
-            : "native_error";
-    }
+    return error instanceof Failure ? error.reason : "native_error";
   };
   // Local persistence must never wait behind a network retry. Both queues retain
   // ordering, and every immutable receipt is on disk before it can be delivered.
@@ -434,7 +376,10 @@ export async function executeRun(o: EngineOptions) {
     return enqueue(true);
   };
   if (j.generation > o.run.generation)
-    throw Error("An older job cannot replace a newer local turn.");
+    throw new Failure(
+      "journal_problem",
+      "An older job cannot replace a newer local turn.",
+    );
   if (j.phase === "finished" && j.generation === o.run.generation) {
     await o.report(j.progress);
     return;
@@ -719,7 +664,10 @@ export async function executeRun(o: EngineOptions) {
     )) {
       if (!imageCache.has(image.id)) {
         if (!o.screenshot)
-          throw Error("Screenshot content could not be loaded.");
+          throw new Failure(
+            "screenshot_failed",
+            "Screenshot content could not be loaded.",
+          );
         imageCache.set(image.id, await o.screenshot(image));
       }
       images.push(imageCache.get(image.id)!);
@@ -803,7 +751,8 @@ export async function executeRun(o: EngineOptions) {
         (c) => c.id === (j.checkpoint as { childId: string }).childId,
       );
       if (!child)
-        throw Error(
+        throw new Failure(
+          "journal_problem",
           "The saved child receipt needs inspection; no work was replayed.",
         );
       await acceptChild(child, j.checkpoint.value);
@@ -827,12 +776,14 @@ export async function executeRun(o: EngineOptions) {
         );
       if (child) {
         if (!child.sessionId)
-          throw Error(
+          throw new Failure(
+            "journal_problem",
             "The interrupted child has no saved native session identity. Inspect it before retrying; automatic replay is disabled.",
           );
         const project = o.projects.find((p) => p.id === child.projectId);
         if (!project || (o.run.projectId && project.id !== o.run.projectId))
-          throw Error(
+          throw new Failure(
+            "workspace_changed",
             "The recovery workspace is outside this conversation's registered project.",
           );
         // Reuse the existing ownership checks, without creating a workspace or
@@ -895,7 +846,8 @@ export async function executeRun(o: EngineOptions) {
           "\nThis was a read-only reconciliation of an interrupted turn, not a new execution. Verify external effects and unfinished steps before resuming; never repeat already completed changes. Address the latest user feedback.";
       } else {
         if (!j.progress.masterSessionId)
-          throw Error(
+          throw new Failure(
+            "journal_problem",
             "The interrupted master has no saved native session identity; automatic replay is disabled.",
           );
         j.phase = "ready";
@@ -997,7 +949,10 @@ export async function executeRun(o: EngineOptions) {
       o.signal.throwIfAborted();
       if (decision.action !== "dispatch") {
         if (decision.task)
-          throw Error("Master returned an inconsistent decision.");
+          throw new Failure(
+            "decision_rejected",
+            "Master returned an inconsistent decision.",
+          );
         j.phase = "finished";
         await publish(
           decision.action === "complete" ? "completed" : "blocked",
@@ -1007,7 +962,11 @@ export async function executeRun(o: EngineOptions) {
         return;
       }
       const task = decision.task;
-      if (!task) throw Error("Master did not provide a task.");
+      if (!task)
+        throw new Failure(
+          "decision_rejected",
+          "Master did not provide a task.",
+        );
       // Keep the decision so the restarted runner dispatches it without a
       // new master turn.
       if (o.drain?.aborted) {
@@ -1016,15 +975,22 @@ export async function executeRun(o: EngineOptions) {
       }
       const project = o.projects.find((p) => p.id === task.projectId);
       if (!project || (o.run.projectId && project.id !== o.run.projectId))
-        throw Error("Master selected a project outside this request.");
+        throw new Failure(
+          "decision_rejected",
+          "Master selected a project outside this request.",
+        );
       if (o.run.agent !== "auto" && task.agent !== o.run.agent)
-        throw Error("Master selected an agent outside this request.");
+        throw new Failure(
+          "decision_rejected",
+          "Master selected an agent outside this request.",
+        );
       if (!agents.includes(task.agent)) {
         nextPrompt = `${appName(task.agent)} is not signed in on this machine. Your proposed action has NOT been executed. Dispatch with agent ${agents.join(" or ")}.`;
         continue;
       }
       if (j.progress.children.length >= 24)
-        throw Error(
+        throw new Failure(
+          "child_limit",
           "Conversation reached its child-session limit. Review the results before starting another conversation.",
         );
       const images = await screenshots(messages);

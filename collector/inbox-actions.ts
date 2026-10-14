@@ -144,6 +144,13 @@ export async function applyInboxAction(
     message,
   });
   const thread = inbox.threads.find((t) => t.id === action.threadId);
+  // A partial read that missed the thread cannot say where it is.
+  if (!thread && inbox.state !== "ok")
+    return {
+      ...action,
+      state: "queued",
+      message: "Gmail could not be read in full; retrying.",
+    };
   const archive = async () => {
     if (!thread?.inInbox) return;
     await run([
