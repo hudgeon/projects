@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { decodeScreenshots } from "../src/screenshot-model";
@@ -21,9 +24,11 @@ import {
   executeRun,
   savePrivate,
   outputSchema,
+  HANDBACK_LIMIT,
+  MASTER_CONTEXT_LIMIT,
   type EngineOptions,
 } from "../runner/engine";
-import { git, liveChanges, prepareWorkspace, privateOrigin, pruneSaved, saveWorkspace, savedRef, savedRuns, UnsavedWorkspace, workspaceEvidence } from "../runner/workspaces";
+import { continuesSession, git, liveChanges, prepareWorkspace, privateOrigin, pruneSaved, saveWorkspace, savedRef, savedRuns, SESSION_CONTEXT_LIMIT, UnsavedWorkspace, workspaceEvidence } from "../runner/workspaces";
 import { claudeRules, codexConfig, parseMcpList } from "../runner/connectors";
 import { runPool } from "../runner/pool";
 import {
@@ -488,6 +493,8 @@ test("after a move, a failed turn on the Laptop recovers only the Laptop's own w
   const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [], reports: Progress[] = [];
   const miniChild: Child = {id: randomUUID(), projectId: "acme/test", agent: "codex", mode: "change", cwd: "/studio/worktree", branch: "projects/studio/work", sessionId: "studio-child-session", state: "running", result: null, evidence: []};
   o.host = "laptop";
+  // Only Codex here, so no other app takes over its coordinating.
+  o.agents = ["codex"];
   o.processStopped = () => true;
   o.run = {...o.run, generation: 2, movedFrom: "studio", progress: {seq: 4, state: "running", summary: "Working", children: [miniChild], masterSessionId: "studio-master-session", reviewedMessageIds: [o.run.messages[0].id]}};
   o.report = async (p) => { reports.push(structuredClone(p)); };
@@ -689,17 +696,17 @@ test("interrupted journals without native identity and missing journals never ca
     assert.equal(last?.state, "blocked");
     assert.match(
       last!.summary,
-      /no saved native session identity|automatic replay is disabled|may still be active/,
+      /left no session|may still be running/,
     );
     await executeRun({ ...o, run: { ...o.run, generation: 2 } });
     assert.equal(calls, 0);
     await rm(file);
     await assert.rejects(
       executeRun({ ...o, run: { ...o.run, progress: progress() } }),
-      /journal is missing/,
+      /saved state is missing/,
     );
     await writeFile(file, "bad journal");
-    await assert.rejects(executeRun(o), /journal needs inspection/);
+    await assert.rejects(executeRun(o), /saved state on its machine could not be read/);
     assert.equal(calls, 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -854,6 +861,14 @@ test("worktrees start at current origin/main and reuse only an owned unchanged b
     await git(ws.cwd, ["checkout", "-b", "projects/second-pull-request"]);
     const second = await prepareWorkspace(project, { ...task, workspace: id }, [child], runId, randomUUID(), path.join(dir, "owned"), "studio");
     assert.deepEqual([second.cwd, second.branch], [ws.cwd, "projects/second-pull-request"]);
+    // So is the detached checkout a child leaves once its pull request merged.
+    await git(ws.cwd, ["checkout", "--detach"]);
+    const detached = await prepareWorkspace(project, { ...task, workspace: id }, [child], runId, randomUUID(), path.join(dir, "owned"), "studio");
+    assert.deepEqual([detached.cwd, detached.branch, detached.sessionId], [ws.cwd, child.branch, child.sessionId]);
+    // A session that cannot continue leaves its worktree to a fresh one.
+    const fresh = await prepareWorkspace(project, { ...task, workspace: id }, [{ ...child, resumable: false }], runId, randomUUID(), path.join(dir, "owned"), "studio");
+    assert.deepEqual([fresh.cwd, fresh.sessionId], [ws.cwd, null]);
+    await git(ws.cwd, ["checkout", "projects/second-pull-request"]);
     // Outside the runner's own worktrees, a different branch means another owner.
     await assert.rejects(
       prepareWorkspace(
@@ -864,7 +879,7 @@ test("worktrees start at current origin/main and reuse only an owned unchanged b
         randomUUID(),
         path.join(dir, "elsewhere"), "studio",
       ),
-      /ownership changed/,
+      /did not start, so another session may own it/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -922,20 +937,24 @@ if(${JSON.stringify(agent)}==='codex') {
       send({method:'item/started',params:{threadId:'test-session',item:{type:'commandExecution',command:'secret-command',arguments:{token:'private-token'}}}});
       send({method:'item/completed',params:{threadId:'test-session',item:{type:'commandExecution',status:'completed',aggregatedOutput:'private-output'}}});
       if(mode==='approval')send({id:101,method:'item/commandExecution/requestApproval',params:{}});
+      const breakdown=(input,cached,output)=>({totalTokens:input+output,inputTokens:input,cachedInputTokens:cached,cacheWriteInputTokens:0,outputTokens:output,reasoningOutputTokens:0});
+      send({method:'thread/tokenUsage/updated',params:{threadId:'foreign-session',turnId:'turn',tokenUsage:{total:breakdown(99999,0,99999),last:breakdown(99999,0,99999),modelContextWindow:1}}});
+      send({method:'thread/tokenUsage/updated',params:{threadId:'test-session',turnId:'turn',tokenUsage:{total:breakdown(5000,3000,200),last:breakdown(2000,1000,100),modelContextWindow:475000}}});
+      send({method:'thread/tokenUsage/updated',params:{threadId:'test-session',turnId:'turn',tokenUsage:{total:breakdown(9000,6000,300),last:breakdown(4000,3000,100),modelContextWindow:475000}}});
       send({method:'item/completed',params:{threadId:'test-session',item:{type:'agentMessage',phase:'final_answer',text:JSON.stringify({summary:'Connected'})}}});
       send({method:'turn/completed',params:{threadId:'test-session',turn:{status:mode==='failed'?'failed':'completed'}}});
     }
   });
 } else {
   let lines=0;
-  const finish=extra=>send({type:'result',subtype:mode==='maxTurns'?'error_max_turns':mode==='execution'?'error_during_execution':'success',is_error:mode==='execution',structured_output:mode==='maxTurns'||mode==='execution'?undefined:{summary:'Connected'+extra},permission_denials:mode==='approval'?[{tool_name:'Bash'}]:[]});
+  const finish=extra=>send({type:'result',subtype:mode==='maxTurns'?'error_max_turns':mode==='execution'?'error_during_execution':'success',is_error:mode==='execution',structured_output:mode==='maxTurns'||mode==='execution'?undefined:{summary:'Connected'+extra},permission_denials:mode==='approval'?[{tool_name:'Bash'}]:[],modelUsage:{'model-a':{inputTokens:15,cacheCreationInputTokens:1200,cacheReadInputTokens:1000,outputTokens:80,contextWindow:1000000}}});
   readline.createInterface({input:process.stdin}).on('line',line=>{
     const m=JSON.parse(line);
     if(++lines>1){if(mode==='steer')finish(' '+m.message.content[0].text);return;}
     if(mode==='exit')process.exit(0);if(mode==='hang'){setInterval(()=>{},1000);return;}
     send({type:'system',subtype:'init',session_id:'test-session'});
-    send({type:'assistant',message:{content:[{type:'thinking',thinking:'private-reasoning'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'secret-command'}}]}});
-    send({type:'assistant',message:{content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
+    send({type:'assistant',message:{id:'msg-1',usage:{input_tokens:10,cache_creation_input_tokens:1000,cache_read_input_tokens:0,output_tokens:50},content:[{type:'thinking',thinking:'private-reasoning'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'secret-command'}}]}});
+    send({type:'assistant',message:{id:'msg-2',usage:{input_tokens:5,cache_creation_input_tokens:200,cache_read_input_tokens:1000,output_tokens:30},content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
     send({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tool-1',content:'private-output'}]}});
     if(mode==='steer'){send({type:'assistant',message:{content:[{type:'tool_use',id:'todo-1',name:'TodoWrite',input:{todos:[{content:'Read the code',status:'completed',activeForm:'Reading'},{content:'Make the change',status:'in_progress',activeForm:'Changing'},{content:'Run checks',status:'pending',activeForm:'Checking'}]}}]}});return;}
     finish('');
@@ -1405,40 +1424,57 @@ test("a failed save is recorded once per failing stretch with a safe reason, and
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
-test("every native and runner failure carries a precise cause the user can act on", {timeout: 30000}, async () => {
+test("every native and runner failure carries a precise cause, and the master hears it first", {timeout: 30000}, async () => {
   const dir = await fixture();
   try {
     const cases: [("codex" | "claude"), string, string, RegExp][] = [
       ["codex", "unauthorized", "signed_out", /signed out on this machine/],
       ["codex", "contextWindowExceeded", "context_exceeded", /ran out of room/],
       ["codex", "sandboxError", "sandbox_error", /sandbox could not run a command/],
-      ["codex", "novel", "turn_failed", /completion is unverified/],
-      ["claude", "approval", "permission_required", /outside the runner's authority/],
+      ["codex", "novel", "turn_failed", /what it finished is unconfirmed/],
       ["claude", "maxTurns", "turn_limit", /turn limit/],
-      ["claude", "execution", "turn_failed", /turn failed/],
+      ["claude", "execution", "turn_failed", /what it finished is unconfirmed/],
       ["claude", "exit", "native_exited", /exited before confirming/],
     ];
     for (const [agent, mode, reason, message] of cases) {
       const binary = await fakeBinary(dir, agent, mode);
       await assert.rejects(
         nativeTurn({agent, cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: false, signal: AbortSignal.timeout(5000), binaries: {[agent]: binary}, onSession: async () => {}}),
-        (error: unknown) => error instanceof Failure && error.reason === reason && message.test(error.message),
+        (error: unknown) => error instanceof Failure && error.reason === reason && message.test(error.message) && !/inspect/i.test(error.message),
         `${agent} ${mode}`,
       );
     }
-    // The runner's own refusals are named by their type, not their text.
+    // The runner's own refusals are named by their type, not their text, and
+    // go back to the master, which chooses again before the owner hears.
     const gitFails = async () => { await git(dir, ["not-a-git-command"]); throw Error("unreachable"); };
     for (const [workspace, prepare, reason, failure] of [
-      [randomUUID(), prepareWorkspace, "workspace_changed", /^The requested workspace does not belong to this conversation/],
-      ["new", gitFails, "git_failed", /^Git could not verify or prepare this workspace/],
+      [randomUUID(), prepareWorkspace, "workspace_changed", /could not use that workspace: The requested workspace does not belong to this conversation/],
+      ["new", gitFails, "git_failed", /could not use that workspace: Git could not verify or prepare this workspace/],
     ] as const) {
-      const o = engineOptions(dir), reports: Progress[] = [];
+      const o = engineOptions(dir), reports: Progress[] = [], prompts: string[] = [];
       o.report = async (p) => { reports.push(structuredClone(p)); };
       o.prepare = prepare;
-      o.turn = async (opts) => { await opts.onSession(randomUUID()); return dispatch(workspace); };
+      o.turn = async (opts) => { prompts.push(opts.prompt); await opts.onSession(randomUUID()); return prompts.length === 1 ? dispatch(workspace) : complete; };
       await executeRun(o);
-      assert.equal(reports.at(-1)!.telemetry?.find((e) => e.event === "execution_interrupted")?.reason, reason);
-      assert.match(reports.at(-1)!.summary, failure, "the user reads the plain cause");
+      assert.equal(reports.at(-1)!.state, "completed", "the master chose again");
+      assert.equal(reports.at(-1)!.telemetry?.find((e) => e.event === "execution_handed_back")?.reason, reason);
+      assert.match(prompts[1], failure, "the master reads the plain cause");
+      assert.match(prompts[1], /has NOT been executed/);
+    }
+    // A master that keeps choosing what cannot run stops the turn, and the
+    // owner reads the last cause and what to do.
+    {
+      const o = engineOptions(dir), reports: Progress[] = [];
+      o.report = async (p) => { reports.push(structuredClone(p)); };
+      o.prepare = prepareWorkspace;
+      o.turn = async (opts) => { await opts.onSession(randomUUID()); return dispatch(randomUUID()); };
+      await executeRun(o);
+      const last = reports.at(-1)!;
+      assert.equal(last.state, "blocked");
+      assert.equal(last.telemetry?.filter((e) => e.event === "execution_handed_back").length, HANDBACK_LIMIT + 1);
+      assert.equal(last.telemetry?.find((e) => e.event === "execution_interrupted")?.reason, "recovery_limit");
+      assert.match(last.summary, /problems in a row, so Projects paused it\. The last one: The requested workspace does not belong/);
+      assert.match(last.summary, /\*\*Your move:\*\* Send a follow-up/);
     }
     // A stop the runner made names the interruption, not the failure it caused.
     for (const [stop, reason] of [["claim-lost", "claim_lost"], ["cancelled", "cancelled"]] as const) {
@@ -1620,6 +1656,15 @@ test("native adapters require confirmed results, refuse approvals and stop on ca
             JSON.stringify(activity),
             /private-|secret-|foreign/,
           );
+        } else if (mode === "approval") {
+          // The runner refuses what was not granted and keeps the turn's
+          // result; only the kind of request is reported.
+          const refused: string[][] = [];
+          assert.deepEqual(
+            await nativeTurn({ ...o, onRefused: (kinds) => refused.push(kinds) }),
+            { summary: "Connected" },
+          );
+          assert.deepEqual(refused, [["command"]], agent);
         } else await assert.rejects(nativeTurn(o));
       }
     }
@@ -1656,15 +1701,16 @@ test("Codex archives only verified threads and restores one before resuming", as
       const source = await readFile(binary, "utf8");
       await writeFile(binary, source.replace("const m=JSON.parse(line);", `const m=JSON.parse(line);if(m.id!==undefined&&m.method)appendFileSync(${JSON.stringify(log)},m.method+'\\n');`).replace("import readline", "import {appendFileSync} from 'node:fs';\nimport readline"));
       const turn = nativeTurn({agent: "codex", cwd: dir, prompt: "Inspect", schema: {type: "object"}, readOnly: true, sessionId, signal: AbortSignal.timeout(5000), binaries: {codex: binary}, onSession: async () => {}});
-      if (mode === "success") assert.deepEqual(await turn, {summary: "Connected"});
+      if (mode === "success" || mode === "approval") assert.deepEqual(await turn, {summary: "Connected"});
       else await assert.rejects(turn);
       return (await readFile(log, "utf8")).trim().split("\n");
     };
     assert.deepEqual(await requests("success"), ["initialize", "thread/start", "turn/start", "thread/archive"]);
     // Codex rejects unarchiving a thread that was never archived; resume proceeds.
     assert.deepEqual(await requests("success", "test-session"), ["initialize", "thread/unarchive", "thread/resume", "turn/start", "thread/archive"]);
-    for (const mode of ["failed", "approval"])
-      assert.deepEqual(await requests(mode, "test-session"), ["initialize", "thread/unarchive", "thread/resume", "turn/start"]);
+    assert.deepEqual(await requests("failed", "test-session"), ["initialize", "thread/unarchive", "thread/resume", "turn/start"]);
+    // A turn that reported after a refused request is verified too.
+    assert.deepEqual(await requests("approval", "test-session"), ["initialize", "thread/unarchive", "thread/resume", "turn/start", "thread/archive"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -1983,7 +2029,7 @@ test("recovery never overlaps a live process or resumes a moved workspace", asyn
       assert.equal(last?.state, "blocked");
       assert.match(
         last!.summary,
-        stopped ? /ownership changed/ : /may still be active/,
+        stopped ? /ownership changed/ : /may still be running/,
       );
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -2207,5 +2253,525 @@ test("an update pauses a conversation between turns and the next runner continue
     await executeRun(idle);
   } finally {
     await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test("a helper that fails is inspected read-only in its own session, and the master decides without the owner", async () => {
+  const dir = await fixture(), o = engineOptions(dir), reports: Progress[] = [], calls: NativeOptions[] = [];
+  const session = randomUUID();
+  o.processStopped = () => true;
+  o.report = async (p) => { reports.push(structuredClone(p)); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    if (opts.agent === "codex") {
+      await opts.onSession(randomUUID());
+      return calls.filter((c) => c.agent === "codex").length === 1 ? {...dispatch(), task: {...dispatch().task!, mode: "change"}} : complete;
+    }
+    if (!opts.sessionId) {
+      await opts.onSession(session);
+      throw new Failure("turn_failed", "Claude's turn failed before it reported; what it finished is unconfirmed.");
+    }
+    assert.equal(opts.sessionId, session, "the same session is inspected");
+    assert.equal(opts.readOnly, true);
+    assert.match(opts.prompt, /RECOVERY INSPECTION ONLY/);
+    return {...result, outcome: "blocked", summary: "Pushed the branch; its checks have not run."};
+  };
+  try {
+    await executeRun(o);
+    const last = reports.at(-1)!;
+    assert.equal(last.state, "completed", "the owner never saw the failure");
+    const master = calls.filter((c) => c.agent === "codex")[1];
+    assert.match(master.prompt, /Claude's turn ended before it reported: Claude's turn failed/);
+    assert.match(master.prompt, /inspected its session read-only/);
+    assert.match(master.prompt, /Pushed the branch/);
+    assert.equal(last.children[0].state, "blocked");
+    assert.deepEqual(last.telemetry?.filter((e) => e.event === "execution_handed_back").map((e) => [e.reason, e.actor]), [["turn_failed", "claude"]]);
+    assert.ok(!last.telemetry?.some((e) => e.event === "execution_interrupted"));
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a helper whose session cannot continue is not inspected; its worktree goes on in a fresh session", async () => {
+  const dir = await fixture(), o = engineOptions(dir), reports: Progress[] = [], calls: NativeOptions[] = [];
+  o.processStopped = () => true;
+  o.report = async (p) => { reports.push(structuredClone(p)); };
+  o.evidence = async () => ["Observed HEAD: abc", "Observed changed paths: 2"];
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") throw new Failure("context_exceeded", "This Claude session ran out of room.");
+    return calls.length === 1 ? {...dispatch(), task: {...dispatch().task!, mode: "change"}} : complete;
+  };
+  try {
+    await executeRun(o);
+    assert.deepEqual(calls.map((c) => c.agent), ["codex", "claude", "codex"], "no inspection turn ran");
+    const child = reports.at(-1)!.children[0];
+    assert.equal(child.resumable, false);
+    assert.equal(child.state, "blocked");
+    assert.match(child.result!.summary, /stopped before reporting: This Claude session ran out of room/);
+    assert.deepEqual(child.evidence, ["Observed HEAD: abc", "Observed changed paths: 2"]);
+    assert.match(calls[2].prompt, /could not be inspected, so only the observed worktree is known/);
+    assert.match(calls[2].prompt, /a fresh session starts there/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a refused request keeps the helper's result and becomes evidence for the master", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let last: Progress | undefined;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") { opts.onRefused?.(["command", "connector tool", "command"]); return result; }
+    return calls.length === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    assert.equal(last?.state, "completed");
+    assert.ok(last!.children[0].evidence.includes("Observed refused requests, which the agent carried on without: command ×2, connector tool"));
+    assert.match(calls[2].prompt, /refused requests/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a failed coordinator turn runs again, in a fresh session when its own cannot continue", async () => {
+  for (const [reason, fresh] of [["turn_failed", false], ["context_exceeded", true]] as const) {
+    const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+    let last: Progress | undefined;
+    const first = randomUUID();
+    o.report = async (p) => { last = structuredClone(p); };
+    o.turn = async (opts) => {
+      calls.push(opts);
+      if (calls.length === 1) { await opts.onSession(first); throw new Failure(reason, "The coordinator stopped."); }
+      await opts.onSession(opts.sessionId ?? randomUUID());
+      return complete;
+    };
+    try {
+      await executeRun(o);
+      assert.equal(last?.state, "completed", reason);
+      assert.equal(calls[1].sessionId, fresh ? undefined : first, reason);
+      assert.match(calls[1].prompt, /did not finish \(The coordinator stopped\.\); nothing from it was carried out/);
+      assert.equal(/You are a new coordinator/.test(calls[1].prompt), fresh, reason);
+      assert.equal(calls[1].prompt.includes("You are the user's Projects master"), true, "the brief is in the retried prompt");
+      assert.deepEqual(last!.telemetry?.filter((e) => e.event === "execution_handed_back").map((e) => [e.actor, e.reason]), [["master", reason]]);
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  }
+});
+
+test("decisions the runner cannot carry out go back to the master before anything runs", async () => {
+  const dir = await fixture(), o = engineOptions(dir), prompts: string[] = [];
+  let last: Progress | undefined, prepared = false;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.prepare = async () => { prepared = true; return {cwd: dir, branch: "main", sessionId: null}; };
+  o.turn = async (opts) => {
+    prompts.push(opts.prompt);
+    await opts.onSession(randomUUID());
+    if (prompts.length === 1) return {...dispatch(), task: {...dispatch().task!, projectId: "outside/project"}};
+    if (prompts.length === 2) return {...complete, task: dispatch().task};
+    return complete;
+  };
+  try {
+    await executeRun(o);
+    assert.equal(prepared, false);
+    assert.equal(last?.state, "completed");
+    assert.match(prompts[1], /Your decision was not carried out: that project is outside this request/);
+    assert.match(prompts[2], /a finished or blocked decision cannot carry a task/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("the last step asks the master for a report, and a dispatch there becomes the owner's next move", async () => {
+  const dir = await fixture(), o = engineOptions(dir), prompts: string[] = [];
+  let last: Progress | undefined;
+  o.maxSteps = 2;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") return result;
+    prompts.push(opts.prompt);
+    return {...dispatch(), summary: "Next I would verify the deployment."};
+  };
+  try {
+    await executeRun(o);
+    assert.doesNotMatch(prompts[0], /last step of this turn/);
+    assert.match(prompts[1], /This is the last step of this turn: do not dispatch/);
+    assert.equal(last?.state, "blocked");
+    assert.match(last!.summary, /^Next I would verify the deployment\.\n\nThis turn used its last step before that could start\.\n\n\*\*Your move:\*\* Send a follow-up to continue\.$/);
+    assert.equal(last!.children.length, 1, "the last decision started nothing");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("native turns report their tokens as each app counts them", async () => {
+  const dir = await fixture();
+  try {
+    for (const [agent, sessionId, expected] of [
+      // Codex reports running thread totals: this turn is their growth.
+      ["codex", "test-session", {fresh: 2000, cached: 4000, output: 200, context: 4000}],
+      // Claude's result carries per-model totals; context is the last request's.
+      ["claude", undefined, {fresh: 1215, cached: 1000, output: 80, context: 1205}],
+    ] as const) {
+      const reports: unknown[] = [];
+      await nativeTurn({agent, cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: true, sessionId, signal: AbortSignal.timeout(5000), binaries: {[agent]: await fakeBinary(dir, agent, "success")}, onSession: async () => {}, onUsage: (usage) => reports.push(usage)});
+      assert.deepEqual(reports.at(-1), expected, agent);
+    }
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a conversation totals its coordinator's and each helper's tokens, and telemetry keeps the counts", async () => {
+  const dir = await fixture(), o = engineOptions(dir);
+  let last: Progress | undefined, masters = 0;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") {
+      opts.onUsage?.({fresh: 100, cached: 900, output: 10, context: 500});
+      opts.onUsage?.({fresh: 200, cached: 1800, output: 20, context: 900});
+      return result;
+    }
+    opts.onUsage?.({fresh: 50, cached: 0, output: 5, context: 50});
+    return ++masters === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    assert.deepEqual(last!.masterUsage, {fresh: 100, cached: 0, output: 10, turns: 2, context: 50});
+    assert.deepEqual(last!.children[0].usage, {fresh: 200, cached: 1800, output: 20, turns: 1, context: 900});
+    const finished = last!.telemetry!.filter((e) => e.event === "native_finished");
+    assert.deepEqual(finished.map((e) => [e.actor, e.freshTokens, e.cachedTokens, e.outputTokens]), [["master", 50, 0, 5], ["claude", 200, 1800, 20], ["master", 50, 0, 5]]);
+    // A follow-up's turns add to the same totals.
+    await executeRun({...o, run: {...o.run, generation: 2, progress: last!}});
+    assert.deepEqual(last!.masterUsage, {fresh: 150, cached: 0, output: 15, turns: 3, context: 50});
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+async function waitFor(check: () => boolean | Promise<boolean>, ms = 20000) {
+  for (const until = Date.now() + ms; ; await new Promise((r) => setTimeout(r, 50))) {
+    if (await check()) return;
+    if (Date.now() > until) throw Error("Timed out waiting");
+  }
+}
+
+test("executions a previous runner left running hold their slots until they finish", {timeout: 5000}, async () => {
+  const shutdown = new AbortController(), earlier = deferred();
+  const asked: [string[], string[]][] = [];
+  let started = 0;
+  const pool = runPool({
+    concurrency: 1, quickConcurrency: 0, signal: shutdown.signal, pollMs: 5,
+    adopted: [{id: "earlier", lane: "standard", done: earlier.promise}],
+    claim: async (active, lanes) => { asked.push([active, lanes]); return started ? null : {run: makeRun(), activity: []}; },
+    execute: async () => { started++; },
+    onError: assert.ifError,
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual([started, asked.length], [0, 0], "a full runner claims nothing");
+    earlier.resolve();
+    await waitFor(() => started === 1);
+    assert.deepEqual(asked[0], [[], ["standard", "quick"]]);
+  } finally { shutdown.abort(); await pool; }
+});
+
+test("an updating runner leaves executions running and returns even when full", {timeout: 5000}, async () => {
+  const shutdown = new AbortController(), drain = new AbortController(), release = deferred();
+  let finished = 0;
+  const pool = runPool({
+    concurrency: 1, quickConcurrency: 0, signal: shutdown.signal, drain: drain.signal, leave: true, pollMs: 5,
+    claim: async (active) => (active.length ? null : {run: makeRun(), activity: []}),
+    execute: async () => { await release.promise; finished++; },
+    onError: assert.ifError,
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  drain.abort();
+  await pool;
+  assert.equal(finished, 0, "the execution was left running");
+  release.resolve();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(finished, 1);
+});
+
+test("an update restarts the runner at once, and the new runner adopts the conversation still executing", {timeout: 90000}, async () => {
+  const dir = await fixture();
+  const root = path.join(dir, "root"), stateDir = path.join(dir, "state");
+  await mkdir(root, {recursive: true});
+  const token = "fixture-runner-token-".padEnd(48, "x"), tokenFile = path.join(dir, "token");
+  await writeFile(tokenFile, token, {mode: 0o600});
+  const run = makeRun();
+  // Its turn already finished here: the executor only delivers the receipt.
+  await savePrivate(path.join(stateDir, "runs", `${run.id}.json`), {generation: 1, phase: "finished", pid: null, progress: {...progress(), state: "completed", summary: "Done"}});
+  const hold = deferred(), held = deferred();
+  const claims: string[][] = [], reports: Progress[] = [], auth = new Set<string>();
+  let claimed = false;
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const input = JSON.parse(body || "{}");
+    auth.add(req.headers.authorization ?? "");
+    const reply = (value: unknown) => { res.writeHead(200, {"Content-Type": "application/json"}); res.end(JSON.stringify(value)); };
+    if (req.url === "/api/runner/claim") {
+      claims.push(input.activeRunIds ?? []);
+      if (!claimed) { claimed = true; return reply({run, activity: []}); }
+      return reply({});
+    }
+    if (req.url === "/api/runner/heartbeat") { held.resolve(); await hold.promise; return reply({cancel: false, messages: run.messages}); }
+    if (req.url === "/api/runner/report") { reports.push(input.progress); return reply({}); }
+    res.writeHead(404); res.end("{}");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const config = path.join(dir, "machine.json");
+  await writeFile(config, JSON.stringify({host: "studio", root, home: dir, endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, tokenFile, stateDir, worktreeRoot: path.join(dir, "worktrees"), masterCwd: root, agents: ["claude"]}));
+  const start = () => spawn(process.execPath, ["--import", "tsx", "runner/main.ts", config], {stdio: "ignore"});
+  const exited = (child: ChildProcess) => new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+  const file = path.join(stateDir, "executors", `${run.id}.json`);
+  const running: ChildProcess[] = [];
+  try {
+    const first = start();
+    running.push(first);
+    await held.promise;
+    const executor: number = JSON.parse(await readFile(file, "utf8")).pid;
+    assert.notEqual(executor, first.pid, "the conversation runs in its own process");
+    const firstExit = exited(first);
+    first.kill("SIGUSR2");
+    assert.equal(await firstExit, 0, "the runner exits at once for the update");
+    assert.doesNotThrow(() => process.kill(executor, 0), "its executor keeps running");
+    const before = claims.length;
+    const second = start();
+    running.push(second);
+    await waitFor(() => claims.slice(before).some((active) => active.includes(run.id)));
+    assert.equal(JSON.parse(await readFile(file, "utf8")).pid, executor, "no second executor started");
+    hold.resolve();
+    await waitFor(async () => !(await stat(file).catch(() => null)));
+    assert.equal(reports.at(-1)?.state, "completed", "the adopted executor delivered its receipt");
+    assert.deepEqual([...auth], [`Bearer ${token}`], "the executor got the runner token through its pipe");
+    const seen = claims.length;
+    await waitFor(() => claims.length > seen + 1 && !claims.at(-1)!.includes(run.id), 15000);
+    const secondExit = exited(second);
+    second.kill("SIGTERM");
+    assert.equal(await secondExit, 0);
+  } finally {
+    hold.resolve();
+    for (const child of running) child.kill("SIGTERM");
+    server.close();
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test("a worktree's session continues only for a same-app follow-up while it is small; reviews and large sessions start fresh", () => {
+  const usage = (context: number) => ({fresh: 1, cached: 1, output: 1, turns: 1, context});
+  const made: Child = {id: randomUUID(), projectId: "acme/test", agent: "claude", mode: "change", cwd: "/w", branch: "projects/a", sessionId: "s1", state: "completed", result, evidence: [], usage: usage(80_000)};
+  const followUp = {...dispatch(made.id).task!, mode: "change" as const};
+  assert.equal(continuesSession(made, followUp, [made]), true);
+  assert.equal(continuesSession(made, {...followUp, mode: "read"}, [made]), false, "a review of a change is independent");
+  assert.equal(continuesSession(made, {...followUp, agent: "codex"}, [made]), false);
+  assert.equal(continuesSession({...made, resumable: false}, followUp, [made]), false);
+  // The session's latest turn decides, even when a later follow-up made it.
+  const later: Child = {...made, id: randomUUID(), usage: usage(SESSION_CONTEXT_LIMIT)};
+  assert.equal(continuesSession(made, followUp, [made, later]), false);
+  assert.equal(continuesSession({...made, sessionId: null}, followUp, [made]), false);
+});
+
+test("a fresh session in an existing worktree starts from the earlier report, and the master hears it was fresh", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let last: Progress | undefined;
+  const made: Child = {id: randomUUID(), projectId: "acme/test", agent: "claude", mode: "change", cwd: dir, branch: "projects/a", sessionId: randomUUID(), state: "completed", result: {...result, summary: "Built the statement export; PR open."}, evidence: ["Observed HEAD: abc"]};
+  o.run = {...o.run, generation: 2, progress: {...progress(), children: [made]}};
+  await savePrivate(path.join(dir, "runs", `${o.run.id}.json`), {generation: 1, phase: "finished", pid: null, progress: {...progress(), state: "completed", children: [made]}});
+  o.prepare = async () => ({cwd: dir, branch: "projects/a", sessionId: null});
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(opts.sessionId ?? randomUUID());
+    if (opts.agent === "claude") return result;
+    return calls.length === 1 ? dispatch(made.id) : complete;
+  };
+  try {
+    await executeRun(o);
+    assert.match(calls[1].prompt, /You are a fresh session, so their memory is not available/);
+    assert.match(calls[1].prompt, /Built the statement export; PR open\./);
+    assert.equal(calls[1].sessionId, undefined);
+    assert.ok(last!.children[1].evidence.includes("Observed: a fresh session continued this worktree"));
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a resumed coordinator gets only what is new to it; a follow-up skips the unchanged brief", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let last: Progress | undefined, masters = 0;
+  const master = randomUUID();
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(opts.agent === "codex" ? master : randomUUID());
+    if (opts.agent === "claude") return {...result, summary: "FIRST-CHILD-REPORT"};
+    return ++masters === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    const [first, second] = calls.filter((c) => c.agent === "codex").map((c) => c.prompt);
+    assert.match(first, /You are the user's Projects master/);
+    assert.match(first, /Current user conversation \(including any queued feedback\)/);
+    assert.match(second, /Nothing new in the conversation since your last decision\./);
+    assert.doesNotMatch(second, /Current user conversation|You are the user's Projects master/);
+    assert.match(second, /FIRST-CHILD-REPORT/, "the returned child comes in full");
+    // A follow-up: the same session hears the new message only.
+    const followUp: RunMessage = {id: randomUUID(), role: "user", text: "NEW-FOLLOW-UP", at: Date.now(), delivery: "queued"};
+    calls.length = 0;
+    await executeRun({...o, run: {...o.run, generation: 2, progress: last!, messages: [...o.run.messages, followUp]}});
+    const next = calls.filter((c) => c.agent === "codex")[0];
+    assert.equal(next.sessionId, master);
+    assert.match(next.prompt, /A follow-up turn in this conversation; your instructions and the registered projects are unchanged\./);
+    assert.doesNotMatch(next.prompt, /You are the user's Projects master/);
+    assert.match(next.prompt, /New in the conversation since your last decision[^\n]*NEW-FOLLOW-UP/);
+    assert.doesNotMatch(next.prompt, /Complete the requested work/, "the first message is already in its session");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a coordinator whose session grew large hands over to a fresh one with the full brief", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let masters = 0;
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(opts.sessionId ?? randomUUID());
+    if (opts.agent === "claude") return result;
+    opts.onUsage?.({fresh: 10, cached: 10, output: 1, context: ++masters === 1 ? MASTER_CONTEXT_LIMIT + 1 : 1000});
+    return masters === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    const masterCalls = calls.filter((c) => c.agent === "codex");
+    assert.equal(masterCalls[1].sessionId, undefined, "a fresh coordinator session");
+    assert.match(masterCalls[1].prompt, /the previous coordinator's session grew large, so Projects started a fresh one/);
+    assert.match(masterCalls[1].prompt, /You are the user's Projects master/);
+    assert.match(masterCalls[1].prompt, /Current user conversation/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a helper past its time limit is asked to wrap up, and one that keeps going is stopped, inspected and handed to the master", async () => {
+  for (const complies of [true, false]) {
+    const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [], steered: string[] = [];
+    let last: Progress | undefined, masters = 0;
+    const session = randomUUID();
+    o.limits = {helperMs: 40, graceMs: 120, checkMs: 10};
+    o.processStopped = () => true;
+    o.report = async (p) => { last = structuredClone(p); };
+    o.turn = async (opts) => {
+      calls.push(opts);
+      if (opts.agent === "codex") { await opts.onSession(randomUUID()); return ++masters === 1 ? {...dispatch(), task: {...dispatch().task!, mode: "change"}} : complete; }
+      if (opts.readOnly) return {...result, outcome: "blocked", summary: "Saved the branch; checks still to run."};
+      await opts.onSession(session);
+      return new Promise((resolve, reject) => {
+        opts.onSteer?.(async (input) => { steered.push(input.text); if (complies) resolve({...result, summary: "Wrapped up as asked."}); });
+        const stop = () => reject(Error("Native turn stopped."));
+        if (opts.signal.aborted) stop();
+        opts.signal.addEventListener("abort", stop, {once: true});
+      });
+    };
+    try {
+      await executeRun(o);
+      assert.equal(last?.state, "completed", `complies=${complies}`);
+      assert.match(steered[0], /past its limit\. Finish now: save your work on your branch/);
+      const events = last!.telemetry!;
+      assert.equal(events.find((e) => e.event === "turn_limit_reached")?.reason, "time_limit");
+      if (complies) {
+        assert.equal(last!.children[0].result?.summary, "Wrapped up as asked.");
+        assert.ok(!events.some((e) => e.event === "execution_handed_back"));
+      } else {
+        assert.equal(events.find((e) => e.event === "execution_handed_back")?.reason, "time_limit");
+        assert.equal(calls.filter((c) => c.agent === "claude" && c.readOnly && c.sessionId === session).length, 1, "the same session was inspected");
+        assert.match(calls.filter((c) => c.agent === "codex")[1].prompt, /ran past its time limit and was stopped/);
+      }
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  }
+});
+
+test("a helper past its token limit is asked to wrap up", async () => {
+  const dir = await fixture(), o = engineOptions(dir), steered: string[] = [];
+  let last: Progress | undefined, masters = 0;
+  o.limits = {helperTokens: 1000, checkMs: 10};
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "codex") return ++masters === 1 ? dispatch() : complete;
+    opts.onUsage?.({fresh: 100, cached: 2000, output: 10, context: 2000});
+    return new Promise((resolve) => opts.onSteer?.(async (input) => { steered.push(input.text); resolve(result); }));
+  };
+  try {
+    await executeRun(o);
+    assert.equal(last?.state, "completed");
+    assert.match(steered[0], /used 2\.1k tokens, past its limit/);
+    assert.equal(last!.telemetry!.find((e) => e.event === "turn_limit_reached")?.reason, "token_limit");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a coordinator turn past its time limit is stopped and runs again, and each decision sees the turn's elapsed time and tokens", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let last: Progress | undefined;
+  o.limits = {masterMs: 40, checkMs: 10};
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(randomUUID());
+    if (calls.length === 1)
+      return new Promise((_, reject) => {
+        const stop = () => reject(Error("Native turn stopped."));
+        if (opts.signal.aborted) stop();
+        opts.signal.addEventListener("abort", stop, {once: true});
+      });
+    return complete;
+  };
+  try {
+    await executeRun(o);
+    assert.equal(last?.state, "completed");
+    assert.equal(last!.telemetry!.find((e) => e.event === "execution_handed_back")?.reason, "time_limit");
+    assert.match(calls[1].prompt, /took too long to decide, so it was stopped/);
+    assert.match(calls[1].prompt, /This turn so far: \d+ minutes, 0 helper turns\./);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("when the coordinator's app declines or keeps failing, the other app takes over for the rest of the conversation", async () => {
+  for (const [failures, reason, recorded] of [[["policy_refused"], "policy_refused", "policy_refused"], [["turn_failed", "turn_failed"], "turn_failed", "repeated_failure"]] as const) {
+    const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+    let last: Progress | undefined, failing = true;
+    o.report = async (p) => { last = structuredClone(p); };
+    o.turn = async (opts) => {
+      calls.push(opts);
+      await opts.onSession(opts.sessionId ?? randomUUID());
+      if (failing && calls.length <= failures.length) throw new Failure(failures[calls.length - 1], "Codex could not decide.");
+      return complete;
+    };
+    try {
+      await executeRun(o);
+      assert.equal(last?.state, "completed", reason);
+      assert.deepEqual(calls.map((c) => c.agent), [...failures.map(() => "codex"), "claude"]);
+      const takeover = calls.at(-1)!;
+      assert.equal(takeover.sessionId, undefined);
+      assert.match(takeover.prompt, /You are the user's Projects master/);
+      assert.match(takeover.prompt, new RegExp(`You are taking over as this conversation's coordinator: Codex ${recorded === "policy_refused" ? "declined this conversation under its usage policy" : "failed twice in a row"}`));
+      assert.equal(last!.masterAgent, "claude");
+      assert.deepEqual([last!.masterFallback?.from, last!.masterFallback?.reason], ["codex", recorded]);
+      // The next turn stays with the app that took over.
+      calls.length = 0;
+      failing = false;
+      await executeRun({...o, run: {...o.run, generation: 2, progress: last!}});
+      assert.deepEqual(calls.map((c) => c.agent), ["claude"]);
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  }
+});
+
+test("a coordinator that cannot go on stops plainly when no other app can take over, and never switches back", async () => {
+  for (const scenario of ["alone", "already"] as const) {
+    const dir = await fixture(), o = engineOptions(dir);
+    let last: Progress | undefined, calls = 0;
+    if (scenario === "alone") o.agents = ["codex"];
+    else {
+      o.run = {...o.run, generation: 2, progress: {...progress(), masterAgent: "claude", masterFallback: {from: "codex", reason: "policy_refused", at: Date.now()}}};
+      await savePrivate(path.join(dir, "runs", `${o.run.id}.json`), {generation: 1, phase: "finished", pid: null, progress: o.run.progress});
+    }
+    o.report = async (p) => { last = structuredClone(p); };
+    o.turn = async (opts) => {
+      calls++;
+      assert.equal(opts.agent, scenario === "alone" ? "codex" : "claude");
+      throw new Failure("usage_limit", "Your usage limit is reached. Send a follow-up after it resets.");
+    };
+    try {
+      await executeRun(o);
+      assert.equal(calls, 1, scenario);
+      assert.equal(last?.state, "blocked");
+      assert.match(last!.summary, /usage limit is reached/);
+    } finally { await rm(dir, {recursive: true, force: true}); }
   }
 });

@@ -25,7 +25,7 @@ import {
   type Caller,
   allowed,
 } from "./auth";
-import { snapshotSchema, type Snapshot } from "../src/model";
+import { freshness, snapshotSchema, STALE_AFTER, type Snapshot } from "../src/model";
 import { Machines, type MachineCaller, type MachineRole } from "./machines";
 import {
   currentInbox,
@@ -46,6 +46,9 @@ import {
   type PendingClose,
 } from "../src/work-model";
 
+// How long a machine on duty keeps its last inbox read through scans that
+// could not learn they were on duty.
+const KEEP_INBOX_MS = 3 * STALE_AFTER;
 // A portfolio belongs to one owner, not a shared global collection.
 export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
@@ -89,6 +92,10 @@ export class Portfolio extends DurableObject<Env> {
     );
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS inbox_actions (thread TEXT PRIMARY KEY, action TEXT NOT NULL, requested INTEGER NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
+    );
+    // Email threads marked Done while no current inbox read could see them.
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS deferred_archives (thread TEXT PRIMARY KEY, requested INTEGER NOT NULL)",
     );
   }
   // Each machine's collector publishes its own snapshot. The first machine in
@@ -137,21 +144,32 @@ export class Portfolio extends DurableObject<Env> {
     // withdraws the request until the machine on duty applies it.
     if (run?.emailThread) {
       if (archived) await this.archiveHandledEmails([run.emailThread]);
-      else this.requestInboxAction(run.emailThread, "archive", true);
+      else {
+        this.requestInboxAction(run.emailThread, "archive", true);
+        this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE thread=?", run.emailThread);
+      }
     }
     return run;
   }
   // Queue a Gmail archive for inbox threads whose conversation is Done and
-  // that nobody has written to since; a newer email stays in the inbox.
+  // that nobody has written to since; a newer email stays in the inbox. A
+  // thread no current read can see waits for one that can, instead of being
+  // lost or judged on an old read; a complete read that lacks it shows it out
+  // of the inbox.
   async archiveHandledEmails(threadIds?: string[]) {
     const snapshots = this.overview();
     const inbox = currentInbox(snapshots);
-    if (!inbox) return;
+    const waiting = (threadIds ?? []).filter((thread) =>
+      !inbox || freshness(inbox.observedAt) || (inbox.state !== "ok" && !inbox.threads.some((t) => t.id === thread)));
+    for (const thread of waiting)
+      this.ctx.storage.sql.exec("INSERT INTO deferred_archives(thread,requested) VALUES(?,?) ON CONFLICT(thread) DO NOTHING", thread, Date.now());
+    const ids = threadIds?.filter((thread) => !waiting.includes(thread));
+    if (!inbox || ids?.length === 0) return;
     const conversations = await this.runs.list({ email: true });
     const actions = this.inboxActions();
     const queued = new Set(actions.filter((a) => a.state === "queued").map((a) => a.threadId));
     for (const row of inboxQueue(inbox, currentWork(snapshots)?.issues ?? [], conversations, actions))
-      if (row.state === "handled" && row.thread.inInbox && !queued.has(row.thread.id) && (!threadIds || threadIds.includes(row.thread.id)))
+      if (row.state === "handled" && row.thread.inInbox && !queued.has(row.thread.id) && (!ids || ids.includes(row.thread.id)))
         this.requestInboxAction(row.thread.id, "archive");
   }
   moveRun(id: string) { return this.runs.move(id); }
@@ -297,12 +315,21 @@ export class Portfolio extends DurableObject<Env> {
       snapshot.host,
       Date.now(),
     );
+    // The machine on duty keeps its last inbox read through a scan that could
+    // not learn it was on duty, so a brief outage does not empty the inbox.
+    // The read keeps its own time, so its age shows, and lapses after a few
+    // missed scans.
+    const last = !snapshot.inbox && this.collectorDuties(snapshot.host)
+      ? this.ctx.storage.sql.exec<{ payload: string }>("SELECT payload FROM snapshots WHERE host=?", snapshot.host).toArray()[0]
+      : undefined;
+    const kept = last ? (JSON.parse(last.payload) as Snapshot).inbox : undefined;
+    const stored = kept && Date.now() - kept.observedAt < KEEP_INBOX_MS ? { ...snapshot, inbox: kept } : snapshot;
     const result = this.ctx.storage.sql
       .exec<{ host: string }>(
         "INSERT INTO snapshots(host,observed,payload) VALUES(?,?,?) ON CONFLICT(host) DO UPDATE SET observed=excluded.observed,payload=excluded.payload WHERE excluded.observed > snapshots.observed RETURNING host",
         snapshot.host,
         snapshot.collectedAt,
-        JSON.stringify(snapshot),
+        JSON.stringify(stored),
       )
       .toArray();
     // Emails marked Done before Done archived them in Gmail are archived once,
@@ -311,6 +338,23 @@ export class Portfolio extends DurableObject<Env> {
       try {
         await this.archiveHandledEmails();
         this.ctx.storage.kv.put("handledEmailsArchived", Date.now());
+      } catch {}
+    // Done that found no read able to see its thread archives once one can; a
+    // failure retries on the next read, and after a week it lapses, like other
+    // inbox requests. The machine on duty still applies each archive only
+    // against its own fresh read (collector/inbox-actions.ts), never this one.
+    if (result.length && snapshot.inbox)
+      this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE requested<?", Date.now() - 7 * 86400_000);
+    const inbox = result.length && snapshot.inbox ? currentInbox(this.overview()) : undefined;
+    const seen = inbox && inbox.state !== "unavailable"
+      ? this.ctx.storage.sql.exec<{ thread: string }>("SELECT thread FROM deferred_archives").toArray()
+          .map((row) => row.thread)
+          .filter((thread) => inbox.state === "ok" || inbox.threads.some((t) => t.id === thread))
+      : [];
+    if (seen.length)
+      try {
+        await this.archiveHandledEmails(seen);
+        for (const thread of seen) this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE thread=?", thread);
       } catch {}
     return { accepted: result.length === 1 };
   }

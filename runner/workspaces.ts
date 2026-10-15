@@ -45,7 +45,7 @@ export async function git(
   } catch {
     throw new Failure(
       "git_failed",
-      "Git could not verify or prepare this workspace. Inspect the repository before retrying.",
+      "Git could not verify or prepare this workspace.",
     );
   }
 }
@@ -285,6 +285,29 @@ async function restoreWorkspace(
   }
   return { cwd: await realpath(cwd), branch, sessionId: null, restored: true, savedAt };
 }
+// A worktree outlives its sessions. Its latest session continues only for a
+// follow-up by the same app that needs that session's memory: never for a
+// read-only review of a change, never once the session cannot continue, and
+// never once its context passed this many tokens; a fresh session with a
+// written handoff costs less than re-reading it on every request.
+export const SESSION_CONTEXT_LIMIT = 200_000;
+export function continuesSession(
+  existing: Child,
+  task: NonNullable<MasterDecision["task"]>,
+  previous: Child[],
+) {
+  if (!existing.sessionId || existing.agent !== task.agent) return false;
+  if (task.mode === "read" && existing.mode === "change") return false;
+  // The session's latest turn, which a later follow-up may have made.
+  const latest =
+    [...previous].reverse().find((c) => c.sessionId === existing.sessionId) ??
+    existing;
+  return (
+    existing.resumable !== false &&
+    latest.resumable !== false &&
+    (latest.usage?.context ?? 0) < SESSION_CONTEXT_LIMIT
+  );
+}
 export async function prepareWorkspace(
   project: ProjectDirectory,
   task: NonNullable<MasterDecision["task"]>,
@@ -351,7 +374,7 @@ export async function prepareWorkspace(
     if (cwd !== existing.cwd)
       throw new Failure(
         "workspace_changed",
-        "The workspace path has moved; inspect it before continuing.",
+        "That worktree's folder has moved.",
       );
     const common = await git(project.cwd, [
       "rev-parse",
@@ -360,7 +383,8 @@ export async function prepareWorkspace(
     ]);
     const branch = await git(cwd, ["branch", "--show-current"]);
     // A child may start another branch in its own runner worktree, say for a
-    // second pull request; elsewhere a different branch means another owner.
+    // second pull request, or leave it detached once that merged; elsewhere a
+    // different branch means another owner.
     const owned = cwd.startsWith(
       (await realpath(root).catch(() => root)) + path.sep,
     );
@@ -370,16 +394,18 @@ export async function prepareWorkspace(
         "--path-format=absolute",
         "--git-common-dir",
       ])) !== common ||
-      (branch !== existing.branch && !(owned && branch))
+      (branch !== existing.branch && !owned)
     )
       throw new Failure(
         "workspace_changed",
-        "Workspace ownership changed; inspect its repository and branch before continuing.",
+        "That worktree is on a branch this conversation did not start, so another session may own it.",
       );
     return {
       cwd,
       branch: branch || existing.branch,
-      sessionId: existing.agent === task.agent ? existing.sessionId : null,
+      sessionId: continuesSession(existing, task, previous)
+        ? existing.sessionId
+        : null,
     };
   }
   if (task.mode === "read")

@@ -227,8 +227,9 @@ for (const service of services) {
   if (!loaded(service.label)) start(target);
   else if (!service.runner && changed) restart(service.label, target);
   else if (service.runner) {
-    // The runner takes no new work, finishes each current turn, then exits;
-    // launchd starts the new bundle, which continues where it left off.
+    // The runner exits at once and launchd starts the new bundle, which
+    // adopts the conversations' executors: each finishes its current step on
+    // the old version, then continues on the new one.
     execFileSync("launchctl", ["kill", "SIGUSR2", `${domain}/${service.label}`], { stdio: "inherit" });
     if (changed)
       console.log(

@@ -939,6 +939,87 @@ test("Done on an email conversation archives its Gmail thread unless someone wro
     await rm(dir, { recursive: true, force: true });
   }
 });
+test("Done that no inbox read could see archives once a read can, and only once", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "project-overview-deferred-archive-"));
+  await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: path.join(dir, "worker.mjs") });
+  const bearer = `Bearer ${"x".repeat(64)}`;
+  const mf = await start(await options(path.join(dir, "worker.mjs"), dir, { ALLOWED_EMAILS: "owner@example.com", COLLECTOR_TOKEN: "x".repeat(64) }));
+  try {
+    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
+    const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
+    const at = Date.now();
+    const ingest = (snapshot: object) => mf.dispatchFetch("https://example.com/api/ingest", { method: "POST", headers: { Authorization: bearer, "Content-Type": "application/json" }, body: JSON.stringify(snapshot) });
+    const email = (emailThread: string) => store.createRun({ requestId: randomUUID(), text: "Reply", projectId: null, agent: "auto", workIssue: null, emailThread });
+    const queued = async () => (await store.inboxActions()).filter((a) => a.state === "queued").map((a) => [a.threadId, a.action]);
+    const threads = inboxSnapshot(at).inbox.threads;
+    const read = (offset: number, state: "ok" | "incomplete" | "unavailable", seen = threads) => {
+      const snapshot = inboxSnapshot(at + offset);
+      return { ...snapshot, inbox: { ...snapshot.inbox, state, threads: state === "unavailable" ? [] : seen } };
+    };
+    assert.equal((await ingest(read(0, "ok"))).status, 200);
+    assert.equal((await ingest(read(1000, "unavailable"))).status, 200);
+    const reply = await email("bbbbbbbbbb01");
+    await store.archiveRun(reply.id, true);
+    assert.deepEqual(await queued(), [], "Gmail could not be read");
+    assert.equal((await ingest(read(2000, "incomplete", threads.filter((t) => t.id !== "bbbbbbbbbb01")))).status, 200);
+    assert.deepEqual(await queued(), [], "a partial read that missed the email says nothing about it");
+    assert.equal((await ingest(read(3000, "ok"))).status, 200);
+    assert.deepEqual(await queued(), [["bbbbbbbbbb01", "archive"]]);
+    await store.requestInboxAction("bbbbbbbbbb01", "archive", true);
+    assert.equal((await ingest(read(4000, "ok"))).status, 200);
+    assert.deepEqual(await queued(), [], "Undo sticks");
+    // Reopen withdraws a waiting archive too.
+    assert.equal((await ingest(read(5000, "unavailable"))).status, 200);
+    const later = await email("aaaaaaaaaa01");
+    await store.archiveRun(later.id, true);
+    await store.archiveRun(later.id, false);
+    assert.equal((await ingest(read(6000, "ok"))).status, 200);
+    assert.deepEqual(await queued(), []);
+    // Nor is Done judged on an old read: someone may have written since.
+    const old = read(7000, "ok");
+    old.inbox.observedAt = Date.now() - 6 * 60_000;
+    assert.equal((await ingest(old)).status, 200);
+    await store.archiveRun((await email("aaaaaaaaaa01")).id, true);
+    assert.deepEqual(await queued(), []);
+    assert.equal((await ingest(read(8000, "ok"))).status, 200);
+    assert.deepEqual(await queued(), [["aaaaaaaaaa01", "archive"]]);
+    // A wait no read ever ends lapses after a week, like other inbox requests.
+    const storage = await mf.unsafeGetDurableObjectStorage("test", "Portfolio", { name: "test" });
+    await storage.exec("INSERT INTO deferred_archives(thread,requested) VALUES('cccccccccc01',?),('dddddddddd01',?)", Date.now() - 8 * 86400_000, Date.now());
+    assert.equal((await ingest(read(9000, "incomplete"))).status, 200);
+    assert.deepEqual([...(await storage.exec("SELECT thread FROM deferred_archives"))].map((row) => (row as { thread: string }).thread), ["dddddddddd01"]);
+  } finally {
+    await mf.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+test("the machine on duty keeps its last inbox read through a scan that could not learn it was on duty", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "project-overview-kept-inbox-"));
+  await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: path.join(dir, "worker.mjs") });
+  const studio = { Authorization: `Bearer ${"x".repeat(64)}` }, laptop = { Authorization: `Bearer ${"y".repeat(64)}` };
+  const mf = await start(await options(path.join(dir, "worker.mjs"), dir, { COLLECTOR_TOKEN: "x".repeat(64), LAPTOP_COLLECTOR_TOKEN: "y".repeat(64) }));
+  const ingest = (snapshot: object, headers: Record<string, string>) => mf.dispatchFetch("https://example.com/api/ingest", { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(snapshot) });
+  try {
+    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
+    const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
+    const inboxOf = async (host: string) => (await store.overview()).find((s) => s.host === host)?.inbox;
+    const at = Date.now();
+    assert.equal((await ingest(inboxSnapshot(at), studio)).status, 200);
+    assert.equal((await ingest(closeSnapshot(at + 1000), studio)).status, 200);
+    assert.equal((await inboxOf("studio"))?.observedAt, at, "the last read stays, with its own time");
+    const old = inboxSnapshot(at + 2000);
+    old.inbox.observedAt = at - 16 * 60_000;
+    assert.equal((await ingest(old, studio)).status, 200);
+    assert.equal((await ingest(closeSnapshot(at + 3000), studio)).status, 200);
+    assert.equal(await inboxOf("studio"), undefined, "a read older than a few missed scans lapses");
+    assert.equal((await ingest({ ...archiveSnapshot("laptop", at), inbox: inboxSnapshot(at).inbox }, laptop)).status, 200);
+    assert.equal((await ingest(archiveSnapshot("laptop", at + 1000), laptop)).status, 200);
+    assert.equal(await inboxOf("laptop"), undefined, "a machine not on duty keeps nothing");
+  } finally {
+    await mf.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 test("the Studio leaves a thread in the inbox when someone wrote after the archive request", async () => {
   const inbox = inboxSnapshot().inbox as Inbox;
   const thread = inbox.threads[1];

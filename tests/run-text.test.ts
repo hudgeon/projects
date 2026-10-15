@@ -5,11 +5,13 @@ import {
   cleanAgentText,
   describeLink,
   doneSoFar,
+  formatTokens,
   headline,
   requestTitle,
   runDocuments,
   runTitle,
   statusLine,
+  tokenLine,
 } from "../src/run-text";
 import type { ProgressNote, Run } from "../src/run-model";
 
@@ -330,4 +332,16 @@ test("documents name the saved edition plainly and collapse anchors of the same 
     docs.map((d) => d.label),
     ["plan", "PR #37", "Gmail conversation"],
   );
+});
+
+test("token counts read plainly, and a conversation's line splits coordinator from helpers", () => {
+  assert.deepEqual([950, 9_940, 42_000, 999_499, 1_300_000, 650_000_000, 1_900_000_000].map(formatTokens), ["950", "9.9k", "42k", "999k", "1.3M", "650M", "1.9B"]);
+  const usage = (fresh: number, cached: number, output: number) => ({fresh, cached, output, turns: 1, context: 0});
+  const progress = {seq: 1, state: "running" as const, summary: "", masterSessionId: null, masterUsage: usage(3_000_000, 5_000_000, 200_000), children: [
+    {id: "00000000-0000-4000-8000-000000000001", projectId: "acme/app", agent: "claude" as const, mode: "change" as const, cwd: "/w", branch: "b", sessionId: null, state: "completed" as const, result: null, evidence: [], usage: usage(5_000_000, 630_000_000, 800_000)},
+    {id: "00000000-0000-4000-8000-000000000002", projectId: "acme/app", agent: "codex" as const, mode: "read" as const, cwd: "/w", branch: "main", sessionId: null, state: "completed" as const, result: null, evidence: []},
+  ]};
+  assert.equal(tokenLine(progress), "Tokens: 644M (9M new) · coordinator 8.2M · helpers 636M");
+  assert.equal(tokenLine({...progress, masterUsage: undefined, children: []}), null);
+  assert.equal(tokenLine(null), null);
 });

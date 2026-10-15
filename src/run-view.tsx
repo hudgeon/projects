@@ -14,7 +14,9 @@ import {
   ACTIVITY_LIMIT,
   FALLBACK_AFTER_MS,
   RUNNER_STALE_MS,
+  MASTER_TAKEOVER,
   runProjectIds,
+  usageTotal,
   type Agent,
   type Child,
   type ProgressUpdate,
@@ -34,8 +36,10 @@ import {
   doneSoFar,
   headline,
   latestPlan,
+  formatTokens,
   runDocuments,
   runTitle,
+  tokenLine,
   type DocumentLink,
 } from "./run-text";
 import { Restart } from "./restart";
@@ -764,6 +768,9 @@ function ChildView({
         <span className="subtle">
           {child.state === "unknown" ? "outcome unconfirmed" : child.state} ·{" "}
           {child.mode === "read" ? "looked into it" : "made changes"}
+          {child.usage
+            ? ` · ${formatTokens(usageTotal(child.usage))} tokens`
+            : ""}
         </span>
       </summary>
       {child.result && (
@@ -1278,7 +1285,17 @@ export function ConversationPage({
             "claude"
               ? "Claude"
               : "Codex"}
+            {run.progress?.masterFallback &&
+              `, which took over when ${run.progress.masterFallback.from === "claude" ? "Claude" : "Codex"} ${MASTER_TAKEOVER[run.progress.masterFallback.reason]}`}
           </p>
+          {tokenLine(run.progress) && (
+            <p
+              className="subtle"
+              title="New tokens are fresh input and output; the rest is earlier context the apps read again from cache."
+            >
+              {tokenLine(run.progress)}
+            </p>
+          )}
           {active && (
             <p className="subtle">
               {run.heartbeatAt ? (

@@ -49,6 +49,9 @@ const reason = z.enum([
   "screenshot_failed",
   "journal_problem",
   "report_failed",
+  "recovery_limit",
+  "time_limit",
+  "token_limit",
 ]);
 export type FailureReason = z.infer<typeof reason>;
 export const executionEventSchema = z
@@ -66,6 +69,10 @@ export const executionEventSchema = z
       "master_decision",
       "execution_interrupted",
       "execution_paused",
+      // A failure the runner gave back to the master instead of the owner.
+      "execution_handed_back",
+      // A helper turn past its time or tokens was asked to wrap up.
+      "turn_limit_reached",
     ]),
     actor: z.enum(["master", "codex", "claude"]).optional(),
     // The app running a master turn; a child's actor already names its app.
@@ -75,6 +82,10 @@ export const executionEventSchema = z
     mode: z.enum(["read", "change"]).optional(),
     resumed: z.boolean().optional(),
     durationMs: ms.optional(),
+    // A finished native turn's tokens, as its app reported them.
+    freshTokens: ms.optional(),
+    cachedTokens: ms.optional(),
+    outputTokens: ms.optional(),
     outcome: outcome.optional(),
     reason: reason.optional(),
     action: z.enum(["dispatch", "complete", "blocked"]).optional(),
@@ -203,6 +214,8 @@ const logEventSchema = z.enum([
   "runner_connection_unavailable",
   "runner_start_failed",
   "runner_draining",
+  "runner_executor_adopted",
+  "runner_executor_failed",
   "notification_sent",
 ]);
 export function telemetry(

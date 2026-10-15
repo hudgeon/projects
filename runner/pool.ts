@@ -14,6 +14,12 @@ export async function runPool(options: {
   signal: AbortSignal;
   // Stop claiming; each conversation returns at its next pause between turns.
   drain?: AbortSignal;
+  // Executions already running when the pool starts, such as a previous
+  // runner's executor processes: they hold a slot until they finish.
+  adopted?: { id: string; lane: Lane; done: Promise<void> }[];
+  // Once draining, return without waiting for executions to finish; they
+  // run on in their own processes.
+  leave?: boolean;
   once?: boolean;
   claim: (activeRunIds: string[], lanes: Lane[]) => Promise<ClaimedRun | null>;
   execute: (claim: ClaimedRun, control: AbortController) => Promise<void>;
@@ -31,6 +37,14 @@ export async function runPool(options: {
     throw Error("Runner quick concurrency must be between zero and five.");
   const active = new Map<string, { task: Promise<void>; lane: Lane }>();
   const controls = new Set<AbortController>();
+  for (const item of options.adopted ?? []) {
+    const task = item.done
+      .catch(() => {})
+      .finally(() => {
+        active.delete(item.id);
+      });
+    active.set(item.id, { task, lane: item.lane });
+  }
   const stop = () => {
     for (const control of controls) control.abort("shutdown");
   };
@@ -38,6 +52,11 @@ export async function runPool(options: {
   const waiting = options.drain
     ? AbortSignal.any([options.signal, options.drain])
     : options.signal;
+  // Resolves when claiming stops, so a full runner notices an update too.
+  const stopped = new Promise<void>((resolve) => {
+    if (waiting.aborted) resolve();
+    else waiting.addEventListener("abort", () => resolve(), { once: true });
+  });
   const pause = () =>
     delay(options.pollMs ?? 2000, undefined, {
       signal: waiting,
@@ -55,7 +74,10 @@ export async function runPool(options: {
             ? ["standard", "quick"]
             : ["quick"];
       if (!lanes.length) {
-        await Promise.race([...active.values()].map((item) => item.task));
+        await Promise.race([
+          ...[...active.values()].map((item) => item.task),
+          stopped,
+        ]);
         continue;
       }
       try {
@@ -92,7 +114,8 @@ export async function runPool(options: {
         await pause();
       }
     }
-    await Promise.all([...active.values()].map((item) => item.task));
+    if (!(options.leave && options.drain?.aborted && !options.signal.aborted))
+      await Promise.all([...active.values()].map((item) => item.task));
     if (options.once && failure) throw failure;
   } finally {
     options.signal.removeEventListener("abort", stop);

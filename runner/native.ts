@@ -15,6 +15,19 @@ import {
 } from "../src/run-model";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
+// A turn's tokens so far, as its app reports them: new input (cache writes
+// included), cached input read again and output, with the latest request's
+// context size.
+export type TurnUsage = {
+  fresh: number;
+  cached: number;
+  output: number;
+  context: number;
+};
+const count = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : 0;
 export type NativeOptions = {
   agent: "codex" | "claude";
   cwd: string;
@@ -35,6 +48,11 @@ export type NativeOptions = {
   // Once the turn is running: delivers the user's feedback into it. Rejects when
   // the turn has finished or cannot take more input.
   onSteer?: (steer: (input: SteerInput) => Promise<void>) => void;
+  // Requests the runner refused during a turn that still returned its result,
+  // as categories; never tool names or arguments.
+  onRefused?: (categories: string[]) => void;
+  // Called as the turn's token use grows.
+  onUsage?: (usage: TurnUsage) => void;
   // The user's connectors, for helpers only.
   connectors?: ConnectorAccess;
   binaries?: { codex?: string; claude?: string };
@@ -180,11 +198,11 @@ function turnFailure(info: unknown, acted: boolean): Error {
     ],
     contextWindowExceeded: [
       "context_exceeded",
-      "This Codex session ran out of room. Ask for a fresh helper or start a new conversation.",
+      "This Codex session ran out of room.",
     ],
     sessionBudgetExceeded: [
       "context_exceeded",
-      "This Codex session reached its budget. Ask for a fresh helper or start a new conversation.",
+      "This Codex session reached its budget.",
     ],
     unauthorized: [
       "signed_out",
@@ -197,36 +215,51 @@ function turnFailure(info: unknown, acted: boolean): Error {
     ],
     tooManyDenials: [
       "permission_required",
-      "Codex was refused too many permissions to finish. Inspect the native session.",
+      "Codex stopped after too many of its requests were refused.",
     ],
     sandboxError: [
       "sandbox_error",
-      "Codex's sandbox could not run a command. Inspect the native session.",
+      "Codex's sandbox could not run a command.",
     ],
   };
   const [reason, message] = (kind && known[kind]) || [
     "turn_failed",
-    "Codex turn failed or was interrupted; completion is unverified.",
+    "Codex's turn failed before it reported; what it finished is unconfirmed.",
   ];
   return new Failure(reason, message);
 }
 // Which request Codex refused, so a failure names its step.
 const opening: [FailureReason, string] = [
   "session_rejected",
-  "Codex could not open the session. Inspect its native session and configuration.",
+  "Codex could not open the session.",
 ];
-const refused: Record<string, [FailureReason, string]> = {
+const rejected: Record<string, [FailureReason, string]> = {
   initialize: [
     "native_unavailable",
     "Codex would not start a session. Check its installation and local login.",
   ],
   "thread/start": opening,
   "thread/resume": opening,
-  "turn/start": [
-    "turn_rejected",
-    "Codex rejected the turn. Inspect its native session and configuration.",
-  ],
+  "turn/start": ["turn_rejected", "Codex rejected the turn."],
 };
+// What a refused request would have done, never its tool, command or text.
+const codexRequests: Record<string, string> = {
+  "item/commandExecution/requestApproval": "command",
+  "item/fileChange/requestApproval": "file change",
+  "item/permissions/requestApproval": "permission",
+  "item/tool/requestUserInput": "question for the user",
+};
+export function claudeRefusal(tool: unknown): string {
+  if (tool === "Bash") return "command";
+  if (tool === "Edit" || tool === "Write" || tool === "NotebookEdit")
+    return "file change";
+  if (tool === "WebFetch" || tool === "WebSearch") return "web request";
+  if (typeof tool === "string" && tool.startsWith("mcp__projects_browser__"))
+    return "browser action";
+  if (typeof tool === "string" && tool.startsWith("mcp__"))
+    return "connector tool";
+  return "other tool";
+}
 export function nativeProcessStopped(pid: number | null): boolean {
   if (!pid || pid <= 1) return false;
   // Check the detached process group too: a shell/tool can outlive its parent.
@@ -252,7 +285,7 @@ async function confirmStopped(child: ChildProcessWithoutNullStreams) {
       child.off("close", closed);
       reject(
         new NativeStopError(
-          "The native process did not confirm it stopped. Inspect the session before continuing.",
+          "An agent process did not confirm it stopped, so nothing else was started. Send a follow-up once it has stopped.",
         ),
       );
     }, 6000);
@@ -471,8 +504,9 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     finalText = "",
     turnId = "",
     threadId = "",
-    denied = false,
-    acted = false;
+    refusals: string[] = [],
+    acted = false,
+    baseline: { input: number; cached: number; output: number } | undefined;
   const pending = new Map<
     number,
     {
@@ -527,20 +561,25 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         clearTimeout(entry.timer);
         pending.delete(message.id);
         if (message.error) {
-          const known = refused[methods.get(message.id) ?? ""];
+          const known = rejected[methods.get(message.id) ?? ""];
           entry.reject(
             known
               ? new Failure(...known)
-              : Error(
-                  "Codex rejected a session request. Inspect its native session and configuration.",
-                ),
+              : Error("Codex rejected a session request."),
           );
         } else entry.resolve(object(message.result));
         return;
       }
       const p = object(message.params);
+      // The runner answers every request for approval or input itself: it
+      // declines, and the turn carries on without it.
       if (message.id !== undefined && typeof message.method === "string") {
-        denied = true;
+        refusals.push(
+          codexRequests[message.method] ??
+            (message.method.endsWith("/requestApproval")
+              ? "approval"
+              : "other request"),
+        );
         if (message.method === "item/tool/requestUserInput")
           send({ id: message.id, result: { answers: {} } });
         else if (message.method === "item/permissions/requestApproval")
@@ -558,6 +597,27 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         return;
       }
       if (p.threadId && p.threadId !== threadId) return;
+      // The thread's running totals; this process's turns are the growth
+      // since just before the first report it saw.
+      if (message.method === "thread/tokenUsage/updated") {
+        const usage = object(p.tokenUsage);
+        const total = object(usage.total),
+          last = object(usage.last);
+        const read = (key: string) => count(total[key]);
+        baseline ??= {
+          input: read("inputTokens") - count(last.inputTokens),
+          cached: read("cachedInputTokens") - count(last.cachedInputTokens),
+          output: read("outputTokens") - count(last.outputTokens),
+        };
+        const input = Math.max(0, read("inputTokens") - baseline.input),
+          cached = Math.max(0, read("cachedInputTokens") - baseline.cached);
+        o.onUsage?.({
+          fresh: Math.max(0, input - cached),
+          cached,
+          output: Math.max(0, read("outputTokens") - baseline.output),
+          context: count(last.inputTokens),
+        });
+      }
       if (message.method === "turn/started") {
         const id = object(p.turn).id;
         if (typeof id === "string") turnId = id;
@@ -602,19 +662,14 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
           rejectTurn(turnFailure(object(turn.error).codexErrorInfo, acted));
           return;
         }
-        if (denied) {
-          rejectTurn(
-            new Failure(
-              "permission_required",
-              "Codex needs an approval or answer outside the runner's authority. Inspect the native session.",
-            ),
-          );
-          return;
-        }
         try {
           if (finalText.length > 100000) throw Error();
+          const value = JSON.parse(finalText);
           o.onActivity?.({ kind: "turn", state: "finished" });
-          finish(JSON.parse(finalText));
+          // A refused request is evidence for the master, not a failure: the
+          // turn went on without it and reported.
+          if (refusals.length) o.onRefused?.(refusals);
+          finish(value);
         } catch {
           rejectTurn(
             new Failure(
@@ -679,7 +734,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     let result: unknown;
     for (let attempt = 1; ; attempt++) {
       finalText = "";
-      denied = false;
+      refusals = [];
       acted = false;
       const turn = await request("turn/start", {
         threadId,
@@ -735,6 +790,8 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   const session = o.sessionId ?? randomUUID();
   // Write session identity before the process can execute a prompt.
   await o.onSession(session);
+  // A stop that arrived while the identity was saved starts nothing.
+  o.signal.throwIfAborted();
   const connectors = o.connectors?.claude;
   const args = [
     "-p",
@@ -799,7 +856,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   let result: unknown,
     received = false,
     failed = false,
-    denied = false,
+    refusals: string[] = [],
     subtype = "",
     open = true;
   const write = (input: SteerInput) =>
@@ -815,6 +872,25 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     child.stdin.end();
   };
   const tools = new Map<string, NativeActivity["kind"]>();
+  // Each request's usage, by message: a message streamed in parts repeats it.
+  const requests = new Map<string, Record<string, unknown>>();
+  let context = 0;
+  const usage = (models?: Record<string, unknown>[]) => {
+    if (models?.length)
+      return {
+        fresh: models.reduce((n, m) => n + count(m.inputTokens) + count(m.cacheCreationInputTokens), 0),
+        cached: models.reduce((n, m) => n + count(m.cacheReadInputTokens), 0),
+        output: models.reduce((n, m) => n + count(m.outputTokens), 0),
+        context,
+      };
+    const all = [...requests.values()];
+    return {
+      fresh: all.reduce((n, u) => n + count(u.input_tokens) + count(u.cache_creation_input_tokens), 0),
+      cached: all.reduce((n, u) => n + count(u.cache_read_input_tokens), 0),
+      output: all.reduce((n, u) => n + count(u.output_tokens), 0),
+      context,
+    };
+  };
   const completion = new Promise<unknown>((resolve, reject) => {
     const fail = (error: Error) => {
       stopProcess(child);
@@ -822,11 +898,27 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     };
     const abort = () => fail(Error("Native turn stopped."));
     o.signal.addEventListener("abort", abort, { once: true });
+    if (o.signal.aborted) abort();
     readLines(
       child,
       (message) => {
         if (message.type === "system" && message.subtype === "init")
           o.onActivity?.({ kind: "turn", state: "started" });
+        if (message.type === "assistant") {
+          const sent = object(message.message);
+          const used = object(sent.usage);
+          if (typeof sent.id === "string" && Object.keys(used).length) {
+            requests.set(sent.id, used);
+            // A helper's sub-agents report too; the turn's own context is
+            // what its top-level requests carry.
+            if (!message.parent_tool_use_id)
+              context =
+                count(used.input_tokens) +
+                count(used.cache_creation_input_tokens) +
+                count(used.cache_read_input_tokens);
+            o.onUsage?.(usage());
+          }
+        }
         if (message.type === "assistant" || message.type === "user") {
           const content = object(message.message).content;
           if (Array.isArray(content))
@@ -874,13 +966,16 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
             }
         }
         if (message.type !== "result") return;
+        // The result's per-model totals are the turn's own account.
+        o.onUsage?.(usage(Object.values(object(message.modelUsage)).map(object)));
         subtype = typeof message.subtype === "string" ? message.subtype : "";
         if (message.is_error || message.subtype !== "success") failed = true;
-        if (
-          Array.isArray(message.permission_denials) &&
-          message.permission_denials.length
-        )
-          failed = denied = true;
+        // Don't-ask mode refuses what was not granted, and the turn carries on
+        // without it. Only the kind of each refused request is kept.
+        if (Array.isArray(message.permission_denials))
+          refusals = message.permission_denials.map((denial) =>
+            claudeRefusal(object(denial).tool_name),
+          );
         result = message.structured_output;
         received = true;
         // One turn per process: ending input lets Claude exit.
@@ -892,25 +987,18 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     child.on("close", (code) => {
       open = false;
       o.signal.removeEventListener("abort", abort);
-      if (denied)
-        reject(
-          new Failure(
-            "permission_required",
-            "Claude needs an approval or answer outside the runner's authority. Inspect the native session.",
-          ),
-        );
-      else if (subtype === "error_max_turns")
+      if (subtype === "error_max_turns")
         reject(
           new Failure(
             "turn_limit",
-            "Claude reached its turn limit before finishing. Send a follow-up to continue.",
+            "Claude reached its turn limit before finishing.",
           ),
         );
       else if (failed)
         reject(
           new Failure(
             "turn_failed",
-            "Claude's turn failed; completion is unverified. Inspect the native session.",
+            "Claude's turn failed before it reported; what it finished is unconfirmed.",
           ),
         );
       else if (!received)
@@ -924,10 +1012,13 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         reject(
           new Failure(
             "invalid_result",
-            "Claude did not return a valid structured result. Check the native session.",
+            "Claude did not return a valid structured result.",
           ),
         );
-      else resolve(result);
+      else {
+        if (refusals.length) o.onRefused?.(refusals);
+        resolve(result);
+      }
     });
     void (async () => {
       if (child.pid) await o.onProcess?.(child.pid);

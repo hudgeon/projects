@@ -118,13 +118,19 @@ collector and runner, written by `scripts/install-machine.mjs`:
 
 Each conversation gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
-Codex it is Claude. It is read-only and makes one structured decision at a
+Codex it is Claude. When its app declines the conversation, reaches its usage
+limit, is signed out or fails twice in a row, the other app takes over for the
+rest of the conversation, and its details say why. It is read-only and makes one structured decision at a
 time: dispatch a child, finish, or ask you for a material decision. A child is
 a native Claude Code or Codex session: **change** children work in their own
 Git worktree from current `origin/main`; **read** children answer questions and
 change nothing. Implementation goes straight to one change child, which
-investigates as part of the work. Child results resume the same master. There
-is no additional provider API key, hosted agent runtime or inbound tunnel.
+investigates as part of the work. A follow-up reuses its worktree; its session
+continues only while it is small, and a review of a change always gets a fresh
+one, which starts from the earlier report. Child results resume the same
+master, which is sent only what it has not seen; once its own session grows
+large, a fresh master takes over with the full brief. There is no additional
+provider API key, hosted agent runtime or inbound tunnel.
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.
@@ -173,10 +179,20 @@ untrusted users.
 Recovery: each dispatch is journalled locally before it runs. A runner restart
 keeps its claim; once the old process has exited and the workspace is verified,
 the same child session is resumed **read-only** to reconcile what finished, and
-the master decides what remains. Uncertain writes are never replayed. A release
-restarts runners with `SIGUSR2`: the runner takes no new work, lets each turn
-finish and save its place, then exits for the new bundle (work still running
-after twenty minutes stops as on `SIGTERM` and recovers).
+the master decides what remains. A helper turn that fails is reconciled the same
+way at once; when its session cannot continue (out of room, say), the master
+gets the worktree's state and continues it in a fresh session. A request the
+runner refused leaves the helper's result standing, recorded as evidence, and a
+failed coordinator turn runs again. Failures reach you only after the master
+has had its say, or after four in a row in one turn. A helper turn past 90
+minutes or 100M tokens is asked to save its work and report, and is stopped
+and inspected 20 minutes later if it has not; a coordinator turn past 20
+minutes is stopped and runs again. Uncertain writes are never replayed. Each conversation runs in its own executor process, so a release
+restarts runners at once with `SIGUSR2`: the runner exits for the new bundle,
+which adopts the executors still running; each finishes its current step on
+the version it started with, saves its place and exits, and the new runner
+continues it. `SIGTERM` still stops everything, and that work recovers as
+above.
 
 ### Conversation browsers
 
@@ -221,10 +237,14 @@ metadata through its existing `gws` login, and the latest non-draft message of
 each as bounded plain text (quoted history removed, at most 4,000 characters).
 Text lives only in the latest snapshot, is stripped from the overview and is
 read one thread at a time; it never enters telemetry, prompts or the daily
-email. **Reply** starts a quick conversation that drafts the reply in Gmail for
-your review. **Archive** and **Unsubscribe** follow the Mark done pattern;
-unsubscribe uses RFC 8058 one-click only, to a public HTTPS host checked on the
-connection's own DNS lookup, and otherwise starts a conversation.
+email. If the machine on duty cannot confirm its duty before a scan, its last
+read stays for up to fifteen minutes, with its age shown. **Reply** starts a
+quick conversation that drafts the reply in Gmail for your review; marking it
+**Done** archives the thread unless someone wrote since, and if no current
+read can see the thread, Projects waits for one. **Archive** and
+**Unsubscribe** follow the Mark done pattern; unsubscribe uses RFC 8058
+one-click only, to a public HTTPS host checked on the connection's own DNS
+lookup, and otherwise starts a conversation.
 
 ## Daily review (optional)
 
@@ -335,5 +355,6 @@ request and a manual **Deploy** workflow run on `main`, which:
 Transient Cloudflare failures retry with backoff; anything else stops the
 release. After a deploy that changes the machine bundles, run
 `node scripts/install-machine.mjs` on each connected machine: it keeps the
-machine's config and tokens and restarts its runner at the next pause between
-turns. A machine that is away gets the release when it returns.
+machine's config and tokens and restarts its runner at once; conversations in
+flight finish their current step first. A machine that is away gets the
+release when it returns.

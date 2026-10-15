@@ -94,6 +94,37 @@ export const childResultSchema = z
       .max(12),
   })
   .strict();
+// Tokens native turns used, as their apps reported them: new input (cache
+// writes included), cached input read again, and output, with the turn count
+// and the size of the latest request's context. Counts only.
+const tokens = z.number().int().nonnegative();
+export const usageSchema = z
+  .object({
+    fresh: tokens,
+    cached: tokens,
+    output: tokens,
+    turns: tokens,
+    context: tokens,
+  })
+  .strict();
+export type Usage = z.infer<typeof usageSchema>;
+export const noUsage = (): Usage => ({
+  fresh: 0,
+  cached: 0,
+  output: 0,
+  turns: 0,
+  context: 0,
+});
+export const usageTotal = (usage: Usage | undefined) =>
+  usage ? usage.fresh + usage.cached + usage.output : 0;
+// Why the other app took over coordinating, as the details say it.
+export const MASTER_TAKEOVER = {
+  policy_refused: "declined this conversation under its usage policy",
+  usage_limit: "reached its usage limit",
+  signed_out: "is signed out on this machine",
+  native_unavailable: "would not start on this machine",
+  repeated_failure: "failed twice in a row",
+} as const;
 export const childSchema = z
   .object({
     id: uuid,
@@ -116,6 +147,11 @@ export const childSchema = z
     // The machine whose sessions and worktree it used. Children from before
     // machines were recorded ran on the conversation's machine.
     host: machineIdSchema.optional(),
+    // False once its native session cannot continue, such as one that ran out
+    // of room: work in its worktree continues in a fresh session.
+    resumable: z.boolean().optional(),
+    // Its turns' tokens, its recovery inspection included.
+    usage: usageSchema.optional(),
   })
   .strict();
 // Activity contains only protocol categories, never commands, arguments,
@@ -235,6 +271,20 @@ export const progressSchema = z
     masterSessionId: z.string().max(200).nullable(),
     // The app that owns masterSessionId; Codex when omitted.
     masterAgent: agentSchema.optional(),
+    // Every coordinator turn's tokens in this conversation.
+    masterUsage: usageSchema.optional(),
+    // The other app took over coordinating, for the rest of the conversation,
+    // when this one refused, was unavailable or kept failing.
+    masterFallback: z
+      .object({
+        from: agentSchema,
+        reason: z.enum(
+          Object.keys(MASTER_TAKEOVER) as [keyof typeof MASTER_TAKEOVER],
+        ),
+        at: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
     activity: z.array(activitySchema).max(ACTIVITY_LIMIT).optional(),
     reviewedMessageIds: z.array(uuid).max(40).optional(),
     // Feedback given to the agent working at the time; the master still

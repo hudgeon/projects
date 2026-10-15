@@ -1,4 +1,10 @@
-import type { ProgressNote, Run, RunSummary } from "./run-model";
+import {
+  usageTotal,
+  type Progress,
+  type ProgressNote,
+  type Run,
+  type RunSummary,
+} from "./run-model";
 
 // Presentation of agent-written text, shared by the conversation index (Worker)
 // and the page. Agent text is shown as written; only protocol residue meant for
@@ -235,4 +241,30 @@ export function notice(previous: RunSummary | null, next: RunSummary) {
     title: `${kind}: ${clip(next.title, 80)}`,
     body: clip(next.status ?? "", 140),
   };
+}
+
+// A token count the way the details show it: 950, 9.9k, 42k, 1.3M, 2B.
+export function formatTokens(n: number) {
+  const scaled = (value: number, unit: string) =>
+    `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)}${unit}`;
+  if (n < 1000) return String(Math.round(n));
+  if (n < 999_500) return scaled(n / 1e3, "k");
+  if (n < 999_500_000) return scaled(n / 1e6, "M");
+  return scaled(n / 1e9, "B");
+}
+// What a conversation's coordinator and helpers used, when any app reported
+// it; new counts fresh input and output, the rest is earlier context read
+// again from cache.
+export function tokenLine(progress: Progress | null) {
+  if (!progress) return null;
+  const master = progress.masterUsage;
+  const helpers = progress.children.map((child) => child.usage);
+  if (!master && !helpers.some(Boolean)) return null;
+  const fresh = [master, ...helpers].reduce(
+    (n, usage) => n + (usage ? usage.fresh + usage.output : 0),
+    0,
+  );
+  const coordinator = usageTotal(master),
+    helping = helpers.reduce((n, usage) => n + usageTotal(usage), 0);
+  return `Tokens: ${formatTokens(coordinator + helping)} (${formatTokens(fresh)} new) · coordinator ${formatTokens(coordinator)} · helpers ${formatTokens(helping)}`;
 }
