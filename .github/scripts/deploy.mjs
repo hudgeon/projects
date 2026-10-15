@@ -262,14 +262,33 @@ export async function verifyProduction({
     if (!root.text.includes(`src="${asset}"`))
       throw new ReleaseFailure("production_html_rollout_pending", true);
   });
-  const served = await request("verify_asset", origin + asset);
   const local = await read(
     path.join(config.assets.directory, asset.slice(1)),
     "utf8",
   );
-  requireMatch(
-    served.response.status === 200 && served.text === local,
-    "production_asset_mismatch",
+  await request(
+    "verify_asset",
+    origin + asset,
+    {},
+    false,
+    ({ response, text }) => {
+      if (response.status === 200 && text === local) return;
+      // An edge still on the previous version has no file at this hashed
+      // path, so the Worker serves the single-page fallback (index.html).
+      // Retry only that bounded rollout race; the exact built bytes must
+      // still be served.
+      if (
+        response.status === 200 &&
+        response.headers.get("X-Projects-Request-Id") &&
+        response.headers.get("Content-Type")?.startsWith("text/html")
+      )
+        throw new ReleaseFailure("production_asset_rollout_pending", true);
+      throw new ReleaseFailure(
+        "production_asset_mismatch",
+        false,
+        response.status,
+      );
+    },
   );
   const anonymous = await request("verify_auth", origin + "/api/runs");
   const runner = await request(

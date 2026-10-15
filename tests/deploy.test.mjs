@@ -399,6 +399,79 @@ test("an unexpected production HTTP response is not classified as HTML rollout",
   }
 });
 
+test("production verification waits for asset rollout but never accepts a persistent fallback", async () => {
+  for (const converges of [true, false]) {
+    const f = fixture(),
+      original = f.options.fetcher,
+      waits = [],
+      logs = [];
+    let assets = 0;
+    f.options.sleep = async (ms) => waits.push(ms);
+    f.options.log = (line) => logs.push(line);
+    f.options.fetcher = (url, init) => {
+      // An edge still on the previous version serves its index.html instead.
+      if (url.endsWith(".js") && (++assets === 1 || !converges))
+        return new Response(
+          '<script src="/assets/old-private-body.js"></script>',
+          {
+            headers: {
+              "Content-Type": "text/html",
+              "X-Projects-Request-Id": "correlation",
+            },
+          },
+        );
+      return original(url, init);
+    };
+    const later = () =>
+      f.requests
+        .filter((r) => r.url.startsWith("https://projects.example.com/api/"))
+        .map((r) => new URL(r.url).pathname);
+    if (converges) {
+      assert.equal(
+        (await verifyProduction(f.options)).asset,
+        "/assets/index-abc.js",
+      );
+      assert.equal(assets, 2);
+      assert.deepEqual(waits, [15000]);
+      assert.deepEqual(later(), ["/api/runs", "/api/runs", "/api/readiness"]);
+    } else {
+      await assert.rejects(
+        verifyProduction(f.options),
+        /production_asset_rollout_pending/,
+      );
+      assert.equal(assets, 4);
+      assert.deepEqual(waits, [15000, 30000, 60000]);
+      assert.deepEqual(later(), []);
+    }
+    assert.doesNotMatch(
+      logs.join("\n"),
+      /old-private-body|private-api|private-runner/,
+    );
+  }
+});
+
+test("an unexpected asset response is not classified as rollout", async () => {
+  const html = { "Content-Type": "text/html" },
+    request = { "X-Projects-Request-Id": "correlation" };
+  for (const response of [
+    () => new Response("old javascript", { headers: request }),
+    () => new Response("<html>", { headers: html }),
+    () =>
+      new Response("<html>", { status: 404, headers: { ...html, ...request } }),
+  ]) {
+    const f = fixture(),
+      original = f.options.fetcher;
+    f.options.sleep = async () =>
+      assert.fail("Unexpected asset behavior retried");
+    f.options.fetcher = (url, init) =>
+      url.endsWith(".js") ? response() : original(url, init);
+    await assert.rejects(
+      verifyProduction(f.options),
+      /production_asset_mismatch/,
+    );
+  }
+});
+
 test("release waits for actual object versions and rejects persistent mixed runtimes", async () => {
   for (const converges of [true, false]) {
     const f = fixture(),
