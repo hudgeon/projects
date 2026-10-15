@@ -947,11 +947,14 @@ if(${JSON.stringify(agent)}==='codex') {
   });
 } else {
   let lines=0;
-  const finish=extra=>send({type:'result',subtype:mode==='maxTurns'?'error_max_turns':mode==='execution'?'error_during_execution':'success',is_error:mode==='execution',structured_output:mode==='maxTurns'||mode==='execution'?undefined:{summary:'Connected'+extra},permission_denials:mode==='approval'?[{tool_name:'Bash'}]:[],modelUsage:{'model-a':{inputTokens:15,cacheCreationInputTokens:1200,cacheReadInputTokens:1000,outputTokens:80,contextWindow:1000000}}});
+  const finish=extra=>send({type:'result',subtype:mode==='maxTurns'?'error_max_turns':mode==='execution'?'error_during_execution':'success',is_error:mode==='execution',structured_output:mode==='maxTurns'||mode==='execution'?undefined:{summary:'Connected'+extra},permission_denials:mode==='approval'?[{tool_name:'Bash'}]:[],num_turns:2,usage:{input_tokens:15,cache_creation_input_tokens:1200,cache_read_input_tokens:1000,output_tokens:95},modelUsage:{'model-a':{inputTokens:9015,cacheCreationInputTokens:91200,cacheReadInputTokens:801000,outputTokens:7095,contextWindow:1000000}}});
   readline.createInterface({input:process.stdin}).on('line',line=>{
     const m=JSON.parse(line);
     if(++lines>1){if(mode==='steer')finish(' '+m.message.content[0].text);return;}
     if(mode==='exit')process.exit(0);if(mode==='hang'){setInterval(()=>{},1000);return;}
+    // A resumed session can first report a turn that never ran, with the
+    // whole session's per-model totals.
+    if(mode==='stale')send({type:'result',subtype:'success',is_error:false,num_turns:0,usage:{input_tokens:0,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:0},modelUsage:{'model-a':{inputTokens:5000,cacheCreationInputTokens:90000,cacheReadInputTokens:800000,outputTokens:7000}}});
     send({type:'system',subtype:'init',session_id:'test-session'});
     send({type:'assistant',message:{id:'msg-1',usage:{input_tokens:10,cache_creation_input_tokens:1000,cache_read_input_tokens:0,output_tokens:50},content:[{type:'thinking',thinking:'private-reasoning'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'secret-command'}}]}});
     send({type:'assistant',message:{id:'msg-2',usage:{input_tokens:5,cache_creation_input_tokens:200,cache_read_input_tokens:1000,output_tokens:30},content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
@@ -2404,8 +2407,9 @@ test("native turns report their tokens as each app counts them", async () => {
     for (const [agent, sessionId, expected] of [
       // Codex reports running thread totals: this turn is their growth.
       ["codex", "test-session", {fresh: 2000, cached: 4000, output: 200, context: 4000}],
-      // Claude's result carries per-model totals; context is the last request's.
-      ["claude", undefined, {fresh: 1215, cached: 1000, output: 80, context: 1205}],
+      // Claude's result counts this turn; its per-model totals span the
+      // session and are not used. Context is the last request's.
+      ["claude", undefined, {fresh: 1215, cached: 1000, output: 95, context: 1205}],
     ] as const) {
       const reports: unknown[] = [];
       await nativeTurn({agent, cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: true, sessionId, signal: AbortSignal.timeout(5000), binaries: {[agent]: await fakeBinary(dir, agent, "success")}, onSession: async () => {}, onUsage: (usage) => reports.push(usage)});
@@ -2645,7 +2649,7 @@ test("a helper past its time limit is asked to wrap up, and one that keeps going
     const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [], steered: string[] = [];
     let last: Progress | undefined, masters = 0;
     const session = randomUUID();
-    o.limits = {helperMs: 40, graceMs: 120, checkMs: 10};
+    o.limits = {helperMs: 40, graceMs: 1000, checkMs: 10};
     o.processStopped = () => true;
     o.report = async (p) => { last = structuredClone(p); };
     o.turn = async (opts) => {
@@ -2774,4 +2778,37 @@ test("a coordinator that cannot go on stops plainly when no other app can take o
       assert.match(last!.summary, /usage limit is reached/);
     } finally { await rm(dir, {recursive: true, force: true}); }
   }
+});
+
+test("a resumed Claude session's stale zero-turn result is neither the turn's result nor its tokens", async () => {
+  const dir = await fixture();
+  try {
+    const reports: unknown[] = [];
+    let steerable = false;
+    const value = await nativeTurn({agent: "claude", cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: true, sessionId: "test-session", signal: AbortSignal.timeout(5000), binaries: {claude: await fakeBinary(dir, "claude", "stale")}, onSession: async () => {}, onUsage: (usage) => reports.push(usage), onSteer: () => { steerable = true; }});
+    assert.deepEqual(value, {summary: "Connected"}, "the prompt's own turn decides the result");
+    assert.ok(steerable);
+    assert.ok(reports.every((usage) => (usage as {cached: number}).cached <= 1000), "the session's earlier turns are never counted");
+    assert.deepEqual(reports.at(-1), {fresh: 1215, cached: 1000, output: 95, context: 1205});
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a wrap-up request waits for the turn to take input instead of being lost", async () => {
+  const dir = await fixture(), o = engineOptions(dir), steered: string[] = [];
+  let last: Progress | undefined, masters = 0;
+  o.limits = {helperMs: 10, graceMs: 5000, checkMs: 5};
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "codex") return ++masters === 1 ? dispatch() : complete;
+    // The turn opens its input only after the limit has passed.
+    await new Promise((r) => setTimeout(r, 80));
+    return new Promise((resolve) => opts.onSteer?.(async (input) => { steered.push(input.text); resolve(result); }));
+  };
+  try {
+    await executeRun(o);
+    assert.equal(last?.state, "completed");
+    assert.equal(steered.length, 1);
+    assert.match(steered[0], /past its limit/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });

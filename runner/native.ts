@@ -875,19 +875,18 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   // Each request's usage, by message: a message streamed in parts repeats it.
   const requests = new Map<string, Record<string, unknown>>();
   let context = 0;
-  const usage = (models?: Record<string, unknown>[]) => {
-    if (models?.length)
-      return {
-        fresh: models.reduce((n, m) => n + count(m.inputTokens) + count(m.cacheCreationInputTokens), 0),
-        cached: models.reduce((n, m) => n + count(m.cacheReadInputTokens), 0),
-        output: models.reduce((n, m) => n + count(m.outputTokens), 0),
-        context,
-      };
-    const all = [...requests.values()];
+  // While the turn runs, its requests so far; once it reports, the result's
+  // own count for this turn. Never the per-model totals: on a resumed session
+  // they include every earlier turn.
+  const usage = (turn?: Record<string, unknown>) => {
+    const counted =
+      turn && Object.values(turn).some((value) => typeof value === "number")
+        ? [turn]
+        : [...requests.values()];
     return {
-      fresh: all.reduce((n, u) => n + count(u.input_tokens) + count(u.cache_creation_input_tokens), 0),
-      cached: all.reduce((n, u) => n + count(u.cache_read_input_tokens), 0),
-      output: all.reduce((n, u) => n + count(u.output_tokens), 0),
+      fresh: counted.reduce((n, u) => n + count(u.input_tokens) + count(u.cache_creation_input_tokens), 0),
+      cached: counted.reduce((n, u) => n + count(u.cache_read_input_tokens), 0),
+      output: counted.reduce((n, u) => n + count(u.output_tokens), 0),
       context,
     };
   };
@@ -966,8 +965,11 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
             }
         }
         if (message.type !== "result") return;
-        // The result's per-model totals are the turn's own account.
-        o.onUsage?.(usage(Object.values(object(message.modelUsage)).map(object)));
+        // A resumed session can first report a turn that never ran, such as
+        // a background task's notice from its previous process. The turn for
+        // this prompt follows; its input stays open until then.
+        if (message.subtype === "success" && message.num_turns === 0) return;
+        o.onUsage?.(usage(object(message.usage)));
         subtype = typeof message.subtype === "string" ? message.subtype : "";
         if (message.is_error || message.subtype !== "success") failed = true;
         // Don't-ask mode refuses what was not granted, and the turn carries on

@@ -584,7 +584,8 @@ export async function executeRun(o: EngineOptions) {
     };
     const limits = { ...TURN_LIMITS, ...o.limits };
     let limit: "time_limit" | "token_limit" | null = null,
-      askedAt = 0;
+      askedAt = 0,
+      told = false;
     const budget = setInterval(() => {
       const elapsed = performance.now() - started,
         spent = used.fresh + used.cached + used.output;
@@ -604,9 +605,16 @@ export async function executeRun(o: EngineOptions) {
           ...tokens(),
           reason: limit,
         });
-        void steerTurn?.({
+      }
+      // The request goes as soon as the turn can take input, and again if a
+      // delivery fails; the grace period runs from the limit either way.
+      if (!told && steerTurn) {
+        told = true;
+        steerTurn({
           text: `Projects: this turn has run for ${Math.round(elapsed / 60_000)} minutes and used ${formatTokens(spent)} tokens, past its limit. Finish now: save your work on your branch (push it as a draft if this task allows), then return your structured result saying what is done and what remains. Do not start new long-running steps; the master continues from your report.`,
-        }).catch(() => {});
+        }).catch(() => {
+          told = false;
+        });
       } else if (elapsed - askedAt > limits.graceMs) control.abort("budget");
     }, limits.checkMs);
     const steerTimer =
