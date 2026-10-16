@@ -318,12 +318,16 @@ export const masterDecisionSchema = z
     // runner trims it to the progress title limit.
     title: z.string().nullable(),
     summary: z.string().max(8000),
+    // Rotate only after this decision; never interrupt an executing child.
+    resetContext: z.boolean().nullable().optional(),
     task: z
       .object({
         projectId,
         agent: agentSchema,
         mode: z.enum(["read", "change"]),
         workspace: z.string().max(200),
+        // Retain the owned worktree while discarding the native transcript.
+        freshSession: z.boolean().nullable().optional(),
         prompt: z.string().min(1).max(8000),
       })
       .strict()

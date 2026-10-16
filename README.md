@@ -132,6 +132,27 @@ master, which is sent only what it has not seen; once its own session grows
 large, a fresh master takes over with the full brief. There is no additional
 provider API key, hosted agent runtime or inbound tunnel.
 
+Context follows the task rather than the age of its conversation. The master
+can set `resetContext: true` on a decision when the task changes materially,
+a correction invalidates its assumptions, or repeated attempts revive an old
+mistake. Its next decision starts fresh after the current decision is accepted;
+running work is never interrupted. It can also set `task.freshSession: true`
+to give a helper a fresh session in the same owned worktree. Small direct
+revisions can continue their existing session.
+
+A fresh master receives the user's original instructions and corrections,
+the latest reported position, and the existing child evidence; it does not
+replay every earlier agent answer. Reports remain claims to verify, and user
+authority is preserved separately. The exact exchange stays in a private local
+context file for read-only reference: a short approval must be checked against
+the original request before acting, rather than guessed from a handoff.
+Helper briefs carry the current objective,
+applicable constraints and approvals, source evidence, open questions and
+acceptance checks. Repository instructions and canonical plans stay in their
+existing files and are read when relevant. This applies the task-scoped
+handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
+without discarding saved work, approval boundaries or recovery journals.
+
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.
 The master checks evidence before declaring anything complete; a native turn

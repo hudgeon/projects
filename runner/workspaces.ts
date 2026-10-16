@@ -296,7 +296,7 @@ export function continuesSession(
   task: NonNullable<MasterDecision["task"]>,
   previous: Child[],
 ) {
-  if (!existing.sessionId || existing.agent !== task.agent) return false;
+  if (task.freshSession || !existing.sessionId || existing.agent !== task.agent) return false;
   if (task.mode === "read" && existing.mode === "change") return false;
   // The session's latest turn, which a later follow-up may have made.
   const latest =

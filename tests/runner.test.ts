@@ -21,6 +21,7 @@ import {
 } from "../runner/native";
 import {
   activityBrief,
+  contextConversation,
   executeRun,
   savePrivate,
   outputSchema,
@@ -33,6 +34,7 @@ import { claudeRules, codexConfig, parseMcpList } from "../runner/connectors";
 import { runPool } from "../runner/pool";
 import {
   childResultSchema,
+  masterDecisionSchema,
   type Progress,
   type Run,
   type MasterDecision,
@@ -2560,6 +2562,7 @@ test("a worktree's session continues only for a same-app follow-up while it is s
   const made: Child = {id: randomUUID(), projectId: "acme/test", agent: "claude", mode: "change", cwd: "/w", branch: "projects/a", sessionId: "s1", state: "completed", result, evidence: [], usage: usage(80_000)};
   const followUp = {...dispatch(made.id).task!, mode: "change" as const};
   assert.equal(continuesSession(made, followUp, [made]), true);
+  assert.equal(continuesSession(made, {...followUp, freshSession: true}, [made]), false, "an explicit context reset keeps the workspace but drops its transcript");
   assert.equal(continuesSession(made, {...followUp, mode: "read"}, [made]), false, "a review of a change is independent");
   assert.equal(continuesSession(made, {...followUp, agent: "codex"}, [made]), false);
   assert.equal(continuesSession({...made, resumable: false}, followUp, [made]), false);
@@ -2621,6 +2624,105 @@ test("a resumed coordinator gets only what is new to it; a follow-up skips the u
     assert.doesNotMatch(next.prompt, /You are the user's Projects master/);
     assert.match(next.prompt, /New in the conversation since your last decision[^\n]*NEW-FOLLOW-UP/);
     assert.doesNotMatch(next.prompt, /Complete the requested work/, "the first message is already in its session");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("fresh context retains user authority and corrections without replaying earlier agent errors", () => {
+  const message = (role: RunMessage["role"], text: string): RunMessage => ({id: randomUUID(), role, text, at: Date.now()});
+  const goal = message("user", "Create a draft; never send it."), wrong = message("master", "OLD-INCORRECT-ASSUMPTION"),
+    correction = message("user", "Use the corrected total 42; approval still covers drafting only."), latest = message("master", "Draft saved; submission unverified.");
+  const handoff = contextConversation([goal, wrong, correction, latest]);
+  assert.deepEqual(handoff.userInstructions, [goal, correction]);
+  assert.deepEqual(handoff.latestReportedPosition, latest);
+  assert.doesNotMatch(JSON.stringify(handoff), /OLD-INCORRECT-ASSUMPTION/);
+});
+
+test("native context controls are required and nullable while old decisions remain readable", () => {
+  const schema = outputSchema(masterDecisionSchema);
+  const properties = schema.properties as Record<string, {type?: unknown; anyOf?: unknown[]}>;
+  assert.ok((schema.required as string[]).includes("resetContext"));
+  assert.deepEqual(properties.resetContext.type, ["boolean", "null"]);
+  const task = properties.task.anyOf![0] as {required: string[]; properties: Record<string, {type: unknown}>};
+  assert.ok(task.required.includes("freshSession"));
+  assert.deepEqual(task.properties.freshSession.type, ["boolean", "null"]);
+  assert.doesNotThrow(() => masterDecisionSchema.parse(dispatch()));
+  assert.doesNotThrow(() => masterDecisionSchema.parse({...dispatch(), resetContext: null, task: {...dispatch().task!, freshSession: null}}));
+});
+
+test("a deliberate coordinator reset keeps child execution and evidence, then starts its next decision fresh", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let masters = 0, last: Progress | undefined;
+  o.run.messages.push({id: randomUUID(), role: "master", text: "SUPERSEDED-REPLY", at: Date.now()},
+    {id: randomUUID(), role: "master", text: "Latest reported position.", at: Date.now()},
+    {id: randomUUID(), role: "user", text: "CORRECTION: verify the current source before continuing.", at: Date.now()});
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    calls.push(opts);
+    await opts.onSession(opts.sessionId ?? randomUUID());
+    if (opts.agent === "claude") return {...result, summary: "CURRENT-CHILD-EVIDENCE"};
+    return ++masters === 1 ? {...dispatch(), resetContext: true} : complete;
+  };
+  try {
+    await executeRun(o);
+    const decisions = calls.filter((c) => c.agent === "codex");
+    assert.equal(calls.filter((c) => c.agent === "claude").length, 1, "the dispatched work is not replayed");
+    assert.equal(decisions[1].sessionId, undefined);
+    assert.match(decisions[1].prompt, /You are the user's Projects master/);
+    assert.match(decisions[1].prompt, /CORRECTION: verify the current source/);
+    assert.match(decisions[1].prompt, /Complete the requested work/);
+    assert.match(decisions[1].prompt, /CURRENT-CHILD-EVIDENCE/);
+    assert.doesNotMatch(decisions[1].prompt, /SUPERSEDED-REPLY/);
+    const source = path.join(dir, "runs", `${o.run.id}.context.json`);
+    assert.ok(decisions[1].prompt.includes(source), "the original exchanges are available on demand");
+    assert.match(decisions[1].prompt, /Never infer the scope of a short approval from a handoff/);
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), o.run.messages);
+    assert.equal((await stat(source)).mode & 0o777, 0o600);
+    assert.equal(last?.state, "completed");
+    assert.equal(last?.children.length, 1);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("recovery after a context reset inspects the same helper before briefing a fresh master", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  const child: Child = {id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "change", cwd: dir, branch: "owned", sessionId: randomUUID(), state: "unknown", result: null, evidence: []};
+  o.processStopped = () => true;
+  o.prepare = async () => ({cwd: dir, branch: "owned", sessionId: child.sessionId});
+  o.turn = async (opts) => {
+    calls.push(opts);
+    assert.equal(opts.readOnly, true);
+    if (opts.agent === "claude") {
+      assert.equal(opts.sessionId, child.sessionId);
+      assert.match(opts.prompt, /RECOVERY INSPECTION ONLY/);
+      return {...result, summary: "Recovered saved branch; no writes replayed."};
+    }
+    assert.equal(opts.sessionId, undefined);
+    assert.match(opts.prompt, /You are the user's Projects master/);
+    assert.match(opts.prompt, /Recovered saved branch/);
+    assert.match(opts.prompt, /Complete the requested work/);
+    await opts.onSession(randomUUID());
+    return complete;
+  };
+  try {
+    await savePrivate(path.join(dir, "runs", `${o.run.id}.json`), {generation: 1, phase: "uncertain", pid: 1234, progress: {...progress(), masterSessionId: null, children: [child]}});
+    await executeRun(o);
+    assert.equal(calls.length, 2);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a reset on a completed decision survives restart and gives the follow-up a full brief", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  let last: Progress | undefined;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => { calls.push(opts); await opts.onSession(randomUUID()); return {...complete, resetContext: true}; };
+  try {
+    await executeRun(o);
+    assert.equal(last?.masterSessionId, null);
+    const saved = JSON.parse(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"));
+    assert.equal(saved.progress.masterSessionId, null);
+    await executeRun({...o, run: {...o.run, generation: 2, progress: last!}});
+    assert.equal(calls[1].sessionId, undefined);
+    assert.match(calls[1].prompt, /You are the user's Projects master/);
+    assert.match(calls[1].prompt, /Complete the requested work/);
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
