@@ -80,7 +80,7 @@ export async function readIssues(
   const updates = new Map<number, Issue["latestUpdate"]>();
   const updateState = new Map<number, "ok" | "unavailable">();
   // last:1 avoids the issue-list CLI's first-page comment truncation. Only a
-  // short latest update is published; the daily review reads the full history.
+  // short latest update is published; the issue retains its full history.
   for (let i = 0; i < rows.length; i += 20) {
     const batch = rows.slice(i, i + 20);
     try {

@@ -31,7 +31,7 @@ const absolute = z.string().refine(path.isAbsolute);
 const schema = configSchema
   .extend({
     concurrency: z.number().int().min(1).max(5).default(3),
-    // Extra slots only quick work (email replies, unsubscribes) may use.
+    // Extra slots only quick work (such as unsubscribes) may use.
     quickConcurrency: z.number().int().min(0).max(5).default(5),
     endpoint: z.url(),
     stateDir: absolute.optional(),

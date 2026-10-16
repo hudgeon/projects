@@ -1,7 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { Snapshot } from "./model";
-import { currentWork, type Close } from "./work-model";
-import type { PublishedReview } from "./review-model";
+import type { Close } from "./work-model";
 import type { ArchiveEntry } from "./archive-model";
 import { awaitsYou, type RunSummary } from "./run-model";
 import {
@@ -13,9 +12,8 @@ import {
   urgency,
   useRuns,
 } from "./run-view";
-import { BiggerWork } from "./work-view";
-import { TodayBrief } from "./review-view";
-import { conversationSearch, type Navigation } from "./navigation";
+import { BiggerWork, WorkDetail } from "./work-view";
+import { conversationSearch, workSearch, type Navigation } from "./navigation";
 
 // One place to work: start things, see what needs you and what is running,
 // and keep the bigger work in view. On a phone a selected conversation takes
@@ -24,16 +22,12 @@ export function TodayView({
   snapshots,
   archives,
   closes,
-  review,
-  timeZone,
   navigation,
   now,
 }: {
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
   closes: Close[];
-  review?: PublishedReview | null;
-  timeZone?: string;
   navigation: Navigation;
   now: number;
 }) {
@@ -46,13 +40,16 @@ export function TodayView({
   const runs = list.data?.pages.flatMap((page) => page.runs) ?? [];
   const names = projectNames(snapshots, archives);
   const selected = navigation.run;
-  const rank = (run: RunSummary) => urgency(run.needsYou ? "blocked" : run.state);
+  const rank = (run: RunSummary) =>
+    urgency(run.needsYou ? "blocked" : run.state);
   const yourMove = runs
     .filter(awaitsYou)
     .sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
   const working = runs.filter((run) => !awaitsYou(run));
   const search = (run?: RunSummary) =>
-    conversationSearch(run?.id, navigation.project, done || undefined);
+    navigation.work && (!run || run.workIssue === navigation.work)
+      ? workSearch(navigation.work, navigation.email, run?.id)
+      : conversationSearch(run?.id, navigation.project, done || undefined);
   // After Done, move straight on to the next thing waiting on the owner.
   const position = yourMove.findIndex((run) => run.id === selected);
   const next =
@@ -87,7 +84,7 @@ export function TodayView({
       </section>
     ) : null;
   return (
-    <div className={`today${selected ? " has-run" : ""}`}>
+    <div className={`today${selected || navigation.work ? " has-run" : ""}`}>
       <aside className="today-queue" aria-label="Your conversations">
         {projectName && (
           <p className="filter-chip">
@@ -105,7 +102,7 @@ export function TodayView({
             </Link>
           </p>
         )}
-        {!done && (
+        {!done && !navigation.work && (
           <Composer
             snapshots={snapshots}
             archives={archives}
@@ -164,9 +161,18 @@ export function TodayView({
             back={search()}
             next={next ? search(next) : undefined}
           />
+        ) : navigation.work ? (
+          <WorkDetail
+            number={navigation.work}
+            emailThread={navigation.email}
+            snapshots={snapshots}
+            archives={archives}
+            closes={closes}
+            conversations={all}
+            now={now}
+          />
         ) : (
           <>
-            <TodayBrief review={review} now={now} repo={currentWork(snapshots)?.repo} timeZone={timeZone} />
             <BiggerWork
               snapshots={snapshots}
               archives={archives}

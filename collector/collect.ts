@@ -57,7 +57,7 @@ export const configSchema = z.object({
     .optional(),
   inboxAccount: z.email().optional(),
   // Work items are the issues labelled `work` in this repository; without it
-  // the overview has no work items, Mark done or daily review.
+  // the overview has no work items or Mark done.
   workRepo: z
     .string()
     .regex(/^[\w.-]+\/[\w.-]+$/)

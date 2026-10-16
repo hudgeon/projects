@@ -1,9 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { collect, command, configSchema } from "./collect";
 import { applyCloses } from "./close";
-import { applyInboxActions } from "./inbox-actions";
+import { oneClick, applyInboxActions } from "./inbox-actions";
 import { cacheIssues } from "./work";
-import { reviewSchema } from "../src/review-model";
 import { snapshotSchema } from "../src/model";
 
 async function main() {
@@ -13,6 +12,8 @@ async function main() {
     throw new Error(
       "Usage: npm run collect -- collector/config.local.json [--publish]",
     );
+  if (args.includes("--review") || args.includes("--send-daily"))
+    throw Error("Daily briefs have been retired");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   if (!args.includes("--publish")) {
     const snapshot = snapshotSchema.parse(await collect(config));
@@ -97,6 +98,8 @@ async function main() {
           headers,
           snapshot.inbox,
           (args) => command("gws", args),
+          oneClick,
+          { issues, repo: config.workRepo },
         );
       } catch {
         console.error(
@@ -104,21 +107,6 @@ async function main() {
         );
         process.exitCode = 1;
       }
-  }
-  const reviewIndex = args.indexOf("--review");
-  if (reviewIndex !== -1) {
-    const file = args[reviewIndex + 1];
-    if (!file) throw Error("Missing reviewed edition file");
-    const raw = await readFile(file, "utf8");
-    if (raw.length > 30000) throw Error("Review too large");
-    const review = reviewSchema.parse(JSON.parse(raw));
-    const response = await fetch(new URL("/api/review", config.endpoint), {
-      method: "POST", headers, body: JSON.stringify({ review, sendDaily: args.includes("--send-daily") }),
-      redirect: "error", signal: AbortSignal.timeout(30_000),
-    });
-    const result = await response.json() as { hash?: string; email?: string };
-    if (!response.ok || result.hash !== review.briefSha256) throw Error(`Reviewed publication failed (HTTP ${response.status})`);
-    console.log(JSON.stringify({ event: "review_published", date: review.date, hash: result.hash, email: result.email }));
   }
 }
 main().catch(() => {

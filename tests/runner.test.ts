@@ -323,9 +323,9 @@ test("quick work gives the master a light prompt without the repository activity
     await executeRun(o);
     assert.match(prompts[0], /email lane/);
     assert.match(prompts[0], /owner@example\.com/);
-    assert.match(prompts[0], /change child in the acme\/work repository/);
-    assert.match(prompts[0], /never draft with the connector/);
-    assert.match(prompts[0], /draft helper \(--create, never send\)/);
+    assert.match(prompts[0], /list's own unsubscribe mechanism/);
+    assert.match(prompts[0], /cannot reach; use gws/);
+    assert.doesNotMatch(prompts[0], /For a reply|draft helper/);
     assert.doesNotMatch(prompts[0], /ACTIVITY-MARKER|Activity observations/);
     const standard = engineOptions(dir);
     standard.activity = o.activity;

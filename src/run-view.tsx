@@ -48,7 +48,7 @@ import {
   ScreenshotPreviews,
   useScreenshots,
 } from "./screenshots";
-import { InlineMarkdown, MarkdownContent } from "./review-view";
+import { InlineMarkdown, MarkdownContent } from "./markdown-view";
 import {
   api,
   overviewQueryOptions,
@@ -58,6 +58,7 @@ import { isArchived, type ArchiveEntry } from "./archive-model";
 import {
   conversationSearch,
   projectSearch,
+  workSearch,
   type Navigation,
 } from "./navigation";
 
@@ -208,7 +209,7 @@ export function Composer({
   emailThread,
   lane: initialLane = "standard",
   autoFocus,
-  placeholder = "What needs doing? e.g. Reply to Rob: Thursday works for training",
+  placeholder = "What needs doing?",
   submitLabel = "Start",
   onStarted,
   onCancel,
@@ -216,7 +217,7 @@ export function Composer({
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
   initialText?: string;
-  // Fixed framing around the owner's words: a title line first, details last.
+  // Source context shown beside the owner's outcome, with its link appended.
   context?: { title: string; detail: string };
   projectId?: string;
   workIssue?: number;
@@ -261,7 +262,7 @@ export function Composer({
       const words = text.trim();
       const input = {
         text: context
-          ? [context.title, words, context.detail].filter(Boolean).join("\n\n")
+          ? [words || "Review the attached screenshots.", context.detail].join("\n\n")
           : words || "Review the attached screenshots.",
         screenshots: images.images,
         projectId: projectId || null,
@@ -304,13 +305,13 @@ export function Composer({
   const issues = currentWork(snapshots)?.issues.filter((i) => i.open) ?? [];
   const chosen = [
     projects.find((p) => p.id === projectId)?.name,
-    issue ? `#${issue}` : "",
+    issue ? (issues.find(i => i.number === Number(issue))?.title ?? `Work #${issue}`) : "",
     agent === "auto" ? "" : agent === "codex" ? "Codex" : "Claude",
     masterAgent === "claude" ? "Claude master" : "",
     lane === "quick" ? "Quick" : "",
   ].filter(Boolean);
   const ready =
-    (!!context || !!text.trim() || !!images.images.length) &&
+    (!!text.trim() || !!images.images.length) &&
     enabled &&
     !create.isPending &&
     !images.busy;
@@ -327,7 +328,7 @@ export function Composer({
       <textarea
         ref={field}
         aria-label={context ? context.title : "What needs doing"}
-        required={!context && !images.images.length}
+        required={!images.images.length}
         maxLength={8000}
         rows={2}
         value={text}
@@ -345,7 +346,7 @@ export function Composer({
       {options && (
         <div className="composer-fields">
           <label>
-            Project
+            Repository
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
@@ -417,6 +418,7 @@ export function Composer({
         <button
           type="button"
           className="options-toggle"
+          aria-label="Activity options"
           aria-expanded={options}
           onClick={() => setOptions(!options)}
         >
@@ -987,7 +989,6 @@ export function ConversationPage({
   const enabled = !!useRuns().data?.pages[0]?.enabled;
   const machines = useQuery(overviewQueryOptions).data?.machines ?? [];
   const names = projectNames(snapshots, archives);
-  const workRepo = currentWork(snapshots)?.repo;
   const [reply, setReply] = useState("");
   const images = useScreenshots();
   const attempt = useRef<{ key: string; id: string } | null>(null);
@@ -1088,7 +1089,7 @@ export function ConversationPage({
     <article className="convo">
       <nav className="convo-back">
         <Link to="/" search={back}>
-          ← Today
+          {back.work ? "← Bigger work" : "← Today"}
         </Link>
       </nav>
       <header className="convo-head">
@@ -1104,18 +1105,9 @@ export function ConversationPage({
               {names.get(projectId) ?? projectId}
             </Link>
           ))}
-          {run.workIssue &&
-            (workRepo ? (
-              <a
-                href={`https://github.com/${workRepo}/issues/${run.workIssue}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Work #{run.workIssue}
-              </a>
-            ) : (
-              <span>Work #{run.workIssue}</span>
-            ))}
+          {run.workIssue && <Link to="/" search={workSearch(run.workIssue, run.emailThread ?? undefined)}>
+            {currentWork(snapshots)?.issues.find(i => i.number === run.workIssue)?.title ?? `Work #${run.workIssue}`}
+          </Link>}
           <span className="subtle">
             <Time at={run.updatedAt} />
           </span>

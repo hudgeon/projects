@@ -1,12 +1,19 @@
-import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ago, freshness, hostName, type PortfolioView, type Snapshot } from "./model";
-import { currentWork } from "./work-model";
+import {
+  ago,
+  freshness,
+  hostName,
+  type PortfolioView,
+  type Snapshot,
+} from "./model";
+import { currentWork, type Issue } from "./work-model";
 import {
   currentInbox,
   gmailUrl,
   inboxQueue,
+  inboxRows,
   type InboxAction,
   type InboxThread,
 } from "./inbox-model";
@@ -17,7 +24,7 @@ import {
   runStates,
   useEmailConversations,
 } from "./run-view";
-import { conversationSearch } from "./navigation";
+import { conversationSearch, workSearch } from "./navigation";
 import { clip } from "./run-text";
 import { api, privateQueryPolicy } from "./overview-query";
 import type { Run, RunSummary } from "./run-model";
@@ -31,13 +38,11 @@ export function sender(from: string) {
     .trim();
   return name || from.match(/<([^>]+)>/)?.[1] || from;
 }
-// The owner types only what the reply should say. The saved request leads with a
-// title line and ends with the thread link and the deliverable.
-export function replyContext(thread: InboxThread, account: string) {
-  const subject = thread.subject.replace(/[[\]]/g, "");
+// Only a source link crosses into the activity request; email prose stays out.
+export function activityContext(thread: InboxThread, account: string) {
   return {
-    title: `Reply to ${sender(thread.from)} about “${subject}”`,
-    detail: `Email: [${subject}](${gmailUrl(account, thread.id)}) from ${sender(thread.from)}. Draft the reply in Gmail for me to review; don't send it.`,
+    title: "Activity from email",
+    detail: `Source email: ${gmailUrl(account, thread.id)}. Read it only if relevant to this activity. Do not assume this requires a reply.`,
   };
 }
 // Lists without one-click unsubscribe go to a quick conversation. The request
@@ -99,6 +104,7 @@ function useInboxAction() {
       threadId: string;
       action: InboxAction["action"];
       cancel?: boolean;
+      issue?: number;
     }) => api<{ actions: InboxAction[] }>("/api/inbox/act", input),
     onSuccess: ({ actions }) =>
       client.setQueryData<PortfolioView>(["overview"], (old) =>
@@ -109,6 +115,7 @@ function useInboxAction() {
 const actionWords = {
   archive: ["Archiving", "Archived"],
   unsubscribe: ["Unsubscribing", "Unsubscribed"],
+  link: ["Linking", "Linked"],
 } as const;
 function Preview({
   thread,
@@ -161,7 +168,13 @@ function MailRow({
   snapshots,
   archives,
   now,
+  selected = false,
+  issues,
+  linkAction,
 }: {
+  selected?: boolean;
+  issues: Issue[];
+  linkAction?: InboxAction;
   item: Item;
   account: string;
   snapshots: Snapshot[];
@@ -169,7 +182,17 @@ function MailRow({
   now: number;
 }) {
   const [composing, setComposing] = useState(false),
-    [open, setOpen] = useState(false);
+    [open, setOpen] = useState(selected),
+    [linking, setLinking] = useState(false),
+    [issue, setIssue] = useState("");
+  const element = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (selected) {
+      setOpen(true);
+      element.current?.scrollIntoView({ block: "center" });
+    }
+  }, [selected]);
+  const navigate = useNavigate({ from: "/" });
   const act = useInboxAction();
   const client = useQueryClient();
   const { thread, linked, conversation, state, action } = item;
@@ -195,7 +218,10 @@ function MailRow({
     thread.unsubscribe?.oneClick
       ? act.mutate({ threadId: thread.id, action: "unsubscribe" })
       : askToUnsubscribe.mutate();
-  const busy = act.isPending || askToUnsubscribe.isPending;
+  const busy =
+    act.isPending ||
+    askToUnsubscribe.isPending ||
+    linkAction?.state === "queued";
   const error = act.error ?? askToUnsubscribe.error;
   if (state === "clearing" && action)
     return (
@@ -226,7 +252,7 @@ function MailRow({
       </li>
     );
   return (
-    <li className="mail">
+    <li className="mail" ref={element}>
       <button
         className="mail-open"
         aria-expanded={open}
@@ -242,14 +268,13 @@ function MailRow({
       {!!linked.length && (
         <span className="mail-work">
           {linked.map((issue) => (
-            <a
+            <Link
               key={issue.number}
-              href={issue.url}
-              target="_blank"
-              rel="noreferrer"
+              to="/"
+              search={workSearch(issue.number, thread.id)}
             >
-              #{issue.number} {clip(issue.title, 48)}
-            </a>
+              {clip(issue.title, 80)}
+            </Link>
           ))}
         </span>
       )}
@@ -280,9 +305,18 @@ function MailRow({
       {open && <Preview thread={thread} account={account} />}
       {!composing && (
         <span className="mail-actions">
-          {state !== "handling" && (
+          {state !== "handling" && !linked.length && (
             <button className="btn-quiet" onClick={() => setComposing(true)}>
-              Reply
+              Start standalone activity
+            </button>
+          )}
+          {!linked.length && (
+            <button
+              className="btn-quiet"
+              disabled={busy}
+              onClick={() => setLinking(!linking)}
+            >
+              Link to bigger work
             </button>
           )}
           <button
@@ -310,6 +344,79 @@ function MailRow({
           )}
         </span>
       )}
+      {linkAction && (
+        <p
+          className={linkAction.state === "failed" ? "error-inline" : "subtle"}
+          role="status"
+        >
+          {linkAction.state === "queued"
+            ? "Linking to bigger work on the next check…"
+            : linkAction.message}
+          {linkAction.state === "queued" && (
+            <button
+              className="btn-quiet"
+              onClick={() =>
+                act.mutate({
+                  threadId: thread.id,
+                  action: "link",
+                  issue: linkAction.issue,
+                  cancel: true,
+                })
+              }
+            >
+              Undo
+            </button>
+          )}
+          {linkAction.state === "done" && linkAction.issue && (
+            <Link to="/" search={workSearch(linkAction.issue, thread.id)}>
+              {" "}
+              Open bigger work
+            </Link>
+          )}
+        </p>
+      )}
+      {linking && (
+        <form
+          className="mail-link-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (issue && !busy)
+              act.mutate(
+                { threadId: thread.id, action: "link", issue: Number(issue) },
+                { onSuccess: () => setLinking(false) },
+              );
+          }}
+        >
+          <label>
+            Bigger work{" "}
+            <select
+              required
+              value={issue}
+              disabled={busy}
+              onChange={(event) => setIssue(event.target.value)}
+            >
+              <option value="">Choose work…</option>
+              {issues
+                .filter((i) => i.open)
+                .map((i) => (
+                  <option key={i.number} value={i.number}>
+                    {i.title}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button className="btn-quiet" disabled={!issue || busy}>
+            Link
+          </button>
+          <button
+            type="button"
+            className="btn-quiet"
+            onClick={() => setLinking(false)}
+          >
+            Cancel
+          </button>
+        </form>
+      )}
       {error && (
         <span role="alert" className="error-inline">
           {errorText(error)}
@@ -319,15 +426,17 @@ function MailRow({
         <Composer
           snapshots={snapshots}
           archives={archives}
-          context={replyContext(thread, account)}
+          context={activityContext(thread, account)}
           emailThread={thread.id}
           workIssue={linked.length === 1 ? linked[0].number : undefined}
-          lane="quick"
           autoFocus
-          submitLabel="Start reply"
-          placeholder="What should the reply say? Optional"
+          submitLabel="Start activity"
+          placeholder="What needs doing?"
           onCancel={() => setComposing(false)}
-          onStarted={() => setComposing(false)}
+          onStarted={(run) => {
+            setComposing(false);
+            void navigate({ to: "/", search: conversationSearch(run.id) });
+          }}
         />
       )}
     </li>
@@ -338,7 +447,9 @@ export function InboxView({
   archives,
   actions,
   now,
+  selectedEmail,
 }: {
+  selectedEmail?: string;
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
   actions: InboxAction[];
@@ -368,6 +479,12 @@ export function InboxView({
     conversations.data.runs,
     actions,
   );
+  const selectedSource =
+    selectedEmail && !items.some((i) => i.thread.id === selectedEmail)
+      ? inboxRows(inbox, work?.issues ?? []).find(
+          (i) => i.thread.id === selectedEmail,
+        )
+      : undefined;
   const list = (state: Item["state"]) =>
     items.some((item) => item.state === state) && (
       <ul className="mail-list">
@@ -377,6 +494,11 @@ export function InboxView({
             <MailRow
               key={item.thread.id}
               item={item}
+              selected={selectedEmail === item.thread.id}
+              issues={work?.issues ?? []}
+              linkAction={actions.find(
+                (a) => a.threadId === item.thread.id && a.action === "link",
+              )}
               account={inbox.account}
               snapshots={snapshots}
               archives={archives}
@@ -401,6 +523,33 @@ export function InboxView({
           {inbox.account} · checked {ago(inbox.observedAt, now)} on {reader}
         </span>
       </div>
+      {selectedSource && (
+        <ul className="mail-list">
+          <MailRow
+            key={selectedSource.thread.id}
+            item={{
+              ...selectedSource,
+              conversation: undefined,
+              action: undefined,
+              state: selectedSource.reviewed ? "reviewed" : "todo",
+            }}
+            selected
+            issues={work?.issues ?? []}
+            account={inbox.account}
+            snapshots={snapshots}
+            archives={archives}
+            now={now}
+          />
+        </ul>
+      )}
+      {selectedEmail &&
+        !selectedSource &&
+        !items.some((i) => i.thread.id === selectedEmail) && (
+          <p className="notice">
+            This email is not in the latest inventory. Open its source from the
+            work issue in GitHub.
+          </p>
+        )}
       {!complete && (
         <p className="notice" role="status">
           {inbox.state === "unavailable"
@@ -431,7 +580,12 @@ export function InboxView({
         </>
       )}
       {!!count("handled") && (
-        <details className="fold">
+        <details
+          className="fold"
+          open={items.some(
+            (i) => i.state === "handled" && i.thread.id === selectedEmail,
+          )}
+        >
           <summary>
             Handled <span className="count">{count("handled")}</span>
           </summary>
@@ -439,7 +593,12 @@ export function InboxView({
         </details>
       )}
       {!!count("reviewed") && (
-        <details className="fold">
+        <details
+          className="fold"
+          open={items.some(
+            (i) => i.state === "reviewed" && i.thread.id === selectedEmail,
+          )}
+        >
           <summary>
             Reviewed <span className="count">{count("reviewed")}</span>
           </summary>

@@ -134,13 +134,11 @@ export type MachineView = {
 };
 export type PortfolioView = {
   archives?: import("./archive-model").ArchiveEntry[];
-  review?: import("./review-model").PublishedReview | null;
   snapshots: Snapshot[];
   closes: Close[];
   inboxActions?: import("./inbox-model").InboxAction[];
   machines?: MachineView[];
   // The deployment's time zone, for what "today" means.
-  timeZone?: string;
   serverTime: number;
 };
 export const STALE_AFTER = 5 * 60_000;

@@ -9,7 +9,7 @@ import {
   type Issue,
   type PendingClose,
 } from "../src/work-model";
-// The overview's only write. It uses this machine's signed-in GitHub CLI, as the
+// Work writes use this machine's signed-in GitHub CLI, as the
 // morning job does; the collector's read-only App token is removed.
 export const userGh: Gh = async (args) => {
   const env: NodeJS.ProcessEnv = {

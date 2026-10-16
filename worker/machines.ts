@@ -5,7 +5,7 @@ import type { MachineView } from "../src/model";
 // A machine publishes its own snapshot with its collector token and runs
 // conversations with its runner token; only their hashes are kept. Machines
 // are ordered: the first one heard from recently takes the shared duties
-// (work items, Mark done, inbox, daily review) and new conversations.
+// (work items, Mark done, inbox) and new conversations.
 export const COLLECTOR_SILENCE_MS = 5 * 60_000;
 export type MachineRole = "collector" | "runner";
 export type MachineCaller = {

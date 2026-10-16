@@ -23,7 +23,7 @@ export const runStateSchema = z.enum([
   "failed",
   "cancelled",
 ]);
-// Quick work (an email reply, an unsubscribe) has its own runner capacity and a
+// Quick work (such as an unsubscribe) has its own runner capacity and a
 // lighter master turn, so it never waits behind long-running work.
 export const laneSchema = z.enum(["standard", "quick"]);
 export type Lane = z.infer<typeof laneSchema>;

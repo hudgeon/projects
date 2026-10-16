@@ -56,7 +56,8 @@ export type InboxThread = z.infer<typeof inboxThreadSchema>;
 export const inboxActionSchema = z
   .object({
     threadId: id,
-    action: z.enum(["archive", "unsubscribe"]),
+    action: z.enum(["archive", "unsubscribe", "link"]),
+    issue: z.number().int().positive().optional(),
     requestedAt: z.number().int().positive(),
     state: z.enum(["queued", "done", "failed"]),
     message: z.string().max(200).nullable(),
@@ -67,14 +68,23 @@ export type InboxAction = z.infer<typeof inboxActionSchema>;
 export const inboxActionRequestSchema = z
   .object({
     threadId: id,
-    action: z.enum(["archive", "unsubscribe"]),
+    action: z.enum(["archive", "unsubscribe", "link"]),
+    issue: z.number().int().positive().optional(),
     cancel: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (a) =>
+      a.action === "link"
+        ? a.cancel || a.issue !== undefined
+        : a.issue === undefined,
+    "Link requests need a work issue; other actions cannot name one.",
+  );
 export const pendingInboxActionSchema = inboxActionSchema.pick({
   threadId: true,
   action: true,
   requestedAt: true,
+  issue: true,
 });
 export type PendingInboxAction = z.infer<typeof pendingInboxActionSchema>;
 export const inboxActionReportSchema = inboxActionSchema.omit({
@@ -163,7 +173,9 @@ export function inboxQueue<T extends ThreadConversation>(
       (latest.get(run.emailThread)?.createdAt ?? -1) < run.createdAt
     )
       latest.set(run.emailThread, run);
-  const requested = new Map(actions.map((a) => [a.threadId, a]));
+  const requested = new Map(
+    actions.filter((a) => a.action !== "link").map((a) => [a.threadId, a]),
+  );
   // Reads from older collectors do not say; their threads are in the inbox.
   const waiting = inboxRows(inbox, issues).filter(
     (row) => row.thread.inInbox !== false,

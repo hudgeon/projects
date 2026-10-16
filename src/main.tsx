@@ -684,21 +684,13 @@ function Dashboard() {
           </Link>
           <Link
             to="/"
-            search={{ view: "health" }}
-            aria-current={
-              view === "health" || view === "project" ? "page" : undefined
-            }
-          >
-            Projects
-          </Link>
-          <Link
-            to="/"
             search={{ view: "archive" }}
             aria-current={view === "archive" ? "page" : undefined}
           >
             Archive
           </Link>
         </nav>
+        <Link className="settings-link" to="/" search={{ view: "health" }} aria-current={view === "health" || view === "project" ? "page" : undefined}>Settings</Link>
         <button className="signout" onClick={signOut}>
           Sign out
         </button>
@@ -719,8 +711,6 @@ function Dashboard() {
             snapshots={snapshots}
             archives={archives}
             closes={query.data?.closes ?? []}
-            review={query.data?.review}
-            timeZone={query.data?.timeZone}
             navigation={navigation}
             now={now}
           />
@@ -730,6 +720,7 @@ function Dashboard() {
             snapshots={snapshots}
             archives={archives}
             actions={inboxActions}
+            selectedEmail={navigation.email}
             now={now}
           />
         )}
@@ -744,7 +735,7 @@ function Dashboard() {
           <section className="project-page" aria-label="Project details">
             <nav className="breadcrumbs" aria-label="Project navigation">
               <Link to="/" search={{ view: "health" }}>
-                ← All projects
+                ← Settings
               </Link>
               {navigation.run && (
                 <Link
@@ -791,6 +782,7 @@ function Dashboard() {
         )}
         {view === "health" && (
           <>
+            <h1 className="page-title">Settings</h1>
             <Machines
               snapshots={snapshots}
               machines={query.data?.machines ?? []}

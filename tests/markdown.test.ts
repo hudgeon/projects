@@ -1,29 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderMarkdown, renderReview, reviewProblem, localDate } from "../src/review-model";
+import { renderMarkdown } from "../src/markdown";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MarkdownContent } from "../src/review-view";
-import { reviewEmail } from "../worker/review-email";
-import { digest } from "../worker/auth";
-test("site and email share escaped Markdown without remote images or executable links", () => {
-  const brief = '# Today — Review\n## Do today\n<script>alert(1)</script>\n[bad](javascript:alert(1))\n![track](https://example.com/pixel)\n[Work](https://github.com/acme/work/issues/940)\n## Calendar\nNone.\n## Now\nReady.';
-  const html = renderReview(brief);
-  assert.ok(!html.includes('<script>'));
-  assert.ok(!html.includes('<img'));
-  assert.ok(!html.includes('href="javascript:'));
-  assert.ok(html.includes('href="https://github.com/acme/work/issues/940"'));
-  const now = Date.now();
-  const review = {date:localDate(now), verifiedAt:now, sourceCommit:'a'.repeat(40), brief, briefSha256:digest(brief)};
-  const email = reviewEmail(review, {from: 'reports@example.com', to: 'owner@example.com', site: 'https://projects.example.com', repo: 'acme/work'});
-  assert.ok(email.html.includes(html));
-  assert.ok(email.text.includes(`https://github.com/acme/work/blob/${'a'.repeat(40)}/today.md`));
-  assert.ok(!reviewEmail(review, {from: 'reports@example.com', to: 'owner@example.com', site: 'https://projects.example.com'}).html.includes('today.md'));
-  assert.equal(reviewProblem(review, now), null);
-  assert.equal(localDate(Date.parse('2026-10-04T13:30:00Z'), 'Etc/GMT-11'), '2026-10-05', "today is the deployment's own day");
-  assert.equal(reviewProblem({...review, date: localDate(now, 'Etc/GMT-11')}, now, 'Etc/GMT+11') !== null, localDate(now, 'Etc/GMT-11') !== localDate(now, 'Etc/GMT+11'));
-});
-
+import { MarkdownContent } from "../src/markdown-view";
 test("agent replies render readable Markdown and preserve exact collateral editions", () => {
   const link = `https://github.com/acme/work/blob/${"a".repeat(40)}/guides/Project%20plan.md#L12`;
   const reply = `**The draft is ready for review.**\n\n[Project plan — draft](${link})\n\n| Area | Position |\n| --- | --- |\n| Australia | Ready |\n| UK | Samples needed |\n\n- Two decisions remain.\n- Nothing has been sent.\n\n\`Saved draft\` is not an approved release.`;

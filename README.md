@@ -18,21 +18,28 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
   running but waiting on a step only you can take), follow what is running
   (**Working**) and keep the bigger work in view. On a phone a selected
   conversation takes the screen; on a desktop it opens beside the queue.
-- **Inbox** (optional) lists email waiting on you and turns each into a reply
-  conversation in one step.
-- **Projects** shows repository health on every machine and the machines
-  themselves: add one, set their order, replace tokens or remove one.
+- **Inbox** (optional) lists email waiting on you. Linked work opens directly
+  in Today; unlinked email can be linked to existing work or start a standalone
+  activity. Previewing, linking or starting work never marks a message reviewed.
+- **Settings** holds machines and repository diagnostics: add a machine, set
+  their order, replace tokens or remove one. Existing repository bookmarks work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
 
-The selected view, project, conversation and archive filter are URL search
-parameters, so reloads, bookmarks and browser Back work.
+Bigger work has bookmarkable details with its position, source emails and
+activities. Start activity uses the same composer as Today with the work issue
+selected; a repository is selected only for one clear registered match. The
+work issue stays canonical on GitHub, including explicitly linked email threads.
+Link requests use the existing inbox queue and the machine on duty's GitHub login.
+
+The selected view, work item, email, project, conversation and archive filter
+are URL search parameters, so reloads, bookmarks and browser Back work.
 
 ## How it works
 
 A React single-page app (TanStack Router and Query) polls a TypeScript
 Cloudflare Worker every 30 seconds. The Worker keeps one SQLite Durable Object
 per portfolio owner, holding snapshots, machines, archives, sessions,
-notifications, queued requests and the daily review, and one per conversation,
+notifications and queued requests, and one per conversation,
 holding its messages, claim, receipts, progress, screenshots and browser.
 
 Each connected machine runs two background services:
@@ -55,7 +62,7 @@ discovery publishes nothing rather than declaring projects gone.
 
 ## Machines
 
-The owner adds a machine on the Projects page by naming it. The site shows its
+The owner adds a machine in Settings by naming it. The site shows its
 id and two tokens once: a **collector** token, which can only upload that
 machine's snapshot and exchange queued requests, and a **runner** token, which
 can only claim, heartbeat and report conversations. The Worker stores only token
@@ -65,8 +72,7 @@ and each machine's runner IDs map to conversation owners of its own, so one
 machine can never act on another's claim.
 
 Machines are ordered. The first machine heard from in the last five minutes is
-**on duty**: it reads the inbox, applies Mark done and inbox requests and
-publishes the daily review. Every collector asks the Worker whether it is on
+**on duty**: it reads the inbox and applies Mark done and inbox actions. Every collector asks the Worker whether it is on
 duty before each scan, so exactly one machine applies each request. New
 conversations go to the first machine whose runner called in the last two
 minutes (an idle runner claims every two seconds and a busy one heartbeats
@@ -286,27 +292,19 @@ With `inboxAccount` set, the machine on duty reads up to 200 inbox threads as
 metadata through its existing `gws` login, and the latest non-draft message of
 each as bounded plain text (quoted history removed, at most 4,000 characters).
 Text lives only in the latest snapshot, is stripped from the overview and is
-read one thread at a time; it never enters telemetry, prompts or the daily
-email. If the machine on duty cannot confirm its duty before a scan, its last
-read stays for up to fifteen minutes, with its age shown. **Reply** starts a
-quick conversation that drafts the reply in Gmail for your review; marking it
-**Done** archives the thread unless someone wrote since, and if no current
-read can see the thread, Projects waits for one. **Archive** and
+read one thread at a time; it never enters telemetry or prompts. If the machine on duty cannot confirm its duty before a scan, its last
+read stays for up to fifteen minutes, with its age shown. Linked work opens
+inside Today, where **Start activity** preselects that work item. Unlinked
+email can be linked to open work or start a standalone activity. Only a source
+link enters the request, never the email text. **Done** finishes the activity;
+archiving its source email is a separate explicit action. **Archive** and
 **Unsubscribe** follow the Mark done pattern; unsubscribe uses RFC 8058
 one-click only, to a public HTTPS host checked on the connection's own DNS
 lookup, and otherwise starts a conversation.
 
-## Daily review (optional)
-
-A reasoning review on the machine on duty can publish a verified daily edition
-through `service.mjs --review <file> [--send-daily]`: the Worker requires a
-fresh work scan, today's edition, a recent source time and a matching content
-hash, shows it on Today and emails it once to `OWNER_EMAIL`. "Today" is the
-date in `TIME_ZONE` (UTC unless the deployment sets one). The edition and
-email share one safe Markdown renderer (no raw HTML or images, HTTPS links
-only). The email has no idempotency key, so only a send reported as failed is
-retried, a concurrent publish waits for the send in flight, and a send whose
-outcome was never recorded is never repeated.
+The retired daily brief is no longer displayed, published or emailed. Legacy
+publication requests return Gone without sending mail. Existing historical
+records are retained. Today remains the conversation workspace.
 
 ## Notifications
 
@@ -376,7 +374,7 @@ npm run dev
 
 The preview runs at http://127.0.0.1:5278 against a local Worker on port 8798
 (`worker/local.ts`, loopback only, never used in production). Locally you are
-the owner: add a machine on the Projects page, then point a local
+the owner: add a machine in Settings, then point a local
 `machine.json` at `http://127.0.0.1:8798` and run `npm run collect -- <config>`
 or `npm run runner -- <config>`.
 

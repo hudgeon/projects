@@ -19,7 +19,7 @@ import { issue } from "./work-fixtures";
 import { randomUUID } from "node:crypto";
 import { runInputSchema, type Progress, type Run, type RunInput } from "../src/run-model";
 import type { TelemetryFields } from "../src/telemetry";
-import type { Snapshot, PortfolioView } from "../src/model";
+import { snapshotSchema, type Snapshot, type PortfolioView } from "../src/model";
 import { sessionArchived } from "../src/archive-model";
 import { decodeScreenshots, SCREENSHOT_BYTES } from "../src/screenshot-model";
 
@@ -798,7 +798,7 @@ test("the Laptop's collector publishes for itself and takes the Studio's duties 
     assert.equal((await ingest(closeSnapshot(), laptop)).status, 403, "the Laptop cannot publish the Studio's snapshot");
     assert.equal((await ingest({...archiveSnapshot("laptop"), work: closeSnapshot().work}, laptop)).status, 200);
     assert.equal((await ingest(archiveSnapshot("laptop", Date.now() + 1000), studio)).status, 403, "a machine publishes only its own snapshot");
-    assert.equal((await mf.dispatchFetch(`${origin}/api/review`, {method: "POST", headers: {...laptop, "Content-Type": "application/json"}, body: "{}"})).status, 409, "only the machine on duty publishes the daily review");
+    assert.equal((await mf.dispatchFetch(`${origin}/api/review`, {method: "POST", headers: {...laptop, "Content-Type": "application/json"}, body: "{}"})).status, 410, "daily publication is retired for every machine regardless of duty");
     assert.equal((await get("/api/overview", laptop)).status, 401, "the Laptop's bearer reads nothing");
     // Five minutes without a publish from the Studio's collector.
     await (await mf.unsafeGetDurableObjectStorage("test", "Portfolio", {name: "test"})).exec("UPDATE collector_contact SET at=? WHERE host='studio'", Date.now() - 5 * 60_000);
@@ -840,6 +840,18 @@ test("inbox archive and unsubscribe requests need a session, name an observed th
     assert.equal(((await read.json()) as { thread: { body: string } }).thread.body, "This week: PRIVATE-BODY-MARKER");
     assert.equal((await mf.dispatchFetch(`${origin}/api/inbox/threads/aaaaaaaaaa01`, { headers: { Authorization: bearer } })).status, 401, "the collector token cannot read mail back");
     assert.equal((await mf.dispatchFetch(`${origin}/api/inbox/threads/cccccccccc01`, { headers: signed })).status, 404);
+    assert.equal((await act({threadId: "aaaaaaaaaa01", action: "link"})).status, 400);
+    assert.equal((await act({threadId: "aaaaaaaaaa01", action: "link", issue: 999})).status, 404);
+    const linkedResponse = await act({threadId: "aaaaaaaaaa01", action: "link", issue: 7});
+    assert.equal(linkedResponse.status, 200);
+    const linkPending = (await store.pendingInboxActions())[0];
+    assert.equal(linkPending.issue, 7);
+    assert.equal((await act({threadId: "aaaaaaaaaa01", action: "archive"})).status, 404, "queued linking must finish or be withdrawn");
+    const linkReport = async (issue: number) => (await mf.dispatchFetch(`${origin}/api/inbox/actions`, {method: "POST", headers: {Authorization: bearer, "Content-Type": "application/json"}, body: JSON.stringify({...linkPending, issue, state: "done", message: null})})).json();
+    assert.deepEqual(await linkReport(8), {updated: false});
+    assert.deepEqual(await linkReport(7), {updated: true});
+    assert.equal((await act({threadId: "aaaaaaaaaa01", action: "unsubscribe"})).status, 200);
+    await act({threadId: "aaaaaaaaaa01", action: "unsubscribe", cancel: true});
     // Queue, withdraw and queue again; one request per thread.
     type Actions = { actions: { threadId: string; state: string; action: string; requestedAt: number }[] };
     let actions = ((await (await act({ threadId: "aaaaaaaaaa01", action: "unsubscribe" })).json()) as Actions).actions;
@@ -904,94 +916,24 @@ test("the Studio applies archive and one-click unsubscribe from its own fresh re
     await rm(dir, { recursive: true, force: true });
   }
 });
-test("Done on an email conversation archives its Gmail thread unless someone wrote since", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "project-overview-done-email-"));
-  await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: path.join(dir, "worker.mjs") });
-  const bearer = `Bearer ${"x".repeat(64)}`;
-  const mf = await start(await options(path.join(dir, "worker.mjs"), dir, { ALLOWED_EMAILS: "owner@example.com", COLLECTOR_TOKEN: "x".repeat(64) }));
+test("Done on an activity never queues a mailbox archive, including after the next scan", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "projects-activity-source-"));
+  await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: path.join(dir, "worker.mjs")});
+  const mf = await start(await options(path.join(dir, "worker.mjs"), dir, {COLLECTOR_TOKEN: "x".repeat(64)}));
   try {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
     const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
     const at = Date.now();
-    const ingest = (snapshot: object) => mf.dispatchFetch("https://example.com/api/ingest", { method: "POST", headers: { Authorization: bearer, "Content-Type": "application/json" }, body: JSON.stringify(snapshot) });
-    const email = (emailThread: string) => store.createRun({ requestId: randomUUID(), text: "Reply", projectId: null, agent: "auto", workIssue: null, emailThread });
-    const queued = async () => (await store.inboxActions()).filter((a) => a.state === "queued").map((a) => [a.threadId, a.action]);
-    // Done before Done archived Gmail: the first complete inbox read catches up once.
-    const earlier = await email("bbbbbbbbbb01");
-    await store.archiveRun(earlier.id, true);
-    assert.equal((await ingest(inboxSnapshot(at))).status, 200);
-    assert.deepEqual(await queued(), [["bbbbbbbbbb01", "archive"]]);
-    await store.requestInboxAction("bbbbbbbbbb01", "archive", true);
-    assert.equal((await ingest(inboxSnapshot(at + 1000))).status, 200);
-    assert.deepEqual(await queued(), [], "Undo sticks; the catch-up runs once");
-    const reply = await email("aaaaaaaaaa01");
-    await store.archiveRun(reply.id, true);
-    assert.deepEqual(await queued(), [["aaaaaaaaaa01", "archive"]]);
-    await store.archiveRun(reply.id, false);
-    assert.deepEqual(await queued(), [], "Reopen withdraws the request");
-    const newer = inboxSnapshot(at + 2000);
-    newer.inbox.threads[0].updatedAt = Date.now() + 60_000;
-    assert.equal((await ingest(newer)).status, 200);
-    await store.archiveRun(reply.id, true);
-    assert.deepEqual(await queued(), [], "a newer email stays in the inbox");
-  } finally {
-    await mf.dispose();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-test("Done that no inbox read could see archives once a read can, and only once", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "project-overview-deferred-archive-"));
-  await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: path.join(dir, "worker.mjs") });
-  const bearer = `Bearer ${"x".repeat(64)}`;
-  const mf = await start(await options(path.join(dir, "worker.mjs"), dir, { ALLOWED_EMAILS: "owner@example.com", COLLECTOR_TOKEN: "x".repeat(64) }));
-  try {
-    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
-    const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-    const at = Date.now();
-    const ingest = (snapshot: object) => mf.dispatchFetch("https://example.com/api/ingest", { method: "POST", headers: { Authorization: bearer, "Content-Type": "application/json" }, body: JSON.stringify(snapshot) });
-    const email = (emailThread: string) => store.createRun({ requestId: randomUUID(), text: "Reply", projectId: null, agent: "auto", workIssue: null, emailThread });
-    const queued = async () => (await store.inboxActions()).filter((a) => a.state === "queued").map((a) => [a.threadId, a.action]);
-    const threads = inboxSnapshot(at).inbox.threads;
-    const read = (offset: number, state: "ok" | "incomplete" | "unavailable", seen = threads) => {
-      const snapshot = inboxSnapshot(at + offset);
-      return { ...snapshot, inbox: { ...snapshot.inbox, state, threads: state === "unavailable" ? [] : seen } };
-    };
-    assert.equal((await ingest(read(0, "ok"))).status, 200);
-    assert.equal((await ingest(read(1000, "unavailable"))).status, 200);
-    const reply = await email("bbbbbbbbbb01");
-    await store.archiveRun(reply.id, true);
-    assert.deepEqual(await queued(), [], "Gmail could not be read");
-    assert.equal((await ingest(read(2000, "incomplete", threads.filter((t) => t.id !== "bbbbbbbbbb01")))).status, 200);
-    assert.deepEqual(await queued(), [], "a partial read that missed the email says nothing about it");
-    assert.equal((await ingest(read(3000, "ok"))).status, 200);
-    assert.deepEqual(await queued(), [["bbbbbbbbbb01", "archive"]]);
-    await store.requestInboxAction("bbbbbbbbbb01", "archive", true);
-    assert.equal((await ingest(read(4000, "ok"))).status, 200);
-    assert.deepEqual(await queued(), [], "Undo sticks");
-    // Reopen withdraws a waiting archive too.
-    assert.equal((await ingest(read(5000, "unavailable"))).status, 200);
-    const later = await email("aaaaaaaaaa01");
-    await store.archiveRun(later.id, true);
-    await store.archiveRun(later.id, false);
-    assert.equal((await ingest(read(6000, "ok"))).status, 200);
-    assert.deepEqual(await queued(), []);
-    // Nor is Done judged on an old read: someone may have written since.
-    const old = read(7000, "ok");
-    old.inbox.observedAt = Date.now() - 6 * 60_000;
-    assert.equal((await ingest(old)).status, 200);
-    await store.archiveRun((await email("aaaaaaaaaa01")).id, true);
-    assert.deepEqual(await queued(), []);
-    assert.equal((await ingest(read(8000, "ok"))).status, 200);
-    assert.deepEqual(await queued(), [["aaaaaaaaaa01", "archive"]]);
-    // A wait no read ever ends lapses after a week, like other inbox requests.
-    const storage = await mf.unsafeGetDurableObjectStorage("test", "Portfolio", { name: "test" });
-    await storage.exec("INSERT INTO deferred_archives(thread,requested) VALUES('cccccccccc01',?),('dddddddddd01',?)", Date.now() - 8 * 86400_000, Date.now());
-    assert.equal((await ingest(read(9000, "incomplete"))).status, 200);
-    assert.deepEqual([...(await storage.exec("SELECT thread FROM deferred_archives"))].map((row) => (row as { thread: string }).thread), ["dddddddddd01"]);
-  } finally {
-    await mf.dispose();
-    await rm(dir, { recursive: true, force: true });
-  }
+    await store.publish(snapshotSchema.parse(inboxSnapshot(at)));
+    const activity = await store.createRun({requestId: randomUUID(), text: "Investigate source", projectId: null, agent: "auto", workIssue: 7, emailThread: "bbbbbbbbbb01"});
+    await store.archiveRun(activity.id, true);
+    assert.deepEqual(await store.pendingInboxActions(), []);
+    await store.publish(snapshotSchema.parse(inboxSnapshot(at + 1000)));
+    assert.deepEqual(await store.pendingInboxActions(), []);
+    await store.requestInboxAction("bbbbbbbbbb01", "archive");
+    await store.archiveRun(activity.id, false);
+    assert.equal((await store.pendingInboxActions()).length, 1, "reopening an activity does not undo an explicit Archive");
+  } finally {await mf.dispose(); await rm(dir, {recursive: true, force: true});}
 });
 test("the machine on duty keeps its last inbox read through a scan that could not learn it was on duty", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "project-overview-kept-inbox-"));
@@ -1109,137 +1051,38 @@ test("the Studio closes a queued issue and reports it; without GitHub it stays q
   }
 });
 
-test("review publication precedes email; only a reported failure is resent and one day sends once", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "projects-review-"));
-  const script = path.join(dir, "worker.mjs");
-  await build({
-    entryPoints: ["tests/fixtures/email-worker.js"],
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    external: ["cloudflare:workers", "node:*"],
-    outfile: script,
-  });
-  const config = await options(script, dir, {
-    ALLOWED_EMAILS: "owner@example.com",
-    OWNER_EMAIL: "owner@example.com",
-    EMAIL_FROM: "projects@notify.example.com",
-    SITE_URL: "https://projects.example.com",
-    COLLECTOR_TOKEN: "x".repeat(64),
-  });
-  type EmailTest = Portfolio & {
-    sentEmails(): Promise<{ from: unknown; to: string[]; text: string }[]>;
-    failEmail(enabled: boolean): Promise<void>;
-    setEmailState(day: string, state: string): Promise<void>;
-  };
+test("retired daily publication cannot email or expose old editions, while OTP email still works", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "projects-retired-brief-")), script = path.join(dir, "worker.mjs");
+  await build({entryPoints: ["tests/fixtures/email-worker.js"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
+  const config = await options(script, dir, {ALLOWED_EMAILS: "owner@example.com", OWNER_EMAIL: "owner@example.com", EMAIL_FROM: "projects@notify.example.com", SITE_URL: "https://projects.example.com", COLLECTOR_TOKEN: "x".repeat(64)});
+  type EmailTest = Portfolio & {sentEmails(): Promise<{text: string}[]>; seedBriefHistory(): Promise<void>; briefHistory(): Promise<string[]>};
   let mf = await start(config);
-  const portfolio = async () => {
-    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
-    return ns.get(ns.idFromName("test")) as unknown as EmailTest;
-  };
-  const now = Date.now();
-  const { localDate } = await import("../src/review-model");
-  const brief =
-    "# Today — Test\n\n## Do today\n1. [Review the outcome](https://github.com/acme/work/issues/940).\n\n## Calendar\nNo current bookings.\n\n## Now\nWaiting on a named owner.";
-  const review = {
-    date: localDate(now),
-    verifiedAt: now,
-    sourceCommit: "a".repeat(40),
-    brief,
-    briefSha256: digest(brief),
-  };
-  const edition = (text: string, verifiedAt: number) => ({
-    ...review,
-    verifiedAt,
-    brief: text,
-    briefSha256: digest(text),
-  });
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${"x".repeat(64)}`,
-  };
-  const publish = (value = review, sendDaily = true) =>
-    mf.dispatchFetch("https://example.com/api/review", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ review: value, sendDaily }),
-    });
+  const store = async () => {const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"); return ns.get(ns.idFromName("test")) as unknown as EmailTest;};
+  const headers = {"Content-Type": "application/json", Authorization: `Bearer ${"x".repeat(64)}`};
   try {
-    assert.equal((await publish()).status, 409); // no work scan
-    await mf.dispatchFetch("https://example.com/api/ingest", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        version: 1,
-        host: "studio",
-        collectedAt: now,
-        projects: [],
-        unassignedSessions: [],
-        work: { repo: "acme/work", issues: [], associations: [], associationsState: "ok" },
-      }),
-    });
-    assert.equal(
-      (await publish({ ...review, brief: brief + " changed" })).status,
-      400,
-    );
-    assert.equal(
-      (await publish({ ...review, verifiedAt: now - 91 * 60000 })).status,
-      400,
-    );
-    assert.equal((await publish(review, false)).status, 200);
-    let store = await portfolio();
-    assert.equal((await store.sentEmails()).length, 0);
-    await store.failEmail(true);
-    const failed = await publish();
-    assert.equal(failed.status, 503);
-    assert.doesNotMatch(await failed.text(), /provider detail/);
-    assert.equal((await store.review())?.brief, brief);
-    assert.equal((await store.review())?.email, "failed");
-    // Nothing was delivered, so a newer edition takes the failed one's place.
-    const next = edition(brief + " New information.", now + 1);
-    assert.equal((await publish(next)).status, 503);
-    assert.equal((await store.review())?.brief, next.brief);
-    await mf.dispose();
-    mf = await start(config);
-    store = await portfolio();
-    await store.failEmail(false);
-    const results = await Promise.all([publish(next), publish(next)]);
-    assert.ok(results.every((r) => r.status === 200), "a concurrent publish waits for the send in flight");
-    const sent = await store.sentEmails();
-    assert.equal(sent.length, 3, "two reported failures, then one delivery");
-    assert.deepEqual(sent[2], sent[1], "a retry sends the exact stored message");
-    assert.deepEqual(sent[2].to, ["owner@example.com"]);
-    assert.deepEqual(sent[2].from, { name: "Projects", email: "projects@notify.example.com" });
-    assert.match(sent[2].text, /Open Projects: https:\/\/projects\.example\.com/);
-    assert.match(sent[2].text, /https:\/\/github\.com\/acme\/work\/blob\/a{40}\/today\.md/);
-    assert.equal((await store.review())?.email, "sent");
-    // A send whose outcome was never recorded is not repeated.
-    await store.setEmailState(review.date, "pending");
-    const unconfirmed = await publish(next);
-    assert.equal(unconfirmed.status, 409);
-    assert.match(await unconfirmed.text(), /needs verification/);
-    const changed = edition(next.brief.replace("named owner", "another owner"), now + 2);
-    assert.equal((await publish(changed)).status, 409);
-    assert.equal((await store.review())?.brief, next.brief);
-    assert.equal((await store.sentEmails()).length, 3);
-    // One day sends once.
-    await store.setEmailState(review.date, "sent");
-    const res = await publish(changed);
-    assert.equal(
-      ((await res.json()) as { email: string }).email,
-      "already sent",
-    );
-    assert.equal((await store.sentEmails()).length, 3);
-    // The upload token still cannot read private overview or publication state.
-    assert.equal(
-      (await mf.dispatchFetch("https://example.com/api/overview", { headers }))
-        .status,
-      401,
-    );
-  } finally {
-    await mf.dispose();
-    await rm(dir, { recursive: true, force: true });
-  }
+    await (await store()).seedBriefHistory();
+    for (const body of ['{"review":{},"sendDaily":true}', '{malformed legacy payload']) {
+      const res = await mf.dispatchFetch("https://example.com/api/review", {method: "POST", headers, body});
+      assert.equal(res.status, 410);
+      assert.match(await res.text(), /retired/);
+    }
+    assert.deepEqual(await (await store()).sentEmails(), []);
+    assert.deepEqual(await (await store()).briefHistory(), ["historical edition"]);
+    await mf.dispose(); mf = await start(config);
+    assert.deepEqual(await (await store()).briefHistory(), ["historical edition"], "retirement preserves stored history across restart");
+    assert.equal((await mf.dispatchFetch("https://example.com/api/overview", {headers})).status, 401);
+    const otp = await mf.dispatchFetch("https://example.com/api/auth/request", {method: "POST", headers: {"Content-Type": "application/json", Origin: "https://example.com"}, body: JSON.stringify({email: "owner@example.com"})});
+    assert.equal(otp.status, 200);
+    const sent = await (await store()).sentEmails();
+    assert.equal(sent.length, 1, "the sign-in email binding remains functional");
+    const code = sent[0].text.match(/\b[0-9]{6}\b/)![0];
+    const signed = await mf.dispatchFetch("https://example.com/api/auth/verify", {method: "POST", headers: {"Content-Type": "application/json", Origin: "https://example.com"}, body: JSON.stringify({email: "owner@example.com", code})});
+    assert.equal(signed.status, 200);
+    const overview = await mf.dispatchFetch("https://example.com/api/overview", {headers: {Cookie: signed.headers.get("Set-Cookie")!.split(";")[0]}});
+    assert.equal(overview.status, 200);
+    const overviewBody = (await overview.json()) as object;
+    assert.equal("review" in overviewBody, false);
+  } finally {await mf.dispose(); await rm(dir, {recursive: true, force: true});}
 });
 
 test("one Studio recovers concurrent conversation claims without sharing resume state", async () => {

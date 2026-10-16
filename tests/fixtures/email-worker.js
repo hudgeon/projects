@@ -1,48 +1,31 @@
-export { default, Conversation } from "../../worker/index";
-import { Portfolio as Base } from "../../worker/index";
-// Stands in for Cloudflare's send_email binding. Each attempt is recorded in
-// the object's own storage, so the record survives a restart.
+export { Conversation } from "../../worker/index";
+import worker, { Portfolio as Base } from "../../worker/index";
+// Fake email at the same boundary as OTP: the request environment. Persist
+// attempts in the test object's storage so a restart cannot hide a send.
+export default {
+  fetch(request, env, ctx) {
+    return worker.fetch(request, {...env, EMAIL: {
+      send(message) { return env.PORTFOLIOS.getByName(env.PORTFOLIO_ID).recordEmail(message); },
+    }}, ctx);
+  },
+};
 export class Portfolio extends Base {
   constructor(ctx, env) {
-    const sql = ctx.storage.sql;
-    sql.exec(
-      "CREATE TABLE IF NOT EXISTS fake_email(seq INTEGER PRIMARY KEY AUTOINCREMENT,message TEXT NOT NULL)",
-    );
-    sql.exec(
-      "CREATE TABLE IF NOT EXISTS fake_email_state(id INTEGER PRIMARY KEY,fail INTEGER NOT NULL)",
-    );
-    super(ctx, {
-      ...env,
-      EMAIL: {
-        async send(message) {
-          const { seq } = sql
-            .exec(
-              "INSERT INTO fake_email(message) VALUES(?) RETURNING seq",
-              JSON.stringify(message),
-            )
-            .one();
-          await new Promise((resolve) => setTimeout(resolve, 20));
-          if (sql.exec("SELECT fail FROM fake_email_state WHERE id=1").toArray()[0]?.fail)
-            throw Error("E_DELIVERY_FAILED: provider detail must not leak");
-          return { messageId: `message-${seq}` };
-        },
-      },
-    });
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS fake_email(seq INTEGER PRIMARY KEY AUTOINCREMENT,message TEXT NOT NULL)");
+    super(ctx, env);
+  }
+  recordEmail(message) {
+    const {seq} = this.ctx.storage.sql.exec("INSERT INTO fake_email(message) VALUES(?) RETURNING seq", JSON.stringify(message)).one();
+    return {messageId: `message-${seq}`};
   }
   sentEmails() {
-    return this.ctx.storage.sql
-      .exec("SELECT message FROM fake_email ORDER BY seq")
-      .toArray()
-      .map((row) => JSON.parse(row.message));
+    return this.ctx.storage.sql.exec("SELECT message FROM fake_email ORDER BY seq").toArray().map(row => JSON.parse(row.message));
   }
-  failEmail(enabled) {
-    this.ctx.storage.sql.exec(
-      "INSERT INTO fake_email_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET fail=excluded.fail",
-      enabled ? 1 : 0,
-    );
+  seedBriefHistory() {
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS daily_review (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL, published INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("INSERT INTO daily_review VALUES(1,?,?)", "historical edition", Date.now());
   }
-  // Leaves a day's send in a chosen state, such as one cut off by a restart.
-  setEmailState(day, state) {
-    this.ctx.storage.sql.exec("UPDATE review_emails SET state=? WHERE day=?", state, day);
+  briefHistory() {
+    return this.ctx.storage.sql.exec("SELECT payload FROM daily_review").toArray().map(row => row.payload);
   }
 }

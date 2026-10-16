@@ -16,15 +16,12 @@ try {
     typeof value === "string" && /^\w[\w.-]*$/.test(value);
   if (doppler && !(name(doppler.project) && name(doppler.config)))
     throw Error("Invalid Doppler config");
-  const reviewIndex = process.argv.indexOf("--review");
-  const reviewFile = reviewIndex === -1 ? null : process.argv[reviewIndex + 1];
-  if (reviewIndex !== -1 && (!reviewFile || reviewFile.startsWith("--"))) throw Error("Missing review file");
+  if (process.argv.includes("--review") || process.argv.includes("--send-daily"))
+    throw Error("Daily briefs have been retired");
   const collector = [
     `${base}/collector.mjs`,
     file,
-    ...(reviewFile
-      ? ["--publish", "--review", reviewFile, ...(process.argv.includes("--send-daily") ? ["--send-daily"] : [])]
-      : process.argv.includes("--snapshot") ? [] : ["--publish", "--closes"]),
+    ...(process.argv.includes("--snapshot") ? [] : ["--publish", "--closes"]),
   ];
   const options = { stdio: "inherit", timeout: 300000 } as const;
   if (!doppler) execFileSync(process.execPath, collector, options);

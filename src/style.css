@@ -1493,30 +1493,6 @@ main {
   color: var(--faint);
 }
 
-.brief {
-  margin-bottom: 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--card);
-}
-.brief h2 {
-  margin: 0 0 6px;
-  font-size: 16px;
-}
-.brief details,
-.brief-old {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-.brief-old {
-  margin: 0 0 14px;
-}
-.brief summary,
-.brief-old summary {
-  cursor: pointer;
-}
 .bigger-head,
 .section-head {
   display: flex;
@@ -1809,3 +1785,15 @@ main {
     font-size: 16px;
   }
 }
+
+/* Business work is the destination; repository diagnostics remain in Settings. */
+a.work-card-head { text-decoration: none; display: block; color: inherit; }
+.work-detail { padding: 0; list-style: none; margin: 16px 0; }
+.settings-link { color: #fff; font-size: 14px; padding: 12px; }
+.mail-link-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mail-link-form select { max-width: 100%; min-width: 0; }
+@media (max-width: 700px) { .settings-link { font-size: 12px; padding: 8px; } }
+
+.work-detail .work-card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.work-detail .work-card-top { align-items: flex-start; flex-direction: column; gap: 10px; }
+.work-detail h1.work-card-title { font-size: 24px; line-height: 1.3; margin: 0; }

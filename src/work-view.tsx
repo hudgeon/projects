@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ago,
   freshness,
@@ -20,12 +20,12 @@ import {
   type Issue,
   type WorkAssociation,
 } from "./work-model";
-import { currentInbox, inboxRows } from "./inbox-model";
+import { currentInbox, inboxRows, gmailUrl } from "./inbox-model";
 import { Restart } from "./restart";
 import { awaitsYou, type RunSummary } from "./run-model";
 import { plainText } from "./run-text";
 import { Composer, ConversationRow, projectNames } from "./run-view";
-import { conversationSearch } from "./navigation";
+import { workSearch } from "./navigation";
 import type { ArchiveEntry } from "./archive-model";
 type Linked = Omit<WorkAssociation, "state"> & {
   host: string;
@@ -348,21 +348,25 @@ const sections: Record<Agenda, [label: string, tone: string, rank: number]> = {
   planned: ["Later", "quiet", 4],
   history: ["Closed", "quiet", 5],
 };
-function WorkCard({
+export function WorkCard({
   row,
   now,
   conversations,
   snapshots,
   archives,
+  detail = false,
+  emailThread,
 }: {
+  detail?: boolean;
+  emailThread?: string;
   row: Row;
   now: number;
   conversations: RunSummary[];
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
 }) {
-  const [open, setOpen] = useState(false),
-    [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const open = detail;
   const navigate = useNavigate({ from: "/" });
   const { issue, pulls, sessions } = row;
   const p = issue.position;
@@ -381,14 +385,19 @@ function WorkCard({
   const names = projectNames(snapshots, archives);
   return (
     <li className={`work-card${open ? " open" : ""}`}>
-      <button
+      <Link
         className="work-card-head"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
+        to="/"
+        search={workSearch(issue.number, emailThread)}
+        aria-current={detail ? "page" : undefined}
       >
         <span className="work-card-top">
           <span className={`state-chip tone-${tone}`}>{label}</span>
-          <span className="work-card-title">{issue.title}</span>
+          {detail ? (
+            <h1 className="work-card-title">{issue.title}</h1>
+          ) : (
+            <span className="work-card-title">{issue.title}</span>
+          )}
         </span>
         <span className="work-card-next">
           {p?.next ? plainText(p.next) : "No next step recorded yet."}
@@ -396,7 +405,7 @@ function WorkCard({
         {!!signals.length && (
           <span className="work-card-signals">{signals.join(" · ")}</span>
         )}
-      </button>
+      </Link>
       {open && (
         <div className="work-card-body">
           {p?.why && (
@@ -447,7 +456,7 @@ function WorkCard({
                   key={run.id}
                   run={run}
                   names={names}
-                  search={conversationSearch(run.id)}
+                  search={workSearch(issue.number, emailThread, run.id)}
                 />
               ))}
             </div>
@@ -457,9 +466,16 @@ function WorkCard({
               {(issue.emailLinks ?? []).map((link) => (
                 <li key={link.threadId}>
                   {link.url ? (
-                    <a href={link.url} target="_blank" rel="noreferrer">
-                      {link.subject || "Email conversation"}
-                    </a>
+                    <Link
+                      to="/"
+                      search={{ view: "inbox", email: link.threadId }}
+                    >
+                      {link.subject ||
+                        currentInbox(snapshots)?.threads.find(
+                          (t) => t.id === link.threadId,
+                        )?.subject ||
+                        "Email conversation"}
+                    </Link>
                   ) : (
                     link.subject || "Email conversation"
                   )}
@@ -494,7 +510,7 @@ function WorkCard({
           <div className="actions">
             {!row.done && (
               <button className="btn-quiet" onClick={() => setComposing(true)}>
-                Start a conversation
+                Start activity
               </button>
             )}
             <a href={issue.url} target="_blank" rel="noreferrer">
@@ -507,12 +523,18 @@ function WorkCard({
               snapshots={snapshots}
               archives={archives}
               workIssue={issue.number}
+              projectId={workProject(issue, snapshots, archives)}
+              emailThread={emailThread}
+              context={emailContext(issue, emailThread, snapshots)}
               autoFocus
               placeholder={`What should happen next on “${issue.title}”?`}
               onCancel={() => setComposing(false)}
               onStarted={(run) => {
                 setComposing(false);
-                void navigate({ to: "/", search: conversationSearch(run.id) });
+                void navigate({
+                  to: "/",
+                  search: workSearch(issue.number, emailThread, run.id),
+                });
               }}
             />
           )}
@@ -635,6 +657,100 @@ export function BiggerWork({
             </p>
           ))}
         </details>
+      )}
+    </section>
+  );
+}
+
+// Business work may span repositories. Only a single explicit, current match
+// is a safe default; the coordinator can choose otherwise.
+export function workProject(
+  issue: Issue,
+  snapshots: Snapshot[],
+  archives: ArchiveEntry[],
+) {
+  const matches = new Set(
+    snapshots
+      .flatMap((s) => s.projects)
+      .filter(
+        (p) =>
+          issue.repos.includes(p.repo) &&
+          !archives.some(
+            (a) => a.target.kind === "project" && a.projectId === p.id,
+          ),
+      )
+      .map((p) => p.id),
+  );
+  return matches.size === 1 ? [...matches][0] : undefined;
+}
+function emailContext(
+  issue: Issue,
+  threadId: string | undefined,
+  snapshots: Snapshot[],
+) {
+  if (!threadId) return undefined;
+  const inbox = currentInbox(snapshots);
+  const thread = inbox?.threads.find((t) => t.id === threadId);
+  const link = issue.emailLinks?.find((l) => l.threadId === threadId);
+  const url = thread && inbox ? gmailUrl(inbox.account, threadId) : link?.url;
+  return url
+    ? {
+        title: `Activity for ${issue.title}`,
+        detail: `Source email: ${url}. Read it only if relevant to this activity; opening it or starting work does not mean its latest message has been reviewed.`,
+      }
+    : undefined;
+}
+export function WorkDetail({
+  number,
+  emailThread,
+  ...props
+}: {
+  number: number;
+  emailThread?: string;
+  snapshots: Snapshot[];
+  archives: ArchiveEntry[];
+  closes: Close[];
+  conversations: RunSummary[];
+  now: number;
+}) {
+  const work = currentWork(props.snapshots);
+  const row =
+    work &&
+    rows(props.snapshots, work, props.now, props.closes).find(
+      (r) => r.issue.number === number,
+    );
+  return (
+    <section aria-label="Bigger work details">
+      <nav className="breadcrumbs">
+        <Link to="/" search={{ view: "today" }}>
+          ← Bigger work
+        </Link>
+      </nav>
+      {work && freshness(work.observedAt, props.now) && (
+        <p className="notice" role="status">
+          Work items last read {ago(work.observedAt, props.now).toLowerCase()};
+          this position may be out of date.
+        </p>
+      )}
+      {row ? (
+        <ul className="work-detail">
+          <WorkCard
+            key={number}
+            row={row}
+            {...props}
+            detail
+            emailThread={emailThread}
+            conversations={props.conversations.filter(
+              (c) => c.workIssue === number && !c.archivedAt,
+            )}
+          />
+        </ul>
+      ) : (
+        <p className="notice">
+          {work
+            ? "This work item is not in the latest inventory. It may be older or unavailable; no new activity has been started."
+            : "Work items are unavailable until a machine reads them from GitHub."}
+        </p>
       )}
     </section>
   );

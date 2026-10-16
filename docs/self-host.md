@@ -31,9 +31,9 @@ variables on your copy of the repository.
 | --- | --- |
 | `PROJECTS_HOST` | Your site's host name, such as `projects.example.com`, on a domain in your Cloudflare account. |
 | `PROJECTS_PORTFOLIO` | Any stable short name for your portfolio; changing it later starts empty. |
-| `PROJECTS_OWNER_EMAIL` | Where the optional daily review email goes. Also add it to `ALLOWED_EMAILS`. |
+| `PROJECTS_OWNER_EMAIL` | Legacy daily-brief setting, retained for deployment compatibility; sign-in uses `ALLOWED_EMAILS`. |
 | `PROJECTS_EMAIL_FROM` | The sender for sign-in codes, on a domain set up in step 2. |
-| `PROJECTS_TIME_ZONE` | Optional: the IANA time zone that sets the daily review's date, such as `Europe/London`. Defaults to `UTC`. |
+| `PROJECTS_TIME_ZONE` | Legacy daily-brief setting, retained for deployment compatibility; no longer affects the workspace. |
 | `SECURITY_REVIEW_BOT_ID` | The id of a bot whose passing `security-review` status each release needs, or `none`. `none` needs `"securityReview": "optional"` in `.github/release-policy.json`, changed by a reviewed pull request. |
 
 ## 2. Set up email sign-in
@@ -107,8 +107,7 @@ and tokens are kept. Options:
 - `--agents`: the apps signed in on this machine, such as `claude` or
   `claude,codex`. Conversations never start an app that is not listed.
 - `--work-repo owner/repo` (optional): a repository whose issues labelled
-  `work` are your work items. Without it, work items, Mark done and the daily
-  review are off.
+  `work` are your work items. Without it, work items and Mark done are off.
 - `--inbox you@example.com` (optional): a Gmail account read through `gws`.
   Email replies also expect a `compose-email` skill in the work repository.
 - `--hooks`: also link Claude and Codex sessions to work items.

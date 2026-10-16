@@ -8,6 +8,9 @@ import {
   type InboxActionReport,
   type PendingInboxAction,
 } from "../src/inbox-model";
+import { emailLinks, type Issue } from "../src/work-model";
+import { gmailUrl } from "../src/inbox-model";
+import { userGh } from "./close";
 import { unsubscribeOptions, type Gws } from "./inbox";
 
 // RFC 8058 one-click: a fixed POST to the list's own HTTPS endpoint. The link
@@ -201,6 +204,91 @@ export async function applyInboxAction(
   await archive();
   return done("Unsubscribed and archived.");
 }
+
+// Store a source reference on the canonical work issue. Always read the current
+// body; retries discover the same exact thread instead of appending duplicates.
+export async function linkInboxThread(
+  action: PendingInboxAction,
+  inbox: Inbox,
+  issues: Issue[] | null,
+  repo: string | undefined,
+  gh: (args: string[]) => Promise<string> = userGh,
+): Promise<InboxActionReport> {
+  const report = (
+    state: InboxActionReport["state"],
+    message: string,
+  ): InboxActionReport => ({ ...action, state, message });
+  const thread = inbox.threads.find((t) => t.id === action.threadId);
+  if (!issues || !repo || !thread)
+    return report("queued", "Inbox or work issues unavailable; retrying.");
+  if (!issues.some((i) => i.number === action.issue && i.open))
+    return report("failed", "This open work item is no longer available.");
+  const fresh = z
+    .object({
+      body: z.string(),
+      state: z.string(),
+      labels: z.array(z.object({ name: z.string() })),
+    })
+    .parse(
+      JSON.parse(
+        await gh([
+          "issue",
+          "view",
+          String(action.issue),
+          "--repo",
+          repo,
+          "--json",
+          "body,state,labels",
+        ]),
+      ),
+    );
+  if (fresh.state !== "OPEN" || !fresh.labels.some((l) => l.name === "work"))
+    return report("failed", "This issue is no longer open work.");
+  if (emailLinks(fresh.body).some((l) => l.threadId === thread.id))
+    return report("done", "Linked to bigger work.");
+  if (emailLinks(fresh.body).length >= 50)
+    return report(
+      "failed",
+      "This work item already has the maximum email links.",
+    );
+  // Do not copy sender content or claim any message has been reviewed.
+  const line = `- [Email conversation](${gmailUrl(inbox.account, thread.id)})`;
+  const heading = /^## Email threads[^\S\r\n]*(?:\r?\n|$)/m;
+  const body = heading.test(fresh.body)
+    ? fresh.body.replace(heading, `## Email threads\n${line}\n`)
+    : `${fresh.body.trimEnd()}\n\n## Email threads\n${line}\n`;
+  await gh([
+    "issue",
+    "edit",
+    String(action.issue),
+    "--repo",
+    repo,
+    "--body",
+    body,
+  ]);
+  const saved = z
+    .object({ body: z.string() })
+    .parse(
+      JSON.parse(
+        await gh([
+          "issue",
+          "view",
+          String(action.issue),
+          "--repo",
+          repo,
+          "--json",
+          "body",
+        ]),
+      ),
+    );
+  if (!emailLinks(saved.body).some((l) => l.threadId === thread.id))
+    return report(
+      "queued",
+      "Link not confirmed yet; checking again next scan.",
+    );
+  return report("done", "Linked to bigger work.");
+}
+
 // The machine on duty's scheduled step, beside Mark done: fetch queued requests, apply
 // each, report back. Without a fresh inbox read a request stays queued.
 export async function applyInboxActions(
@@ -209,6 +297,7 @@ export async function applyInboxActions(
   inbox: Inbox | undefined,
   run: Gws,
   click: OneClick = oneClick,
+  work?: { issues: Issue[] | null; repo?: string },
 ) {
   const url = new URL("/api/inbox/actions", endpoint);
   const call = async (init?: RequestInit) => {
@@ -228,12 +317,20 @@ export async function applyInboxActions(
     let report: InboxActionReport;
     try {
       if (!inbox || inbox.state === "unavailable") throw Error("No inbox read");
-      report = await applyInboxAction(action, inbox, run, click);
+      report =
+        action.action === "link"
+          ? await linkInboxThread(
+              action,
+              inbox,
+              work?.issues ?? null,
+              work?.repo,
+            )
+          : await applyInboxAction(action, inbox, run, click);
     } catch {
       report = {
         ...action,
         state: "queued",
-        message: "Gmail was unavailable from this machine; retrying.",
+        message: "The source was unavailable from this machine; retrying.",
       };
     }
     await call({

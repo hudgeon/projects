@@ -9,6 +9,12 @@ const searchSchema = z.object({
   view: z
     .enum(["today", "inbox", "health", "project", "archive"])
     .catch("today"),
+  work: z.coerce.number().int().positive().optional().catch(undefined),
+  email: z
+    .string()
+    .regex(/^[a-f0-9]{10,40}$/)
+    .optional()
+    .catch(undefined),
   project: key.optional().catch(undefined),
   run: z.uuid().optional().catch(undefined),
   archived: z.boolean().optional().catch(undefined),
@@ -32,3 +38,9 @@ export const conversationSearch = (
   project?: string,
   archived?: boolean,
 ): Navigation => ({ view: "today", run, project, archived });
+
+export const workSearch = (
+  work: number,
+  email?: string,
+  run?: string,
+): Navigation => ({ view: "today", work, email, run });

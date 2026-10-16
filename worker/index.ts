@@ -1,5 +1,3 @@
-import { reviewSchema, reviewProblem, type Review, type PublishedReview } from "../src/review-model";
-import { reviewEmail } from "./review-email";
 import { DurableObject } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
 import { MESSAGE_REQUEST_BYTES } from "../src/screenshot-model";
@@ -31,7 +29,6 @@ import {
   currentInbox,
   inboxActionReportSchema,
   inboxActionRequestSchema,
-  inboxQueue,
   type InboxAction,
   type InboxActionReport,
   type PendingInboxAction,
@@ -53,8 +50,6 @@ const KEEP_INBOX_MS = 3 * STALE_AFTER;
 export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
   private machines: Machines;
-  // The daily review email this instance is sending, if any.
-  private reviewSend?: Promise<boolean>;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
@@ -83,8 +78,6 @@ export class Portfolio extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL)",
     );
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS daily_review (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL, published INTEGER NOT NULL)");
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS review_emails (day TEXT PRIMARY KEY, hash TEXT NOT NULL, payload TEXT NOT NULL, started INTEGER NOT NULL, state TEXT NOT NULL, provider_id TEXT)");
     // Closes were keyed by an older work ID before work items became issues.
     this.ctx.storage.sql.exec("DROP TABLE IF EXISTS closes");
     this.ctx.storage.sql.exec(
@@ -93,10 +86,9 @@ export class Portfolio extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS inbox_actions (thread TEXT PRIMARY KEY, action TEXT NOT NULL, requested INTEGER NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
     );
-    // Email threads marked Done while no current inbox read could see them.
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS deferred_archives (thread TEXT PRIMARY KEY, requested INTEGER NOT NULL)",
-    );
+    if (!this.ctx.storage.sql.exec<{name: string}>("PRAGMA table_info(inbox_actions)").toArray().some(c => c.name === "issue"))
+      this.ctx.storage.sql.exec("ALTER TABLE inbox_actions ADD COLUMN issue INTEGER");
+
   }
   // Each machine's collector publishes its own snapshot. The first machine in
   // order that published in the last five minutes also reads the inbox and
@@ -138,100 +130,13 @@ export class Portfolio extends DurableObject<Env> {
   messageRun(id: string, input: MessageInput) { return this.runs.message(id, input); }
   screenshot(id: string, screenshotId: string, owner?: string, generation?: number) { return this.runs.screenshot(id, screenshotId, owner, generation); }
   cancelRun(id: string) { return this.runs.cancel(id); }
-  async archiveRun(id: string, archived: boolean) {
-    const run = await this.runs.archive(id, archived);
-    // Done on an email conversation archives its Gmail thread too; Reopen
-    // withdraws the request until the machine on duty applies it.
-    if (run?.emailThread) {
-      if (archived) await this.archiveHandledEmails([run.emailThread]);
-      else {
-        this.requestInboxAction(run.emailThread, "archive", true);
-        this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE thread=?", run.emailThread);
-      }
-    }
-    return run;
-  }
-  // Queue a Gmail archive for inbox threads whose conversation is Done and
-  // that nobody has written to since; a newer email stays in the inbox. A
-  // thread no current read can see waits for one that can, instead of being
-  // lost or judged on an old read; a complete read that lacks it shows it out
-  // of the inbox.
-  async archiveHandledEmails(threadIds?: string[]) {
-    const snapshots = this.overview();
-    const inbox = currentInbox(snapshots);
-    const waiting = (threadIds ?? []).filter((thread) =>
-      !inbox || freshness(inbox.observedAt) || (inbox.state !== "ok" && !inbox.threads.some((t) => t.id === thread)));
-    for (const thread of waiting)
-      this.ctx.storage.sql.exec("INSERT INTO deferred_archives(thread,requested) VALUES(?,?) ON CONFLICT(thread) DO NOTHING", thread, Date.now());
-    const ids = threadIds?.filter((thread) => !waiting.includes(thread));
-    if (!inbox || ids?.length === 0) return;
-    const conversations = await this.runs.list({ email: true });
-    const actions = this.inboxActions();
-    const queued = new Set(actions.filter((a) => a.state === "queued").map((a) => a.threadId));
-    for (const row of inboxQueue(inbox, currentWork(snapshots)?.issues ?? [], conversations, actions))
-      if (row.state === "handled" && row.thread.inInbox && !queued.has(row.thread.id) && (!ids || ids.includes(row.thread.id)))
-        this.requestInboxAction(row.thread.id, "archive");
-  }
+  // Done finishes an activity; source email is archived only by an explicit action.
+  archiveRun(id: string, archived: boolean) { return this.runs.archive(id, archived); }
   moveRun(id: string) { return this.runs.move(id); }
   runners() { return this.runs.runners(); }
   claimRun(owner: string, activeRunIds: string[], lanes: Lane[] | undefined, host: RunnerHost) { return this.runs.claim(owner, activeRunIds, lanes, host); }
   heartbeatRun(owner: string, id: string, generation: number, host: RunnerHost) { return this.runs.heartbeat(owner, id, generation, host); }
   reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) { return this.runs.report(owner, id, generation, progress, host); }
-  review(): PublishedReview | null {
-    const row = this.ctx.storage.sql.exec<{ payload: string; published: number }>("SELECT payload,published FROM daily_review WHERE id=1").toArray()[0];
-    if (!row) return null;
-    const review = reviewSchema.parse(JSON.parse(row.payload));
-    const email = this.ctx.storage.sql.exec<{ hash: string; state: string }>("SELECT hash,state FROM review_emails WHERE day=?", review.date).toArray()[0];
-    const state = email?.state === "sent" ? "sent" : email?.state === "failed" ? "failed" : "pending";
-    return { ...review, publishedAt: row.published, email: !email ? "not requested" : email.hash !== digest(JSON.stringify(review)) ? `previous edition ${state}` : state };
-  }
-  async publishReview(review: Review, sendDaily: boolean) {
-    const now = Date.now();
-    const editionHash = digest(JSON.stringify(review));
-    const problem = reviewProblem(review, now, this.env.TIME_ZONE);
-    if (problem || digest(review.brief) !== review.briefSha256) return { status: 400, error: problem || "Review hash mismatch" };
-    const work = currentWork(await this.overview());
-    if (!work || now - work.observedAt > 10 * 60_000) return { status: 409, error: "Refresh Projects work evidence before publishing" };
-    const previous = this.review();
-    if (previous && previous.verifiedAt > review.verifiedAt) return { status: 409, error: "A newer review is already published" };
-    const outstanding = this.ctx.storage.sql.exec<{hash:string;state:string}>("SELECT hash,state FROM review_emails WHERE day=?", review.date).toArray()[0];
-    if (outstanding?.state === "pending" && outstanding.hash !== editionHash) return { status: 409, error: "Earlier edition has unconfirmed delivery; verify it before publishing another" };
-    // Commit the visible edition before any external side effect.
-    this.ctx.storage.sql.exec("INSERT INTO daily_review(id,payload,published) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,published=excluded.published", JSON.stringify(review), now);
-    if (!sendDaily) return { status: 200, published: true, email: "not requested", hash: review.briefSha256 };
-    if (!this.env.EMAIL || !this.env.EMAIL_FROM || !allowed(this.env.OWNER_EMAIL, this.env)) return { status: 503, published: true, error: "Daily email is not configured for the owner" };
-    // Email has no idempotency key: store the EXACT message, send it once and
-    // resend only after a reported failure. A send whose outcome was never
-    // recorded, such as one cut off by a restart, needs verification instead.
-    const message = reviewEmail(review, { from: this.env.EMAIL_FROM, to: this.env.OWNER_EMAIL, site: this.env.SITE_URL, repo: work.repo });
-    const claimed = this.ctx.storage.sql.exec("INSERT INTO review_emails(day,hash,payload,started,state) VALUES(?,?,?,?,'pending') ON CONFLICT(day) DO UPDATE SET hash=excluded.hash,payload=excluded.payload,started=excluded.started,state='pending',provider_id=NULL WHERE review_emails.state='failed' RETURNING day", review.date, editionHash, JSON.stringify(message), now).toArray().length === 1;
-    // A concurrent publish waits for this instance's send instead of guessing.
-    if (!claimed) await this.reviewSend;
-    const mail = this.ctx.storage.sql.exec<{hash:string;payload:string;state:string}>("SELECT hash,payload,state FROM review_emails WHERE day=?", review.date).one();
-    if (mail.state === "sent") return { status: 200, published: true, email: "already sent", hash: review.briefSha256 };
-    if (mail.hash !== editionHash) return { status: 409, published: true, error: "Earlier edition has unconfirmed delivery; resolve it before another send" };
-    if (!claimed)
-      return mail.state === "failed"
-        ? { status: 503, published: true, error: "Email delivery failed; retry this exact edition" }
-        : { status: 409, published: true, error: "Delivery needs verification; an earlier send was never confirmed" };
-    const attempt = (async () => {
-      try {
-        const result = await this.env.EMAIL.send(JSON.parse(mail.payload));
-        this.ctx.storage.sql.exec("UPDATE review_emails SET state='sent',provider_id=? WHERE day=?", String(result.messageId).slice(0, 200), review.date);
-        return true;
-      } catch {
-        this.ctx.storage.sql.exec("UPDATE review_emails SET state='failed' WHERE day=?", review.date);
-        return false;
-      }
-    })();
-    this.reviewSend = attempt;
-    const sent = await attempt.finally(() => {
-      if (this.reviewSend === attempt) this.reviewSend = undefined;
-    });
-    return sent
-      ? { status: 200, published: true, email: "sent", hash: review.briefSha256 }
-      : { status: 503, published: true, error: "Email delivery failed; retry this exact edition" };
-  }
   rate(key: string, max: number, window: number) {
     const now = Date.now();
     this.ctx.storage.sql.exec("DELETE FROM limits WHERE expires <= ?", now);
@@ -332,30 +237,6 @@ export class Portfolio extends DurableObject<Env> {
         JSON.stringify(stored),
       )
       .toArray();
-    // Emails marked Done before Done archived them in Gmail are archived once,
-    // from the first complete inbox read; a failure retries on the next read.
-    if (result.length && snapshot.inbox?.state === "ok" && !this.ctx.storage.kv.get("handledEmailsArchived"))
-      try {
-        await this.archiveHandledEmails();
-        this.ctx.storage.kv.put("handledEmailsArchived", Date.now());
-      } catch {}
-    // Done that found no read able to see its thread archives once one can; a
-    // failure retries on the next read, and after a week it lapses, like other
-    // inbox requests. The machine on duty still applies each archive only
-    // against its own fresh read (collector/inbox-actions.ts), never this one.
-    if (result.length && snapshot.inbox)
-      this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE requested<?", Date.now() - 7 * 86400_000);
-    const inbox = result.length && snapshot.inbox ? currentInbox(this.overview()) : undefined;
-    const seen = inbox && inbox.state !== "unavailable"
-      ? this.ctx.storage.sql.exec<{ thread: string }>("SELECT thread FROM deferred_archives").toArray()
-          .map((row) => row.thread)
-          .filter((thread) => inbox.state === "ok" || inbox.threads.some((t) => t.id === thread))
-      : [];
-    if (seen.length)
-      try {
-        await this.archiveHandledEmails(seen);
-        for (const thread of seen) this.ctx.storage.sql.exec("DELETE FROM deferred_archives WHERE thread=?", thread);
-      } catch {}
     return { accepted: result.length === 1 };
   }
   overview() {
@@ -442,16 +323,16 @@ export class Portfolio extends DurableObject<Env> {
   }
   inboxActions(): InboxAction[] {
     return this.ctx.storage.sql
-      .exec<{ thread: string; action: InboxAction["action"]; requested: number; state: InboxAction["state"]; message: string | null; updated: number }>(
-        "SELECT thread,action,requested,state,message,updated FROM inbox_actions ORDER BY requested",
+      .exec<{ thread: string; action: InboxAction["action"]; requested: number; state: InboxAction["state"]; message: string | null; updated: number; issue: number | null }>(
+        "SELECT thread,action,requested,state,message,updated,issue FROM inbox_actions ORDER BY requested",
       )
       .toArray()
-      .map((r) => ({ threadId: r.thread, action: r.action, requestedAt: r.requested, state: r.state, message: r.message, updatedAt: r.updated }));
+      .map((r) => ({ threadId: r.thread, action: r.action, requestedAt: r.requested, state: r.state, message: r.message, updatedAt: r.updated, ...(r.issue !== null ? { issue: r.issue } : {}) }));
   }
   // One request per thread. Only a thread in the latest inbox read can be
   // queued; a queued request can be withdrawn before the machine on duty
   // applies it.
-  requestInboxAction(threadId: string, action: InboxAction["action"], cancel = false) {
+  requestInboxAction(threadId: string, action: InboxAction["action"], cancel = false, issue?: number) {
     const now = Date.now();
     this.ctx.storage.sql.exec("DELETE FROM inbox_actions WHERE state<>'queued' AND updated<?", now - 7 * 86400_000);
     if (cancel) {
@@ -460,24 +341,29 @@ export class Portfolio extends DurableObject<Env> {
     }
     const thread = currentInbox(this.overview())?.threads.find((t) => t.id === threadId);
     if (!thread) return null;
+    if (action === "link" && (!issue || !currentWork(this.overview())?.issues.some(i => i.number === issue && i.open))) return null;
+    if (action !== "link" && issue !== undefined) return null;
+    // A different queued operation must finish before accepting another one.
+    const pending = this.inboxActions().find(a => a.threadId === threadId && a.state === "queued");
+    if (pending) return pending.action === action && pending.issue === issue ? this.inboxActions() : null;
     this.ctx.storage.sql.exec(
-      "INSERT INTO inbox_actions(thread,action,requested,state,message,updated) VALUES(?,?,?,'queued',NULL,?) ON CONFLICT(thread) DO UPDATE SET action=excluded.action,requested=excluded.requested,state='queued',message=NULL,updated=excluded.updated WHERE inbox_actions.state<>'queued' OR inbox_actions.action<>excluded.action",
-      threadId, action, now, now,
+      "INSERT INTO inbox_actions(thread,action,requested,state,message,updated,issue) VALUES(?,?,?,'queued',NULL,?,?) ON CONFLICT(thread) DO UPDATE SET action=excluded.action,requested=excluded.requested,state='queued',message=NULL,updated=excluded.updated,issue=excluded.issue",
+      threadId, action, now, now, issue ?? null,
     );
     return this.inboxActions();
   }
   pendingInboxActions(): PendingInboxAction[] {
     return this.inboxActions()
       .filter((a) => a.state === "queued")
-      .map(({ threadId, action, requestedAt }) => ({ threadId, action, requestedAt }));
+      .map(({ threadId, action, requestedAt, issue }) => ({ threadId, action, requestedAt, ...(issue !== undefined ? { issue } : {}) }));
   }
   // Only the exact request the machine on duty was given, and only while
   // still queued.
   reportInboxAction(r: InboxActionReport) {
     const updated = this.ctx.storage.sql
       .exec(
-        "UPDATE inbox_actions SET state=?,message=?,updated=? WHERE thread=? AND action=? AND requested=? AND state='queued' RETURNING thread",
-        r.state, r.message, Date.now(), r.threadId, r.action, r.requestedAt,
+        "UPDATE inbox_actions SET state=?,message=?,updated=? WHERE thread=? AND action=? AND requested=? AND issue IS ? AND state='queued' RETURNING thread",
+        r.state, r.message, Date.now(), r.threadId, r.action, r.requestedAt, r.issue ?? null,
       )
       .toArray();
     return { updated: updated.length === 1 };
@@ -612,11 +498,8 @@ export async function handle(
   if (runnerRoutes.has(url.pathname) && !runner)
     return new Response("Unauthorized", { status: 401 });
   const store = env.PORTFOLIOS.getByName(env.PORTFOLIO_ID);
-  // Only the machine on duty applies requests and publishes the reviewed
-  // daily edition; the owner, signed in or local, may act as it.
+  // Only the machine on duty applies requests; the owner may act as it.
   const onDuty = async () => !collecting || (await store.collectorDuties(machine!.machine));
-  if (collecting && url.pathname === "/api/review" && !(await onDuty()))
-    return Response.json({ error: "Only the machine on duty publishes the daily review." }, { status: 409 });
   if (url.pathname === "/api/runner/readiness") {
     if (request.method !== "GET") return new Response("Method not allowed", {status: 405});
     const status = await runtimeStatus(store, env);
@@ -865,14 +748,10 @@ export async function handle(
       );
     }
   }
-  if (url.pathname === "/api/review" && request.method === "POST") {
-    let input;
-    try { input = z.object({ review: reviewSchema, sendDaily: z.boolean().default(false) }).strict().parse(await readJson(request, 30000)); }
-    catch { return Response.json({ error: "Invalid reviewed edition" }, { status: 400 }); }
-    if (!(await store.rate("review-publication", 20, 3600_000))) return new Response("Try again later", { status: 429 });
-    const result = await store.publishReview(input.review, input.sendDaily);
-    return Response.json(result, { status: result.status });
-  }
+  // Legacy publishers fail closed without reading the payload or sending mail.
+  // Historical SQLite records are retained, but never returned or retried.
+  if (url.pathname === "/api/review")
+    return Response.json({ error: "Daily briefs have been retired." }, { status: 410 });
   if (url.pathname === "/api/collector/duties" && request.method === "GET")
     return Response.json({ duties: await onDuty() });
   // Requests go only to the machine on duty, so one machine applies each.
@@ -932,8 +811,8 @@ export async function handle(
     if (!(await store.rate(`inbox:${caller}`, 120, 60_000)))
       return Response.json({ error: "Try again shortly." }, { status: 429 });
     const actions = await trace("inbox.action", {}, () =>
-      store.requestInboxAction(input.threadId, input.action, input.cancel));
-    return Response.json(actions ? { actions } : { error: "This email is no longer in the inbox." }, { status: actions ? 200 : 404 });
+      store.requestInboxAction(input.threadId, input.action, input.cancel, input.issue));
+    return Response.json(actions ? { actions } : { error: "This email or work item is unavailable, or another action is still queued." }, { status: actions ? 200 : 404 });
   }
   const inboxThread = /^\/api\/inbox\/threads\/([a-f0-9]{10,40})$/.exec(url.pathname);
   if (inboxThread && request.method === "GET") {
@@ -997,11 +876,9 @@ export async function handle(
           : snapshot,
       ),
       archives: await store.archives(),
-      review: await store.review(),
       closes: await store.closes(),
       inboxActions: await store.inboxActions(),
       machines: await store.machineList(),
-      timeZone: env.TIME_ZONE,
       serverTime: Date.now(),
     });
   if (url.pathname.startsWith("/api/"))
