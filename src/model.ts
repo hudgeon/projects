@@ -17,6 +17,12 @@ export const sourceSchema = z
     observedAt: time,
   })
   .strict();
+// Provider-reported subscription limits: never inferred from session tokens.
+export const quotaSchema = z.discriminatedUnion("state", [
+  z.object({state: z.literal("ok"), observedAt: time, weekly: z.object({usedPercent: z.number().min(0).max(100), resetsAt: time}).strict()}).strict(),
+  z.object({state: z.enum(["unavailable", "unsupported"]), observedAt: time}).strict(),
+]);
+export type Quota = z.infer<typeof quotaSchema>;
 export const sessionSchema = z
   .object({
     id,
@@ -107,6 +113,7 @@ export const snapshotSchema = z
     unassignedSessions: z.array(sessionSchema).max(2000),
     work: workSnapshotSchema.optional(),
     inbox: inboxSchema.optional(),
+    quotas: z.object({codex: quotaSchema, claude: quotaSchema}).strict().optional(),
   })
   .strict();
 export type Project = z.infer<typeof projectSchema>;
@@ -139,6 +146,13 @@ export type PortfolioView = {
 export const STALE_AFTER = 5 * 60_000;
 export function freshness(at: number, now = Date.now()) {
   return now - at > STALE_AFTER || at > now + 60_000;
+}
+// Machines can share a subscription. Select one observation; never add them.
+// A failed newest read is shown as unavailable rather than hiding it with an
+// older successful value. The source machine remains visible in the UI.
+export function currentQuota(snapshots: Snapshot[], provider: "codex" | "claude") {
+  return snapshots.flatMap((s) => s.quotas ? [{host: s.host, ...s.quotas[provider]}] : [])
+    .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null;
 }
 function worktreeFor(cwd: string, worktrees: Worktree[]) {
   return worktrees

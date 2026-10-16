@@ -116,6 +116,23 @@ collector and runner, written by `scripts/install-machine.mjs`:
 
 ## Conversations
 
+The top of each signed-in view shows weekly subscription allowance remaining
+for Codex and Claude, plus the reported reset time. These are provider-reported
+percentages, not estimated token balances. Each collector reads its native
+login's usage information without starting a model turn. The newest machine's
+report is selected once, never added across machines; its source and read time
+are available on the indicator. A missing/failed read is unavailable, a read
+older than five minutes is overdue, and an elapsed reset waits for a new read.
+
+Codex uses the native app-server's read-only `account/rateLimits/read` method
+and selects only its seven-day subscription window. Claude uses the native
+login's OAuth usage endpoint. Credentials stay on the machine and in memory
+for that HTTPS read; only allowlisted percentages and timestamps leave it.
+The collector does not refresh expired credentials, change logins or enable
+extra usage. A missing, expired or inaccessible native login shows unavailable.
+The Claude endpoint is a native-client interface rather than a public API
+contract, so an upstream change also shows unavailable until the reader is updated.
+
 Each conversation gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
 Codex it is Claude. When its app declines the conversation, reaches its usage

@@ -40,6 +40,7 @@ import {
   ago,
   currentGithub,
   freshness,
+  currentQuota,
   lastActivity,
   projectHealth,
   pullConcern,
@@ -61,6 +62,25 @@ const verdicts: Record<ProjectHealth["verdict"], [string, string]> = {
   progress: ["In progress", "working"],
   clean: ["Git clean", "good"],
 };
+function WeeklyQuotas({snapshots}: {snapshots: Snapshot[]}) {
+  const now = Date.now();
+  return <aside className="weekly-quotas" aria-label="Weekly quota remaining">
+    <span className="quota-heading">Weekly remaining</span>
+    {(["codex", "claude"] as const).map((provider) => {
+      const quota = currentQuota(snapshots, provider);
+      const stale = !!quota && freshness(quota.observedAt, now);
+      const expired = quota?.state === "ok" && quota.weekly.resetsAt <= now;
+      const available = quota?.state === "ok" && !stale && !expired;
+      const name = provider === "codex" ? "Codex" : "Claude";
+      const reset = quota?.state === "ok" ? new Date(quota.weekly.resetsAt).toLocaleString(undefined, {weekday: "short", hour: "numeric", minute: "2-digit"}) : null;
+      const value = available ? `${Math.floor(100 - quota.weekly.usedPercent)}% left` : stale ? "update overdue" : expired ? "awaiting refresh" : "unavailable";
+      return <span key={provider} className={`quota-item${available && quota.weekly.usedPercent >= 90 ? " quota-low" : ""}`} title={quota ? `Latest report from ${hostName(quota.host)} · ${new Date(quota.observedAt).toLocaleString()}${reset ? ` · resets ${reset}` : ""}. Subscription limit, not a token balance.` : "Waiting for a machine to report its subscription limit."}>
+        <strong>{name}</strong> <span>{value}</span>
+        {available && <span className="quota-reset">resets {reset}</span>}
+      </span>;
+    })}
+  </aside>;
+}
 function group(snapshots: Snapshot[]) {
   const groups = new Map<string, Observation[]>();
   for (const s of snapshots)
@@ -683,6 +703,7 @@ function Dashboard() {
           Sign out
         </button>
       </header>
+      <WeeklyQuotas snapshots={snapshots} />
       <main className={`view-${view}`}>
         {view === "project" && (
           <h1 className="page-title">{selectedProjectName ?? "Project"}</h1>

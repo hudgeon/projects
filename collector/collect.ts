@@ -1,4 +1,5 @@
 import { readInbox } from "./inbox";
+import { readQuotas } from "./quotas";
 import { trackedThreads } from "../src/inbox-model";
 import { readWork } from "./work";
 import { execFile } from "node:child_process";
@@ -26,6 +27,9 @@ export function subprocessEnv() {
     "COLLECTOR_TOKEN",
     "RUNNER_TOKEN",
     "CLOUDFLARE_API_TOKEN",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
   ])
     delete env[key];
   return env;
@@ -877,11 +881,12 @@ export async function collect(
     sessions: [],
     source: source("unsupported", `${app} is not used on this machine.`, now),
   });
-  const [c, a] = await Promise.all([
+  const [c, a, quotas] = await Promise.all([
     config.agents.includes("codex") ? codex(config.home, now) : unused("Codex"),
     config.agents.includes("claude")
       ? claude(config.home, now)
       : unused("Claude"),
+    readQuotas(config.home, config.agents, subprocessEnv()),
   ]);
   const sources = { codex: c.source, claude: a.source };
   const projects: Project[] = [];
@@ -933,6 +938,7 @@ export async function collect(
     collectedAt: now,
     projects,
     work,
+    quotas,
     ...(inbox && config.inboxAccount
       ? {
           inbox: await readInbox(

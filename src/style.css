@@ -744,6 +744,19 @@ button.signout {
   gap: 20px;
   padding: 0 max(20px, calc((100vw - 1320px) / 2));
 }
+.weekly-quotas {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 10px max(20px, calc((100vw - 1320px) / 2));
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  font-size: 13px;
+}
+.quota-heading, .quota-reset { color: var(--muted); }
+.quota-item { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; }
+.quota-low { color: #a04d12; }
 .topbar .brand {
   color: #fff;
   text-decoration: none;
