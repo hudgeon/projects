@@ -21,6 +21,7 @@ import {
 } from "../runner/native";
 import {
   activityBrief,
+  completionProblem,
   contextConversation,
   executeRun,
   savePrivate,
@@ -263,10 +264,16 @@ test("an image fetch failure before native startup remains safely retryable", as
     assert.equal(JSON.parse(await readFile(path.join(dir, 'runs', `${o.run.id}.json`), 'utf8')).progress.state, 'completed');
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
+const delivery = {
+  scope: "Complete the requested fixture change",
+  checks: {status: "verified" as const, evidence: "Fixture checks passed at the fixture revision"},
+  ...Object.fromEntries(["review", "merge", "deployment", "visual", "sync"].map(name => [name, {status: "not_required" as const, evidence: "This fixture request ends at local verification"}])),
+} as NonNullable<MasterDecision["delivery"]>;
 const complete: MasterDecision = {
   action: "complete",
   title: null,
   summary: "Verified completion",
+  delivery,
   task: null,
 };
 const dispatch = (workspace = "new"): MasterDecision => ({
@@ -2937,4 +2944,50 @@ test("a wrap-up request waits for the turn to take input instead of being lost",
     assert.equal(steered.length, 1);
     assert.match(steered[0], /past its limit/);
   } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+
+test("change completion returns to the master until every applicable delivery gate is accounted for", async () => {
+  for (const gate of ["missing", "checks", "review", "merge", "deployment", "visual", "sync"]) {
+    const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [], reports: Progress[] = [];
+    let masters = 0;
+    o.report = async report => {reports.push(structuredClone(report));};
+    o.turn = async opts => {
+      calls.push(opts);
+      await opts.onSession(randomUUID());
+      if (!opts.readOnly) return result;
+      masters++;
+      if (masters === 1) return {...dispatch(), task: {...dispatch().task!, mode: "change"}};
+      if (masters === 2) return {...complete, delivery: gate === "missing" ? null : {...delivery, [gate]: {status: "pending", evidence: "Required work remains"}}};
+      assert.match(opts.prompt, /Your decision was not carried out/);
+      assert.match(opts.prompt, gate === "missing" ? /needs a delivery record/ : new RegExp(gate));
+      assert.equal(reports.at(-1)?.state, "running", "an incomplete decision never publishes completion");
+      // A draft-only request can legitimately omit release steps with reasons.
+      return complete;
+    };
+    try {
+      await executeRun(o);
+      assert.equal(masters, 3, gate);
+      assert.equal(calls.filter(call => !call.readOnly).length, 1, "rejecting completion never replays a child");
+      assert.equal(reports.at(-1)?.state, "completed");
+      const saved = JSON.parse(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"));
+      assert.deepEqual(saved.delivery, delivery);
+      assert.ok(reports.every(report => !("delivery" in report)), "the assessment stays out of progress/snapshots");
+      // The new journal remains readable and finishing the same generation is idempotent.
+      await executeRun(o);
+      assert.equal(calls.length, 4);
+    } finally {await rm(dir, {recursive: true, force: true});}
+  }
+});
+
+test("read-only answers and legacy decisions still parse; gate evidence cannot be blank or silently omitted", () => {
+  assert.equal(completionProblem({...complete, delivery: undefined}, []), null);
+  assert.equal(completionProblem({...complete, action: "blocked", delivery: {...delivery, sync: {status: "pending", evidence: "Machine unavailable"}}}, []), null);
+  assert.match(completionProblem({...complete, delivery: {...delivery, visual: {status: "pending", evidence: "Screen unobserved"}}}, [])!, /visual/);
+  assert.doesNotThrow(() => masterDecisionSchema.parse({...complete, delivery: undefined}));
+  const {sync, ...missing} = delivery;
+  assert.equal(masterDecisionSchema.safeParse({...complete, delivery: missing}).success, false);
+  assert.equal(masterDecisionSchema.safeParse({...complete, delivery: {...delivery, merge: {status: "not_required", evidence: " "}}}).success, false);
+  const schema = outputSchema(masterDecisionSchema) as {required: string[]};
+  assert.ok(schema.required.includes("delivery"));
 });

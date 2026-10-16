@@ -172,6 +172,18 @@ without discarding saved work, approval boundaries or recovery journals.
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.
+Change work is assigned end to end to one helper, with follow-ups in its owned
+worktree for fixes and remaining delivery. Independent review and capability
+changes can still require another helper. Before reporting completion after a
+change child, the master must account for checks, review, merge, deployment,
+visual verification and required machine sync for the **current request**. Each
+gate includes specific evidence or a reason it does not apply; missing or pending
+gates send the decision back to the master without replaying work. Draft-only
+requests end at a verified saved draft. The final delivery record stays in the
+private local journal, not telemetry or portfolio snapshots. This makes the
+master's assessment explicit; it does not independently attest external systems
+or replace the repository's release gates.
+
 The master checks evidence before declaring anything complete; a native turn
 ending does not prove tests, merge or deployment, and nothing here invents
 progress or verification. Repository instructions own setup, checks and

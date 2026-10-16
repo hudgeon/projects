@@ -311,6 +311,25 @@ export const runnerReportSchema = runnerIdentitySchema
 export const runnerHeartbeatSchema = runnerIdentitySchema
   .extend({ id: uuid, generation: z.number().int().positive() })
   .strict();
+// An explicit report for this request, not a claim that the runner independently
+// verified external systems. Older journals and read-only answers may omit it.
+const deliveryGateSchema = z
+  .object({
+    status: z.enum(["verified", "not_required", "pending"]),
+    evidence: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export const deliverySchema = z
+  .object({
+    scope: z.string().trim().min(1).max(600),
+    checks: deliveryGateSchema,
+    review: deliveryGateSchema,
+    merge: deliveryGateSchema,
+    deployment: deliveryGateSchema,
+    visual: deliveryGateSchema,
+    sync: deliveryGateSchema,
+  })
+  .strict();
 export const masterDecisionSchema = z
   .object({
     action: z.enum(["dispatch", "complete", "blocked"]),
@@ -320,6 +339,7 @@ export const masterDecisionSchema = z
     summary: z.string().max(8000),
     // Rotate only after this decision; never interrupt an executing child.
     resetContext: z.boolean().nullable().optional(),
+    delivery: deliverySchema.nullable().optional(),
     task: z
       .object({
         projectId,
