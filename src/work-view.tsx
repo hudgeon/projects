@@ -14,6 +14,8 @@ import {
   currentWork,
   decidedBy,
   isDone,
+  historyIssues,
+  nextCommitment,
   RECENT_WORK_DAYS,
   type Close,
   type CurrentWork,
@@ -356,6 +358,7 @@ export function WorkCard({
   archives,
   detail = false,
   emailThread,
+  earlier = [],
 }: {
   detail?: boolean;
   emailThread?: string;
@@ -364,8 +367,11 @@ export function WorkCard({
   conversations: RunSummary[];
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
+  earlier?: RunSummary[];
 }) {
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState<"activity" | "discuss" | null>(
+    null,
+  );
   const open = detail;
   const navigate = useNavigate({ from: "/" });
   const { issue, pulls, sessions } = row;
@@ -374,6 +380,7 @@ export function WorkCard({
   const working = conversations.filter((c) => !awaitsYou(c)).length;
   const ready = conversations.length - working;
   const failing = pulls.filter((pr) => pr.checks === "failing").length;
+  const commitment = nextCommitment(issue);
   const signals = [
     row.live ? "Session working now" : "",
     working ? `${working} conversation${working === 1 ? "" : "s"} working` : "",
@@ -381,6 +388,7 @@ export function WorkCard({
     row.emailAttention ? "New email" : "",
     failing ? `${failing} PR${failing === 1 ? "" : "s"} failing checks` : "",
     p?.due ? `Due ${p.due}` : "",
+    commitment ? `${commitment.date}: ${commitment.what}` : "",
   ].filter(Boolean);
   const names = projectNames(snapshots, archives);
   return (
@@ -399,6 +407,9 @@ export function WorkCard({
             <span className="work-card-title">{issue.title}</span>
           )}
         </span>
+        {!detail && p?.position && (
+          <span className="work-card-overview">{plainText(p.position)}</span>
+        )}
         <span className="work-card-next">
           {p?.next ? plainText(p.next) : "No next step recorded yet."}
         </span>
@@ -408,9 +419,13 @@ export function WorkCard({
       </Link>
       {open && (
         <div className="work-card-body">
+          <p>
+            <span className="label">Clients</span>
+            {issue.customers.join(", ") || "No client recorded"}
+          </p>
           {p?.why && (
             <p>
-              <span className="label">Why</span>
+              <span className="label">Outcome</span>
               <EvidenceText text={p.why} />
             </p>
           )}
@@ -431,14 +446,125 @@ export function WorkCard({
               No current position has been recorded on this issue.
             </p>
           )}
+          {p && <p className="subtle">Overview reviewed {p.reviewed}</p>}
+          <div className="actions">
+            {!row.done && (
+              <>
+                <button className="btn" onClick={() => setComposing("discuss")}>
+                  Discuss this work
+                </button>
+                <button
+                  className="btn-quiet"
+                  onClick={() => setComposing("activity")}
+                >
+                  Start activity
+                </button>
+              </>
+            )}
+            <a href={issue.url} target="_blank" rel="noreferrer">
+              Issue #{issue.number}
+            </a>
+            <CloseControl row={row} now={now} />
+          </div>
+          {composing && (
+            <Composer
+              key={composing}
+              snapshots={snapshots}
+              archives={archives}
+              workIssue={issue.number}
+              projectId={
+                composing === "discuss"
+                  ? workRepositoryProject(snapshots, archives)
+                  : workProject(issue, snapshots, archives)
+              }
+              emailThread={emailThread}
+              context={
+                composing === "discuss"
+                  ? {
+                      title: `Discuss ${issue.title}`,
+                      detail: `Discuss this work: ${issue.url}. Keep its overview, clients, people and commitments current as we agree changes.`,
+                    }
+                  : emailContext(issue, emailThread, snapshots)
+              }
+              autoFocus
+              placeholder={
+                composing === "discuss"
+                  ? "What has changed? Who is involved, what is due, or how should this work be combined or split?"
+                  : `What should happen next on “${issue.title}”?`
+              }
+              submitLabel={composing === "discuss" ? "Discuss" : "Start"}
+              onCancel={() => setComposing(null)}
+              onStarted={(run) => {
+                setComposing(null);
+                void navigate({
+                  to: "/",
+                  search: workSearch(issue.number, emailThread, run.id),
+                });
+              }}
+            />
+          )}
+          <WorkFacts issue={issue} />
+          {!!(
+            historyIssues(issue).length || issue.details?.continuesAs.length
+          ) && (
+            <div className="work-history">
+              {(
+                [
+                  ["Combined from", issue.details?.combinedFrom],
+                  ["Split from", issue.details?.splitFrom],
+                  ["Continues as", issue.details?.continuesAs],
+                ] as const
+              ).map(
+                ([title, numbers]) =>
+                  !!numbers?.length && (
+                    <p key={title}>
+                      <span className="label">{title}</span>
+                      {numbers.map((n, i) => {
+                        const known = currentWork(snapshots)?.issues.find(
+                          (item) => item.number === n,
+                        );
+                        return (
+                          <React.Fragment key={n}>
+                            {i > 0 && ", "}
+                            {known ? (
+                              <Link to="/" search={workSearch(n)}>
+                                {known.title}
+                              </Link>
+                            ) : (
+                              <a
+                                href={issue.url.replace(
+                                  /\/issues\/\d+$/,
+                                  `/issues/${n}`,
+                                )}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Work #{n}
+                              </a>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </p>
+                  ),
+              )}
+            </div>
+          )}
           {issue.latestUpdate && (
-            <p className="subtle clamp">
-              <a href={issue.latestUpdate.url} target="_blank" rel="noreferrer">
-                Latest update
-              </a>{" "}
-              {ago(issue.latestUpdate.at, now)}:{" "}
-              {plainText(issue.latestUpdate.body)}
-            </p>
+            <details className="fold">
+              <summary>Latest supporting update</summary>
+              <p className="subtle">
+                <a
+                  href={issue.latestUpdate.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Latest update
+                </a>{" "}
+                {ago(issue.latestUpdate.at, now)}:{" "}
+                {plainText(issue.latestUpdate.body)}
+              </p>
+            </details>
           )}
           {issue.updatesState === "unavailable" && (
             <p className="subtle">Latest comments unavailable.</p>
@@ -460,6 +586,25 @@ export function WorkCard({
                 />
               ))}
             </div>
+          )}
+          {!!earlier.length && (
+            <details className="fold">
+              <summary>Earlier activity ({earlier.length})</summary>
+              <p className="subtle">
+                Retained from the previous work. Shared history does not assign
+                an activity to a new outcome.
+              </p>
+              <div className="rows">
+                {earlier.map((run) => (
+                  <ConversationRow
+                    key={run.id}
+                    run={run}
+                    names={names}
+                    search={workSearch(run.workIssue!, undefined, run.id)}
+                  />
+                ))}
+              </div>
+            </details>
           )}
           {(!!issue.emailLinks?.length || !!pulls.length) && (
             <ul className="work-links">
@@ -507,40 +652,66 @@ export function WorkCard({
                 <Restart app={s.app} id={s.sessionId} host={s.host} />
               </p>
             ))}
-          <div className="actions">
-            {!row.done && (
-              <button className="btn-quiet" onClick={() => setComposing(true)}>
-                Start activity
-              </button>
-            )}
-            <a href={issue.url} target="_blank" rel="noreferrer">
-              Issue #{issue.number}
-            </a>
-            <CloseControl row={row} now={now} />
-          </div>
-          {composing && (
-            <Composer
-              snapshots={snapshots}
-              archives={archives}
-              workIssue={issue.number}
-              projectId={workProject(issue, snapshots, archives)}
-              emailThread={emailThread}
-              context={emailContext(issue, emailThread, snapshots)}
-              autoFocus
-              placeholder={`What should happen next on “${issue.title}”?`}
-              onCancel={() => setComposing(false)}
-              onStarted={(run) => {
-                setComposing(false);
-                void navigate({
-                  to: "/",
-                  search: workSearch(issue.number, emailThread, run.id),
-                });
-              }}
-            />
-          )}
         </div>
       )}
     </li>
+  );
+}
+export function WorkFacts({ issue }: { issue: Issue }) {
+  if (issue.details === null)
+    return (
+      <p className="notice">
+        Some people, commitments or history could not be read. Check the linked
+        issue before relying on this overview.
+      </p>
+    );
+  return (
+    <div className="work-facts">
+      <section aria-label="People">
+        <h2>People</h2>
+        {issue.details?.people.length ? (
+          <dl>
+            {issue.details.people.map((p, i) => (
+              <div key={i}>
+                <dt>{p.name}</dt>
+                <dd>{p.role || "Role not recorded"}</dd>
+                <dd className="subtle">
+                  Next: {p.next || "No action recorded"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="subtle">No people recorded yet.</p>
+        )}
+      </section>
+      <section aria-label="Commitments">
+        <h2>Commitments</h2>
+        {issue.details?.commitments.length ? (
+          <ul>
+            {issue.details.commitments.map((c, i) => (
+              <li key={i}>
+                <span className="commitment-date">
+                  {c.date ? (
+                    <time dateTime={c.date}>{c.date}</time>
+                  ) : (
+                    "Date unknown"
+                  )}
+                </span>
+                <div>
+                  {c.what}
+                  <span className="subtle commitment-owner">
+                    {c.owner || "Owner unknown"} · {c.state}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="subtle">No commitments recorded yet.</p>
+        )}
+      </section>
+    </div>
   );
 }
 // The bigger picture: open work grouped by who it is for and why, with the
@@ -558,6 +729,8 @@ export function BiggerWork({
   conversations: RunSummary[];
   now: number;
 }) {
+  const [discussing, setDiscussing] = useState(false);
+  const navigate = useNavigate({ from: "/" });
   const work = currentWork(snapshots);
   if (!work)
     return (
@@ -608,7 +781,29 @@ export function BiggerWork({
         <span className="subtle">
           {current.length} open{needs ? ` · ${needs} need you` : ""}
         </span>
+        <button className="btn-quiet" onClick={() => setDiscussing(true)}>
+          Discuss bigger work
+        </button>
       </div>
+      {discussing && (
+        <Composer
+          snapshots={snapshots}
+          archives={archives}
+          projectId={workRepositoryProject(snapshots, archives)}
+          autoFocus
+          placeholder="Describe new work, or which pieces you want to combine or split."
+          submitLabel="Discuss"
+          context={{
+            title: "Shape bigger work",
+            detail: `Help me shape bigger work: create, combine or split the pieces, keeping their overviews, clients, people and commitments current.`,
+          }}
+          onCancel={() => setDiscussing(false)}
+          onStarted={(run) => {
+            setDiscussing(false);
+            void navigate({ to: "/", search: { view: "today", run: run.id } });
+          }}
+        />
+      )}
       {degraded && (
         <p className="notice" role="status">
           Some sources are stale or unavailable, so sessions or new email may be
@@ -665,7 +860,7 @@ export function BiggerWork({
 // Business work may span repositories. Only a single explicit, current match
 // is a safe default; the coordinator can choose otherwise.
 export function workProject(
-  issue: Issue,
+  issue: Pick<Issue, "repos">,
   snapshots: Snapshot[],
   archives: ArchiveEntry[],
 ) {
@@ -682,6 +877,13 @@ export function workProject(
       .map((p) => p.id),
   );
   return matches.size === 1 ? [...matches][0] : undefined;
+}
+export function workRepositoryProject(
+  snapshots: Snapshot[],
+  archives: ArchiveEntry[],
+) {
+  const repo = currentWork(snapshots)?.repo;
+  return repo ? workProject({ repos: [repo] }, snapshots, archives) : undefined;
 }
 function emailContext(
   issue: Issue,
@@ -742,6 +944,11 @@ export function WorkDetail({
             emailThread={emailThread}
             conversations={props.conversations.filter(
               (c) => c.workIssue === number && !c.archivedAt,
+            )}
+            earlier={props.conversations.filter(
+              (c) =>
+                c.workIssue !== null &&
+                historyIssues(row.issue).includes(c.workIssue),
             )}
           />
         </ul>

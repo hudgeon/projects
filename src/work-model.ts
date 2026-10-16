@@ -106,13 +106,141 @@ export function emailLinks(body: string): z.infer<typeof emailLinkSchema>[] {
       links.set(id, {
         threadId: id,
         url,
-        subject: line.match(/\[([^\]]+)\]\(https:\/\/mail\.google\.com\//)?.[1].slice(0, 300),
+        subject: line
+          .match(/\[([^\]]+)\]\(https:\/\/mail\.google\.com\//)?.[1]
+          .slice(0, 300),
         context: line.match(/ · context: (.+)$/i)?.[1].slice(0, 1000),
         reviewedMessageId:
           line.match(/reviewed:\s*([a-f0-9]{10,40})(?![a-f0-9])/i)?.[1] ?? null,
       });
   }
   return [...links.values()].slice(0, 50);
+}
+// These human-editable sections live on the same issue as Current position.
+// Unknown owners/dates stay null; activity never manufactures a commitment.
+const day = z.iso.date();
+export const workDetailsSchema = z
+  .object({
+    people: z
+      .array(
+        z
+          .object({
+            name: label,
+            role: z.string().max(300),
+            next: z.string().max(600),
+          })
+          .strict(),
+      )
+      .max(30),
+    commitments: z
+      .array(
+        z
+          .object({
+            date: day.nullable(),
+            what: z.string().min(1).max(600),
+            owner: label.nullable(),
+            state: z.enum(["open", "done", "cancelled"]),
+          })
+          .strict(),
+      )
+      .max(50),
+    combinedFrom: z.array(issueNumber).max(50),
+    splitFrom: z.array(issueNumber).max(50),
+    continuesAs: z.array(issueNumber).max(50),
+  })
+  .strict();
+export type WorkDetails = z.infer<typeof workDetailsSchema>;
+export function workDetails(body: string): WorkDetails | null {
+  const section = (title: string) => {
+    const matches = [
+      ...body.matchAll(
+        new RegExp(
+          `^##[ \\t]+${title.replace(/ /g, "[ \\t]+")}[ \\t]*(?:\\r?\\n|$)([\\s\\S]*?)(?=^##[ \\t]+|$(?![\\s\\S]))`,
+          "gmi",
+        ),
+      ),
+    ];
+    if (matches.length > 1) throw Error("Duplicate work section");
+    return matches[0]?.[1].trim() ?? "";
+  };
+  const table = (title: string, header: string[]) => {
+    const lines = section(title)
+      .split("\n")
+      .filter((line) => line.trim());
+    if (!lines.length) return [];
+    const cells = (line: string) => {
+      if (!line.trim().startsWith("|") || !line.trim().endsWith("|"))
+        throw Error("Invalid table");
+      return line
+        .trim()
+        .slice(1, -1)
+        .split(/(?<!\\)\|/)
+        .map((cell) => cell.trim().replace(/\\\|/g, "|"));
+    };
+    if (
+      JSON.stringify(cells(lines[0]).map((s) => s.toLowerCase())) !==
+        JSON.stringify(header) ||
+      !lines[1] ||
+      cells(lines[1]).length !== header.length ||
+      !cells(lines[1]).every((s) => /^:?-{3,}:?$/.test(s))
+    )
+      throw Error("Invalid table header");
+    return lines.slice(2).map((line) => {
+      const row = cells(line);
+      if (row.length !== header.length) throw Error("Invalid table row");
+      return row;
+    });
+  };
+  try {
+    const history = section("Work history");
+    const refs = (name: string) => {
+      const lines = history
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.toLowerCase().startsWith(`${name.toLowerCase()}:`));
+      if (lines.length > 1) throw Error("Duplicate history field");
+      const value = lines[0]?.slice(name.length + 1).trim();
+      if (!value) return [];
+      if (!/^#[1-9]\d*(?:\s*,\s*#[1-9]\d*)*$/.test(value))
+        throw Error("Invalid history reference");
+      return [...new Set(value.match(/\d+/g)!.map(Number))];
+    };
+    return workDetailsSchema.parse({
+      people: table("People", ["person", "role", "next action"]).map(
+        ([name, role, next]) => ({ name, role, next }),
+      ),
+      commitments: table("Commitments", [
+        "date",
+        "commitment",
+        "owner",
+        "state",
+      ]).map(([date, what, owner, state]) => ({
+        date: date === "unknown" || !date ? null : date,
+        what,
+        owner: owner === "unknown" || !owner ? null : owner,
+        state,
+      })),
+      combinedFrom: refs("Combined from"),
+      splitFrom: refs("Split from"),
+      continuesAs: refs("Continues as"),
+    });
+  } catch {
+    // A malformed section must not be presented as an empty, complete record.
+    return null;
+  }
+}
+export function historyIssues(issue: Issue) {
+  return [
+    ...new Set([
+      ...(issue.details?.combinedFrom ?? []),
+      ...(issue.details?.splitFrom ?? []),
+    ]),
+  ].filter((n) => n !== issue.number);
+}
+export function nextCommitment(issue: Issue) {
+  return issue.details?.commitments
+    .filter((c) => c.state === "open" && c.date)
+    .sort((a, b) => a.date!.localeCompare(b.date!))[0];
 }
 export const issueSchema = z
   .object({
@@ -130,6 +258,7 @@ export const issueSchema = z
     repos: z.array(repo).max(20),
     updatedAt: z.number().int().nonnegative(),
     position: positionSchema.nullable().optional(),
+    details: workDetailsSchema.nullable().optional(),
     emailLinks: z.array(emailLinkSchema).max(50).optional(),
     area: z.enum(["business", "personal", "unassigned"]).optional(),
     latestUpdate: z
@@ -187,7 +316,11 @@ export function decidedBy(a: Pick<WorkAssociation, "selection" | "by">) {
   return a.selection === "unassigned" ? null : (a.by ?? "user");
 }
 // GitHub is not host-local: the newest scan that could read the issues wins.
-export type CurrentWork = { issues: Issue[]; observedAt: number; repo?: string };
+export type CurrentWork = {
+  issues: Issue[];
+  observedAt: number;
+  repo?: string;
+};
 export function currentWork(
   snapshots: { collectedAt: number; work?: WorkSnapshot }[],
 ): CurrentWork | undefined {

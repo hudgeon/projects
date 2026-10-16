@@ -22,6 +22,7 @@ import {
 import {
   activityBrief,
   completionProblem,
+  workInstructions,
   contextConversation,
   executeRun,
   savePrivate,
@@ -71,6 +72,49 @@ const makeRun = (): Run => ({
     },
   ],
   progress: null,
+});
+
+test("work-record completion gate returns to the coordinator without replaying a child", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+  o.workRepo = "acme/work";
+  let masters = 0;
+  const record = {status: "unchanged" as const, evidence: "Read-only question; no supported work facts changed."};
+  o.turn = async opts => {
+    calls.push(opts);
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") return result;
+    masters++;
+    if (masters === 1) return dispatch();
+    if (masters === 2) return complete;
+    if (masters === 3) return {...complete, workRecord: {status: "pending", evidence: "Readback remains"}};
+    return {...complete, workRecord: record};
+  };
+  try {
+    await executeRun(o);
+    assert.equal(calls.filter(c => c.agent === "claude").length, 1);
+    assert.equal(masters, 4);
+    assert.match(calls[0].prompt, /Bigger work is recorded.*acme\/work/);
+    assert.match(calls.find(c => c.agent === "claude")!.prompt, /User corrections take precedence/);
+    assert.match(calls.at(-1)!.prompt, /Account for the current work/);
+    const journal = JSON.parse(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"));
+    assert.equal(journal.progress.state, "completed");
+    assert.deepEqual(journal.workRecord, record);
+    // Re-publishing a settled journal must not execute another native turn.
+    await executeRun({...o, turn: async () => { throw Error("unexpected replay"); }});
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("work updates preserve read-only scope and distinguish restructure from delivery", () => {
+  const instructions = workInstructions("acme/work", 7);
+  assert.match(instructions, /Read-only requests remain read-only/);
+  assert.match(instructions, /superseded, never delivered/);
+  assert.match(instructions, /preserve concurrent changes/);
+  assert.match(instructions, /if it has several/);
+  assert.match(instructions, /read back every affected issue/);
+  assert.equal(workInstructions(), "");
+  assert.equal(completionProblem({...complete, workRecord: {status: "updated", evidence: "Verified canonical issue readback"}}, [], true), null);
+  assert.equal(completionProblem({...complete, action: "blocked", workRecord: {status: "pending", evidence: "GitHub unavailable"}}, [], true), null);
+  assert.equal(masterDecisionSchema.safeParse({...complete, workRecord: {status: "updated", evidence: " "}}).success, false);
 });
 const progress = (): Progress => ({
   seq: 1,

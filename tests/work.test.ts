@@ -239,6 +239,7 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
     title: "Issue 1",
     body: "Status  text",
     position: null,
+    details: { people: [], commitments: [], combinedFrom: [], splitFrom: [], continuesAs: [] },
     emailLinks: [],
     area: "business",
     latestUpdate: null,

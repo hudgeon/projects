@@ -296,11 +296,13 @@ export const progressSchema = z
   })
   .strict();
 const runnerIdentitySchema = z.object({ runnerId: uuid }).strict();
-export const runnerClaimSchema = runnerIdentitySchema.extend({
-  activeRunIds: z.array(uuid).max(20).default([]),
-  // Lanes with a free slot; an older runner omits it and takes either.
-  lanes: z.array(laneSchema).min(1).max(2).optional(),
-}).strict();
+export const runnerClaimSchema = runnerIdentitySchema
+  .extend({
+    activeRunIds: z.array(uuid).max(20).default([]),
+    // Lanes with a free slot; an older runner omits it and takes either.
+    lanes: z.array(laneSchema).min(1).max(2).optional(),
+  })
+  .strict();
 export const runnerReportSchema = runnerIdentitySchema
   .extend({
     id: uuid,
@@ -330,6 +332,12 @@ export const deliverySchema = z
     sync: deliveryGateSchema,
   })
   .strict();
+export const workRecordSchema = z
+  .object({
+    status: z.enum(["updated", "unchanged", "pending"]),
+    evidence: z.string().trim().min(1).max(1200),
+  })
+  .strict();
 export const masterDecisionSchema = z
   .object({
     action: z.enum(["dispatch", "complete", "blocked"]),
@@ -340,6 +348,9 @@ export const masterDecisionSchema = z
     // Rotate only after this decision; never interrupt an executing child.
     resetContext: z.boolean().nullable().optional(),
     delivery: deliverySchema.nullable().optional(),
+    // The coordinator's readback assessment of the canonical work record,
+    // kept in its private decision journal, never a second work backlog.
+    workRecord: workRecordSchema.nullable().optional(),
     task: z
       .object({
         projectId,

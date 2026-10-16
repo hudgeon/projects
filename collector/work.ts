@@ -12,6 +12,7 @@ import { z } from "zod";
 import {
   currentPosition,
   emailLinks,
+  workDetails,
   associationSchema,
   issueSchema,
   RECENT_WORK_DAYS,
@@ -137,6 +138,7 @@ export async function readIssues(
         .map((name) => `${owner}/${name}`),
       updatedAt: Date.parse(raw.updatedAt),
       position: currentPosition(raw.body),
+      details: workDetails(raw.body),
       emailLinks: emailLinks(raw.body),
       area: raw.labels.some((l) => l.name === "personal")
         ? "personal"

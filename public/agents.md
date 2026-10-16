@@ -48,6 +48,54 @@ A reviewing agent can keep each work item's position on its issue in a `## Curre
 
 ## Conversations dispatched by Projects
 
+### People, commitments and restructuring
+
+Keep the concise `Current position` overview current at meaningful checkpoints
+and when finishing linked work. Apply the owner's corrections; preserve scope,
+unrelated sections and evidence. Read-only requests stay read-only. Keep clients
+in `customer:` labels. People and commitments use these optional issue-body tables:
+
+```markdown
+## People
+| Person | Role | Next action |
+| --- | --- | --- |
+| Alex | Delivery lead | Confirm the pilot scope |
+
+## Commitments
+| Date | Commitment | Owner | State |
+| --- | --- | --- | --- |
+| unknown | Agree the pilot target date | Alex | open |
+```
+
+Use real supported names and facts, not the examples above. Dates are
+`YYYY-MM-DD` or `unknown`; owners can be `unknown`. State is `open`, `done` or
+`cancelled`. Name firm deadlines versus targets in the commitment text. Empty
+roles or next actions mean unknown. Escape literal pipes in table cells as `\|`.
+Limits: 30 people (name 200, role 300, action 600 characters); 50 commitments
+(text 600, owner 200). Malformed details are shown as unreadable, not empty.
+
+Combining means one ongoing outcome and overview. Retain a suitable issue, carry
+forward all clients, people, commitments and source links, and preserve predecessor
+bodies/comments. Add `## Work history` with `Combined from: #12, #14` on the
+continuing issue and `Continues as: #20` on each predecessor. Include earlier
+combined ancestry. Verify the survivor and reciprocal links before closing
+predecessors as not planned/superseded; restructuring is not business delivery.
+
+For a split, allocate scope, people and commitments explicitly. Put
+`Split from: #20` on resulting issues and `Continues as: #21, #22` on a fully
+superseded source; keep the source open if it retains scope. History fields use
+at most 50 comma-separated issue numbers from the same work repository.
+Preserve exact email links and their review markers. Do not duplicate ownership,
+invent deadlines, discard history or execute the underlying customer work just
+because the owner asked to organise it. Resolve material ambiguity with them.
+
+Re-read before writes, preserve concurrent changes and verify every affected
+body/label/state afterwards. After an uncertain write, inspect its result before
+retrying. Follow a closed source's single continuation; determine the intended
+outcome when several exist. Never reopen or execute superseded work automatically.
+
+### Execution
+
 A signed-in user can give the Projects master an outcome from Today, an email in the Inbox or a work item. A connected machine runs a read-only Codex or Claude master and direct Claude/Codex children using its existing native logins. Follow the supplied task scope and repository instructions; preserve other work and complete the required checks and delivery within the user's authority. Return a concise structured result with actual checks and GitHub evidence. A turn ending is not delivery proof. Do not include secrets, transcripts or raw tool output.
 
 The user often reads results on a phone. Write the user-facing summary in Markdown: a first sentence that states the outcome and stands alone (Projects shows it as the status line), at most four short bullets, usually within 120 words, and a closing **Your move:** line when the user must act. Report blocked only when work cannot continue until the user or someone else acts, with the exact steps to unblock it. Keep IDs, hashes, byte counts, local paths, tool and connector names, permission internals and check logs out of the prose. Link named plans, reports, guides and drafts to their exact pushed GitHub commit: `https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/URL_ENCODED_PATH`. Verify that the file exists at that commit and is available remotely; give Gmail drafts a clear link label too. Projects lists these links under Documents. Label a draft as a draft, and say when no shareable committed copy exists.

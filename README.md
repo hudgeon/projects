@@ -275,6 +275,31 @@ groups them by customer and initiative, with each item's status, next step and
 signals (conversations, new email, failing checks, due date), parsed from an
 optional **Current position** block in the issue body.
 
+**Discuss bigger work** starts a conversation about new work or combining and
+splitting existing outcomes. **Discuss this work** on a work item keeps that
+issue selected and defaults to the registered work repository. People have
+roles and next actions; commitments name what is due, its date and its owner.
+Unknown dates and owners remain explicit. The current overview stays concise;
+supporting updates and earlier activities remain available below it.
+
+The existing native change helper maintains the canonical issue at meaningful
+checkpoints and before finishing linked work, respecting read-only requests and
+the owner's corrections. A standard coordinator with a configured work repository
+must account for the record as updated, unchanged (with a reason), or pending.
+Pending or missing assessments prevent completion. This is the coordinator's
+readback assessment, not independent GitHub certification or background monitoring.
+Collectors publish the saved record on their next scan; source timestamps remain
+visible. No new GitHub credential or issue-writing access is added to the Worker.
+
+Combining produces one continuing issue with a shared outcome, preserving
+clients, people, commitments, source links and prior history. Only after the
+continuing record and reciprocal links are verified are predecessors closed as
+superseded, not delivered. Splitting allocates those facts to distinct outcomes
+and retains links to the source. Conversations keep their original association;
+earlier activities are shown as history, not silently assigned to a new outcome.
+Older issues outside the collector's window remain accessible through their
+GitHub links. The human-editable section format is in [agents.md](public/agents.md).
+
 **Mark done** stores only the issue number; the machine on duty closes the
 issue with its signed-in GitHub CLI on its next run and reports back. The
 Worker holds no GitHub credential and pull requests are never merged or closed.
