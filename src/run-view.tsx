@@ -1189,13 +1189,6 @@ export function ConversationPage({
       )}
       <Thread run={run} />
       {active && <NowPanel run={run} />}
-      {!!docs.length && (
-        <section className="panel" aria-label="Documents">
-          <h3>Documents</h3>
-          <DocumentList docs={docs} />
-        </section>
-      )}
-      <ConversationBrowser key={run.id} run={run} />
       <form
         className="composer followup"
         onPaste={images.paste}
@@ -1244,6 +1237,13 @@ export function ConversationPage({
           </span>
         </div>
       </form>
+      {!!docs.length && (
+        <section className="panel" aria-label="Documents">
+          <h3>Documents</h3>
+          <DocumentList docs={docs} />
+        </section>
+      )}
+      <ConversationBrowser key={run.id} run={run} />
       {(!!children.length || !!updates.length || !!run.progress) && (
         <details className="convo-details">
           <summary>Details</summary>
