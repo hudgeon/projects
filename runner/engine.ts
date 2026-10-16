@@ -1224,11 +1224,18 @@ export async function executeRun(o: EngineOptions) {
         event("checkpoint_replayed", { actor: "master" });
         decision = { ...saved.value, title: saved.value.title ?? null };
       } else {
+        // Choose the native session before selecting its visual context. A
+        // fresh coordinator has not seen images reviewed by an earlier one.
+        const handover = rotate() ||
+          (!j.progress.masterSessionId
+            ? `${brief(true)}\n\nYou are a fresh coordinator. Re-establish the current task from the user instructions and verify reported facts against the supplied evidence.\n\n`
+            : "");
+        const known = resumed() ? new Set(coordinator!.seen) : null;
         // Image transport has no native side effects. Fail before recording a
         // native turn, so a fetch outage cannot become an ambiguous execution.
         const images = await screenshots(
           messages.filter(
-            (message) => !j.progress.reviewedMessageIds?.includes(message.id),
+            (message) => !known?.has(message.id),
           ),
         );
         const browser = await o.browser?.();
@@ -1241,12 +1248,7 @@ export async function executeRun(o: EngineOptions) {
             ? "Master is reviewing the request."
             : "Master is reviewing the returned result.",
         );
-        const handover = rotate() ||
-          (!j.progress.masterSessionId
-            ? `${brief(true)}\n\nYou are a fresh coordinator. Re-establish the current task from the user instructions and verify reported facts against the supplied evidence.\n\n`
-            : "");
         if (handover) nextPrompt = handover + nextPrompt;
-        const known = resumed() ? new Set(coordinator!.seen) : null;
         const unseen = known
           ? messages.filter((message) => !known.has(message.id))
           : messages;

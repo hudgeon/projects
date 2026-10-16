@@ -219,6 +219,30 @@ async function fixture() {
   return mkdtemp(path.join(tmpdir(), "projects-runner-"));
 }
 
+test("fresh coordinators receive earlier screenshots after deliberate and size-based resets", async () => {
+  for (const reason of ["deliberate", "size"] as const) {
+    const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
+    const image = {id: randomUUID(), mime: "image/png" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="};
+    o.run.messages[0].screenshots = [(await decodeScreenshots([image]))[0].metadata];
+    o.screenshot = async () => image;
+    let masters = 0;
+    o.turn = async (opts) => {
+      calls.push(opts); await opts.onSession(opts.sessionId ?? randomUUID());
+      if (opts.agent === "claude") return result;
+      masters++;
+      opts.onUsage?.({fresh: 1, cached: 1, output: 1, context: reason === "size" && masters === 1 ? MASTER_CONTEXT_LIMIT + 1 : 1000});
+      return masters === 1 ? {...dispatch(), resetContext: reason === "deliberate"} : complete;
+    };
+    try {
+      await executeRun(o);
+      const coordinators = calls.filter((c) => c.agent === "codex");
+      assert.equal(coordinators[1].sessionId, undefined, reason);
+      assert.deepEqual(coordinators.map((c) => c.screenshots), [[image], [image]], reason);
+      assert.doesNotMatch(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"), /iVBOR/);
+    } finally {await rm(dir, {recursive: true, force: true});}
+  }
+});
+
 test("an image fetch failure before native startup remains safely retryable", async () => {
   const dir = await fixture(), o = engineOptions(dir);
   const image = {id: randomUUID(), mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII='};
