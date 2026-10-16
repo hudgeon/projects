@@ -11,6 +11,7 @@ export { Conversation } from "./runs";
 import { runInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
 import { archiveInputSchema, archiveKey, type ArchiveEntry, type ArchiveTarget } from "../src/archive-model";
 import { telemetry } from "../src/telemetry";
+import { codexComparison, executionSettingsSchema, METRIC_LIMIT, METRIC_WINDOW_MS, type CodexSample, type ExecutionSettings } from "../src/codex-metrics";
 import { z } from "zod";
 import {
   authorize,
@@ -53,6 +54,8 @@ export class Portfolio extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.notify({ run: next.id, ...text });
@@ -136,7 +139,31 @@ export class Portfolio extends DurableObject<Env> {
   runners() { return this.runs.runners(); }
   claimRun(owner: string, activeRunIds: string[], lanes: Lane[] | undefined, host: RunnerHost) { return this.runs.claim(owner, activeRunIds, lanes, host); }
   heartbeatRun(owner: string, id: string, generation: number, host: RunnerHost) { return this.runs.heartbeat(owner, id, generation, host); }
-  reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) { return this.runs.report(owner, id, generation, progress, host); }
+  async reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) {
+    return this.runs.report(owner, id, generation, progress, host, recorded => {
+      // Use the canonical receipt, not an older/replayed request body.
+      for (const event of recorded.telemetry ?? [])
+        if (event.event === "native_finished" && (event.agent ?? event.actor) === "codex" && event.codexFast !== undefined && event.at <= Date.now() && event.at >= Date.now() - METRIC_WINDOW_MS)
+          this.ctx.storage.sql.exec("INSERT OR IGNORE INTO codex_metrics(id,at,payload) VALUES(?,?,?)", `${id}:${event.id}`, event.at, JSON.stringify({...event, host}));
+      this.pruneCodexMetrics();
+    });
+  }
+  executionSettings(): Promise<ExecutionSettings> {
+    return this.ctx.storage.get<ExecutionSettings>("execution-settings").then(value => value ?? {codexFast: false});
+  }
+  async setExecutionSettings(input: ExecutionSettings) {
+    await this.ctx.storage.put("execution-settings", executionSettingsSchema.parse(input));
+    return this.executionSettings();
+  }
+  private pruneCodexMetrics() {
+    this.ctx.storage.sql.exec("DELETE FROM codex_metrics WHERE at < ?", Date.now() - METRIC_WINDOW_MS);
+    this.ctx.storage.sql.exec("DELETE FROM codex_metrics WHERE id IN (SELECT id FROM codex_metrics ORDER BY at DESC,id DESC LIMIT -1 OFFSET ?)", METRIC_LIMIT);
+  }
+  async executionSettingsView() {
+    this.pruneCodexMetrics();
+    const samples = this.ctx.storage.sql.exec<{payload: string}>("SELECT payload FROM codex_metrics ORDER BY at DESC,id DESC").toArray().map(row => JSON.parse(row.payload) as CodexSample);
+    return {...await this.executionSettings(), metrics: codexComparison(samples)};
+  }
   rate(key: string, max: number, window: number) {
     const now = Date.now();
     this.ctx.storage.sql.exec("DELETE FROM limits WHERE expires <= ?", now);
@@ -546,13 +573,14 @@ export async function handle(
               })),
             }))
           : [];
-        return Response.json({ run, activity });
+        return Response.json({ run, activity, settings: await store.executionSettings() });
       }
       if (url.pathname.endsWith("/heartbeat")) {
         const input = runnerHeartbeatSchema.parse(raw);
         attributes({ runId: input.id, generation: input.generation });
         const result = await trace("heartbeat", { runId: input.id, generation: input.generation }, () => store.heartbeatRun(owner, input.id, input.generation, host));
-        return Response.json(result ?? { error: "Claim no longer active" }, {
+        const body = result ? z.object({cancel: z.boolean(), messages: z.array(z.unknown())}).parse(result) : null;
+        return Response.json(body ? {...body, settings: await store.executionSettings()} : { error: "Claim no longer active" }, {
           status: result ? 200 : 409,
         });
       }
@@ -563,6 +591,15 @@ export async function handle(
     } catch {
       return Response.json({ error: "Invalid runner request" }, { status: 400 });
     }
+  }
+  if (url.pathname === "/api/execution-settings") {
+    if (request.method === "GET") return Response.json(await store.executionSettingsView());
+    if (request.method !== "POST") return new Response("Method not allowed", {status: 405});
+    let input;
+    try { input = executionSettingsSchema.parse(await readJson(request, 1024)); }
+    catch { return Response.json({error: "Invalid execution settings"}, {status: 400}); }
+    await store.setExecutionSettings(input);
+    return Response.json(await store.executionSettingsView());
   }
   // The owner connects machines. Tokens appear once, when a machine is added
   // or its tokens are replaced, and only their hashes are kept.

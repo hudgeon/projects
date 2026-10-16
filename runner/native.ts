@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScreenshotInput } from "../src/screenshot-model";
-import type { FailureReason } from "../src/telemetry";
+import type { ExecutionEvent, FailureReason } from "../src/telemetry";
 import type { ConnectorAccess } from "./connectors";
 import {
   LIVE_STEPS,
@@ -37,6 +37,8 @@ export type NativeOptions = {
   sessionId?: string;
   schema: Record<string, unknown>;
   readOnly: boolean;
+  codexFast?: boolean;
+  onTiming?: (fields: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs">) => void;
   writableRoots?: string[];
   signal: AbortSignal;
   onSession: (id: string) => Promise<void>;
@@ -463,6 +465,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     o.binaries?.codex ?? "codex",
     [
       ...(o.connectors?.codex ?? []),
+      "-c", "features.fast_mode=true",
+      "-c", `service_tier=${JSON.stringify(o.codexFast ? "fast" : "default")}`,
       ...(o.browser
         ? Object.entries({
             command: "npx",
@@ -507,6 +511,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     refusals: string[] = [],
     acted = false,
     baseline: { input: number; cached: number; output: number } | undefined;
+  let turnRequestedAt: number | null = null, firstOutputAt: number | null = null;
   const pending = new Map<
     number,
     {
@@ -597,6 +602,10 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         return;
       }
       if (p.threadId && p.threadId !== threadId) return;
+      if (message.method === "item/agentMessage/delta" && typeof p.delta === "string" && p.delta.length && firstOutputAt === null && turnRequestedAt !== null) {
+        firstOutputAt = performance.now();
+        o.onTiming?.({firstOutputMs: Math.round(firstOutputAt - turnRequestedAt)});
+      }
       // The thread's running totals; this process's turns are the growth
       // since just before the first report it saw.
       if (message.method === "thread/tokenUsage/updated") {
@@ -712,6 +721,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       {
         ...(o.sessionId ? { threadId: o.sessionId } : {}),
         cwd: o.cwd,
+        serviceTier: o.codexFast ? "fast" : "default",
         approvalPolicy: "never",
         ...(o.readOnly
           ? { sandbox: "read-only" }
@@ -730,16 +740,25 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         "Codex session is already active; do not overlap its current turn.",
       );
     threadId = thread.id;
+    o.onTiming?.({
+      ...(typeof started.model === "string" && /^[a-zA-Z0-9._:-]{1,100}$/.test(started.model) ? {model: started.model} : {}),
+      ...(typeof started.reasoningEffort === "string" && /^[a-zA-Z0-9_-]{1,30}$/.test(started.reasoningEffort) ? {effort: started.reasoningEffort} : {}),
+    });
     await o.onSession(threadId);
     let result: unknown;
     for (let attempt = 1; ; attempt++) {
       finalText = "";
       refusals = [];
       acted = false;
+      o.onTiming?.({attempts: attempt});
+      turnRequestedAt = performance.now();
+      firstOutputAt = null;
       const turn = await request("turn/start", {
         threadId,
         input: userContent({ text: o.prompt, screenshots: o.screenshots }, "codex"),
         cwd: o.cwd,
+        serviceTier: o.codexFast ? "fast" : "default",
+        serviceTierForTurn: o.codexFast ? "fast" : "default",
         approvalPolicy: "never",
         ...(o.readOnly
           ? { sandboxPolicy: { type: "readOnly", networkAccess: true } }

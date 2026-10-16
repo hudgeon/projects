@@ -380,6 +380,7 @@ export type EngineOptions = {
   messages?: () => Promise<RunMessage[]>;
   screenshot?: (image: Screenshot) => Promise<ScreenshotInput>;
   browser?: () => Promise<NativeOptions["browser"]>;
+  codexFast?: () => Promise<boolean>;
   turn?: (options: NativeOptions) => Promise<unknown>;
   prepare?: typeof prepareWorkspace;
   evidence?: typeof workspaceEvidence;
@@ -574,6 +575,10 @@ export async function executeRun(o: EngineOptions) {
     // received collects what reached it while it ran.
     steer?: { exclude: string[]; received: string[] },
   ) => {
+    // Read the shared preference at each turn boundary, including resumes and
+    // recovery. An in-flight turn keeps the mode it started with.
+    const codexFast = options.agent === "codex" ? await o.codexFast?.() ?? false : undefined;
+    let timing: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs"> = {};
     const control = new AbortController();
     const started = performance.now();
     const turnFields = {
@@ -583,11 +588,13 @@ export async function executeRun(o: EngineOptions) {
       ...(child ? {} : { agent: options.agent }),
       mode: options.readOnly ? ("read" as const) : ("change" as const),
       resumed: !!options.sessionId,
+      ...(codexFast === undefined ? {} : {codexFast}),
     };
     event("native_started", turnFields);
     // The turn's tokens add to its child's, or to the coordinator's, totals.
     const base = (child ? child.usage : j.progress.masterUsage) ?? noUsage();
     let used: TurnUsage = { fresh: 0, cached: 0, output: 0, context: 0 };
+    let tokenUsageObserved = false;
     const account = () => {
       const usage = {
         fresh: base.fresh + used.fresh,
@@ -777,6 +784,8 @@ export async function executeRun(o: EngineOptions) {
       await persist();
       const value = await turn({
         ...options,
+        codexFast,
+        onTiming: fields => { timing = {...timing, ...fields}; },
         prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? `\n\nUse the projects_browser MCP tools for live browser checks. This is this conversation's approved Cloudflare browser, limited to the sites this Projects deployment allows, such as ${new URL(options.browser.endpoint).host}. It cannot reach localhost or unpublished previews on this machine. The master/read sessions may inspect pages; delegate clicks, form entry and other interactions to a change child when authorized by the task. Navigation and waiting return accessibility snapshots; change children can also capture screenshots. If sign-in is needed, navigate to the sign-in page and emit a progress note whose yourMove asks the user to use Open browser / sign in in this conversation, then continue within five minutes. Do not copy cookies from desktop browsers or bypass authentication or browser policy. Never print connection credentials. Browser sessions close after thirty minutes or when work completes/stops; an expired connection is not evidence that an action completed. Inspect current state before retrying any mutation.` : ""}`,
         signal: AbortSignal.any([options.signal, control.signal]),
         onActivity: (event) => {
@@ -801,6 +810,7 @@ export async function executeRun(o: EngineOptions) {
           steerTurn = fn;
         },
         onUsage: (usage) => {
+          tokenUsageObserved = true;
           used = usage;
           account();
           dirty = true;
@@ -825,6 +835,8 @@ export async function executeRun(o: EngineOptions) {
       finished = true;
       event("native_finished", {
         ...turnFields,
+        ...timing,
+        ...(codexFast === undefined ? {} : {tokenUsageObserved}),
         durationMs: Math.round(performance.now() - started),
         ...tokens(),
         outcome: "completed",
@@ -846,6 +858,8 @@ export async function executeRun(o: EngineOptions) {
       if (!finished)
         event("native_finished", {
           ...turnFields,
+          ...timing,
+          ...(codexFast === undefined ? {} : {tokenUsageObserved}),
           durationMs: Math.round(performance.now() - started),
           ...tokens(),
           outcome:

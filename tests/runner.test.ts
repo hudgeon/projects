@@ -3035,3 +3035,51 @@ test("read-only answers and legacy decisions still parse; gate evidence cannot b
   const schema = outputSchema(masterDecisionSchema) as {required: string[]};
   assert.ok(schema.required.includes("delivery"));
 });
+
+test("Codex fast mode explicitly overrides new and resumed threads, including off", async () => {
+  const dir = await fixture();
+  try {
+    for (const fast of [true, false]) for (const sessionId of [undefined, "test-session"]) {
+      const binary = await fakeBinary(dir,"codex","success"), log = path.join(dir,"speed.log");
+      await writeFile(log, "");
+      let source = await readFile(binary,"utf8");
+      source = source.replace("import readline", "import {appendFileSync} from 'node:fs';\nimport readline")
+        .replace("const m=JSON.parse(line);", `const m=JSON.parse(line);appendFileSync(${JSON.stringify(log)},JSON.stringify(m)+'\\n');`)
+        .replace("result:{thread:{id:'test-session',status:{type:'idle'}}}", "result:{model:'model-a',reasoningEffort:'high',thread:{id:'test-session',status:{type:'idle'}}}")
+        .replace("if(mode==='exit')", "send({method:'item/agentMessage/delta',params:{threadId:'test-session',delta:'x'}});if(mode==='exit')");
+      await writeFile(binary,source);
+      const timing: Record<string,unknown> = {};
+      await nativeTurn({agent:"codex",cwd:dir,prompt:"Inspect",schema:{type:"object"},readOnly:true,sessionId,codexFast:fast,signal:AbortSignal.timeout(5000),binaries:{codex:binary},onSession:async()=>{},onTiming:fields=>Object.assign(timing,fields)});
+      const requests = (await readFile(log,"utf8")).trim().split("\n").map(s=>JSON.parse(s));
+      assert.equal(requests.find(r=>r.method===(sessionId?"thread/resume":"thread/start")).params.serviceTier,fast?"fast":"default");
+      const start = requests.find(r=>r.method==="turn/start");
+      assert.equal(start.params.serviceTier,fast?"fast":"default");
+      assert.equal(start.params.serviceTierForTurn,fast?"fast":"default");
+      assert.equal(timing.model,"model-a"); assert.equal(timing.effort,"high"); assert.equal(timing.attempts,1);
+      assert.equal(typeof timing.firstOutputMs,"number");
+    }
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test("every Codex coordinator and helper reads speed at the turn boundary", async () => {
+  const dir = await fixture(), o = engineOptions(dir), speeds: (boolean|undefined)[] = [];
+  let setting = true, calls = 0;
+  o.codexFast = async () => setting;
+  o.turn = async opts => {
+    speeds.push(opts.codexFast); calls++;
+    await opts.onSession(randomUUID());
+    opts.onTiming?.({model:"model-a",effort:"high",attempts:1,firstOutputMs:12});
+    opts.onUsage?.({fresh:200,cached:0,output:30,context:200});
+    if(calls===1) { const d=dispatch(); return {...d,task:{...d.task!,agent:"codex"}}; }
+    if(calls===2) { setting=false; return result; }
+    return complete;
+  };
+  try {
+    await executeRun(o);
+    assert.deepEqual(speeds,[true,true,false]);
+    const journal=JSON.parse(await readFile(path.join(dir,"runs",`${o.run.id}.json`),"utf8"));
+    const events=journal.progress.telemetry.filter((e:{event:string})=>e.event==="native_finished");
+    assert.deepEqual(events.map((e:{codexFast:boolean})=>e.codexFast),[true,true,false]);
+    assert.ok(events.every((e:{model:string;tokenUsageObserved:boolean})=>e.model==="model-a"&&e.tokenUsageObserved));
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});

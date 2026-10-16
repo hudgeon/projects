@@ -1,5 +1,6 @@
 import { InboxView, inboxCount } from "./inbox-view";
 import { Machines } from "./machines-view";
+import { ExecutionSettingsPanel } from "./execution-settings-view";
 import { Restart } from "./restart";
 import {
   ProjectConversations,
@@ -783,6 +784,7 @@ function Dashboard() {
         {view === "health" && (
           <>
             <h1 className="page-title">Settings</h1>
+            <ExecutionSettingsPanel />
             <Machines
               snapshots={snapshots}
               machines={query.data?.machines ?? []}

@@ -6,6 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { executionSettingsSchema } from "../src/codex-metrics";
 import {
   decodeScreenshots,
   screenshotInputSchema,
@@ -224,6 +225,7 @@ async function executeClaim(o: {
   const run = claim.run;
   let heartbeatRequest: Promise<void> | null = null;
   let messages = run.messages;
+  let codexFast = false;
   const heartbeat = (): Promise<void> => {
     if (heartbeatRequest) return heartbeatRequest;
     heartbeatRequest = (async () => {
@@ -234,6 +236,7 @@ async function executeClaim(o: {
           generation: run.generation,
         });
         if (result.cancel) control.abort("cancelled");
+        codexFast = executionSettingsSchema.parse(result.settings ?? {codexFast: false}).codexFast;
         if (Array.isArray(result.messages))
           messages = result.messages as RunMessage[];
       } catch (error) {
@@ -326,6 +329,7 @@ async function executeClaim(o: {
       workRepo: config.workRepo,
       latestMessages: () => messages,
       report,
+      codexFast: async () => { await heartbeat(); return codexFast; },
       browser,
       screenshot: async (image) => {
         const result = await post("/api/runner/screenshot", {

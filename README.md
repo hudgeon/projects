@@ -21,7 +21,7 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
 - **Inbox** (optional) lists email waiting on you. Linked work opens directly
   in Today; unlinked email can be linked to existing work or start a standalone
   activity. Previewing, linking or starting work never marks a message reviewed.
-- **Settings** holds machines and repository diagnostics: add a machine, set
+- **Settings** holds Codex speed, timing comparisons, machines and repository diagnostics: add a machine, set
   their order, replace tokens or remove one. Existing repository bookmarks work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
 
@@ -386,6 +386,25 @@ recovery, master decisions) and reports them with its receipts; they correlate
 by conversation, generation and event id. Logs are diagnostic, not an execution
 ledger. Logs are kept at 100%, traces sampled at 10%, and routine successful
 polls at 1%.
+
+Settings has an owner-wide **Codex fast mode** switch, initially off. Every
+Projects Codex coordinator/helper reads it before its next turn, including
+resumes and recovery; an active turn is not interrupted. The native app-server
+receives explicit `fast` or `default` service tiers, without changing model or
+reasoning. Claude and sessions outside Projects are unaffected. Fast mode uses
+more allowance; see [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
+
+The same page compares labelled Codex turns from the last 30 days (up to 10,000).
+The portfolio retains deduplicated canonical completion receipts independently
+of the conversation's bounded event window. It records requested speed, resolved
+model/effort, attempts, token counts, elapsed time and first text latency when
+observed. Comparisons match role, read/change, new/continued, machine, input/output
+token bands and cache share. At least three completed single-attempt turns per
+mode are required for a median percentage; failures, missing measurements and
+earlier unlabelled turns do not become a standard-mode baseline. Total time
+includes native startup and tool work; first output can include reasoning/tool
+waits. These are workload observations, not a controlled benchmark or proof of
+the provider's actual processing tier. No synthetic timings enter production.
 
 ## Development
 

@@ -1812,3 +1812,11 @@ a.work-card-head { text-decoration: none; display: block; color: inherit; }
 @media (max-width: 480px) {
   .work-facts li { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
 }
+
+.execution-settings { margin: 1.5rem 0 2rem; max-width: 72rem; }
+.fast-mode-toggle { display: flex; align-items: center; gap: .75rem; min-height: 44px; cursor: pointer; }
+.fast-mode-toggle input { width: 1.25rem; height: 1.25rem; accent-color: var(--accent, #224555); }
+.execution-settings > p { margin: .6rem 0; }
+.speed-cohort { padding: 1rem; margin: 1rem 0; border: 1px solid var(--line, #d9dfe4); border-radius: .6rem; background: var(--surface, #fff); overflow-wrap: anywhere; }
+.speed-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.speed-pair p { margin: .3rem 0; }

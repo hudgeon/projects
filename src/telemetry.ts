@@ -82,6 +82,13 @@ export const executionEventSchema = z
     mode: z.enum(["read", "change"]).optional(),
     resumed: z.boolean().optional(),
     durationMs: ms.optional(),
+    // Requested speed and resolved session configuration, never prompt text.
+    codexFast: z.boolean().optional(),
+    model: z.string().regex(/^[a-zA-Z0-9._:-]{1,100}$/).optional(),
+    effort: z.string().regex(/^[a-zA-Z0-9_-]{1,30}$/).optional(),
+    firstOutputMs: ms.optional(),
+    attempts: z.number().int().min(1).max(3).optional(),
+    tokenUsageObserved: z.boolean().optional(),
     // A finished native turn's tokens, as its app reported them.
     freshTokens: ms.optional(),
     cachedTokens: ms.optional(),
@@ -100,6 +107,7 @@ export const routeSchema = z.enum([
   "/api/auth/verify",
   "/api/auth/logout",
   "/api/overview",
+  "/api/execution-settings",
   "/api/archive",
   "/api/ingest",
   "/api/closes",
