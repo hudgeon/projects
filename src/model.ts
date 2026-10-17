@@ -165,6 +165,8 @@ export type PortfolioView = {
   snapshots: Snapshot[];
   closes: Close[];
   inboxActions?: import("./inbox-model").InboxAction[];
+  // A conversation browser's own sign-in: its snapshots carry no inbox.
+  emailHidden?: boolean;
   machines?: MachineView[];
   // The deployment's time zone, for what "today" means.
   serverTime: number;

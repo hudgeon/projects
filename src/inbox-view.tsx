@@ -448,8 +448,10 @@ export function InboxView({
   actions,
   now,
   selectedEmail,
+  emailHidden,
 }: {
   selectedEmail?: string;
+  emailHidden?: boolean;
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
   actions: InboxAction[];
@@ -461,7 +463,11 @@ export function InboxView({
   if (!inbox)
     return (
       <section className="inbox">
-        <p className="subtle">No machine has read the inbox yet.</p>
+        <p className="subtle">
+          {emailHidden
+            ? "This browser signed in automatically, so it cannot see email."
+            : "No machine has read the inbox yet."}
+        </p>
       </section>
     );
   // Until the conversations load, every email would look unhandled.

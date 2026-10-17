@@ -804,6 +804,7 @@ function Dashboard() {
             archives={archives}
             actions={inboxActions}
             selectedEmail={navigation.email}
+            emailHidden={query.data?.emailHidden}
             now={now}
           />
         )}

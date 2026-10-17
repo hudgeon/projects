@@ -11,7 +11,7 @@ import {
 } from "miniflare";
 import { digest, token } from "../worker/auth";
 import type { Portfolio, Conversation } from "../worker";
-import type { Close } from "../src/work-model";
+import { emailLinks, type Close } from "../src/work-model";
 import { applyCloses } from "../collector/close";
 import { applyInboxAction, applyInboxActions } from "../collector/inbox-actions";
 import type { Inbox } from "../src/inbox-model";
@@ -186,6 +186,47 @@ test("a machine the deployment signs in gets each conversation browser signed in
     for (const [route, body] of [["/api/machines", {name: "Spare"}], ["/api/machines/laptop/tokens", {}], ["/api/machines/laptop/remove", {}], ["/api/execution-settings", {fast: true}], [`/api/runs/${first.id}/browser/view`, {readonly: false}], ["/api/inbox/act", {}], ["/api/push/subscribe", {endpoint: "https://fcm.googleapis.com/x"}]] as const)
       assert.equal((await post(route, body, as(cookie.value))).status, 403, route);
     assert.equal((await mf.dispatchFetch(origin + "/api/inbox/threads/abcdef1234", {headers: as(cookie.value)})).status, 403, "email text never reaches it");
+    // Nor do the inbox's subjects, senders or queued actions, a work item's
+    // email threads, or a conversation started from an email.
+    const linked = "## Email threads\n- [Contract](https://mail.google.com/mail/u/0/#inbox/bbbbbbbbbb01) · context: signing";
+    const mailed = inboxSnapshot();
+    mailed.work.issues = [issue(7, {body: "## Current position\nStatus: open.", emailLinks: emailLinks(linked)})];
+    await (await getStore()).publish(snapshotSchema.parse(mailed));
+    await (await getStore()).requestInboxAction("bbbbbbbbbb01", "archive");
+    const fromEmail = await (await getStore()).createRun({requestId: randomUUID(), text: "Email: [Contract](https://mail.google.com/mail/u/0/#inbox/bbbbbbbbbb01)", projectId: null, agent: "auto", workIssue: null, emailThread: "bbbbbbbbbb01"});
+    await (await getStore()).cancelRun(fromEmail.id);
+    assert.ok((await (await getStore()).listRuns({})).some((run) => run.id === fromEmail.id));
+    const seen = await (await mf.dispatchFetch(origin + "/api/overview", {headers: as(cookie.value)})).json() as PortfolioView;
+    assert.equal(seen.emailHidden, true);
+    assert.deepEqual(seen.inboxActions, []);
+    assert.ok(seen.snapshots.length && seen.snapshots.every((s) => !s.inbox));
+    assert.match(JSON.stringify(seen), /Status: open\./, "the rest of the work item stays");
+    assert.doesNotMatch(JSON.stringify(seen), /Weekly news|news@news|Contract|mail\.google|bbbbbbbbbb01|owner@example\.com/);
+    const listing = async (query: string) => (await (await mf.dispatchFetch(`${origin}/api/runs${query}`, {headers: as(cookie.value)})).json() as {runs: {id: string}[]}).runs.map((run) => run.id);
+    assert.ok((await listing("")).includes(first.id));
+    assert.ok(!(await listing("")).includes(fromEmail.id));
+    assert.deepEqual(await listing("?email=true"), []);
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${fromEmail.id}`, {headers: as(cookie.value)})).status, 404);
+    for (const [action, body] of [["archive", {archived: true}], ["message", {requestId: randomUUID(), text: "Reply"}], ["cancel", {}], ["move", {}]] as const)
+      assert.equal((await post(`/api/runs/${fromEmail.id}/${action}`, body, as(cookie.value))).status, 404, action);
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${fromEmail.id}/screenshots/${randomUUID()}`, {headers: as(cookie.value)})).status, 404);
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${fromEmail.id}/browser`, {headers: as(cookie.value)})).status, 404);
+    const retried = await post("/api/runs", {requestId: fromEmail.id, text: "Check the page", projectId: null, agent: "auto", workIssue: null}, as(cookie.value));
+    assert.equal(retried.status, 409);
+    assert.doesNotMatch(await retried.text(), /Contract|mail\.google/, "a retry never returns it");
+    assert.equal((await post("/api/runs", {requestId: randomUUID(), text: "Reply", projectId: null, agent: "auto", workIssue: null, emailThread: "bbbbbbbbbb01"}, as(cookie.value))).status, 403);
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${first.id}`, {headers: as(cookie.value)})).status, 200);
+    // The owner's own sign-in still sees all of it.
+    const ownerSalt = token(), ownerValue = token();
+    await (await getStore()).issue("owner@example.com", ownerSalt, digest(`${ownerSalt}:123456`));
+    await (await getStore()).verify("owner@example.com", "123456", digest(ownerValue));
+    const full = await (await mf.dispatchFetch(origin + "/api/overview", {headers: as(ownerValue)})).json() as PortfolioView;
+    assert.equal(full.emailHidden, undefined);
+    assert.equal(full.inboxActions?.length, 1);
+    assert.match(JSON.stringify(full), /Weekly news[\s\S]*bbbbbbbbbb01/);
+    assert.ok((await (await mf.dispatchFetch(`${origin}/api/runs?email=true`, {headers: as(ownerValue)})).json() as {runs: {id: string}[]}).runs.some((run) => run.id === fromEmail.id));
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${fromEmail.id}`, {headers: as(ownerValue)})).status, 200);
+    assert.equal((await mf.dispatchFetch(`${origin}/api/runs/${fromEmail.id}/browser`, {headers: as(ownerValue)})).status, 200);
     // A runner restart or eviction keeps the same browser and its sign-in.
     await mf.dispose(); mf = await start(config);
     assert.equal(await overview(cookie.value), 200);

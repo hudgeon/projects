@@ -699,9 +699,11 @@ export async function handle(
       return Response.json({ error: "Machine not found" }, { status: 404 });
     return Response.json({ machines: await store.machineList() });
   }
+  // A browser's own sign-in never reaches a conversation started from an email.
+  const emailRun = async (id: string) => !!browser && !!(await store.getRun(id))?.emailThread;
   const browserRoute = /^\/api\/runs\/([a-f0-9-]{36})\/browser(?:\/(view))?$/.exec(url.pathname);
   if (browserRoute) {
-    if (!(await store.getRun(browserRoute[1]))) return new Response("Not found", {status: 404});
+    if (!(await store.getRun(browserRoute[1])) || (await emailRun(browserRoute[1]))) return new Response("Not found", {status: 404});
     const conversation = env.CONVERSATIONS.getByName(JSON.stringify([env.PORTFOLIO_ID, browserRoute[1]]));
     if (!browserRoute[2] && request.method === "GET") return Response.json(await trace("browser.status", {runId: browserRoute[1]}, () => conversation.browserStatus()));
     if (browserRoute[2] && request.method === "POST") {
@@ -726,10 +728,11 @@ export async function handle(
   if (url.pathname === "/api/runs" && request.method === "GET") {
     const options = runListSchema.safeParse(Object.fromEntries(url.searchParams));
     if (!options.success) return Response.json({error: "Invalid conversation filter"}, {status: 400});
-    const runs = await trace("conversation.list", {}, () => store.listRuns(options.data));
+    const listed = await trace("conversation.list", {}, () => store.listRuns(options.data));
+    const runs = browser ? (options.data.email ? [] : listed.filter((run) => !run.emailThread)) : listed;
     return Response.json({
       runs,
-      nextOffset: runs.length === 50 && !options.data.email ? options.data.offset + 50 : null,
+      nextOffset: listed.length === 50 && !options.data.email ? options.data.offset + 50 : null,
       enabled: await store.runnable(),
       runners: await store.runners(),
     });
@@ -746,9 +749,16 @@ export async function handle(
     } catch {
       return Response.json({ error: "Invalid conversation" }, { status: 400 });
     }
+    // A browser's own sign-in starts no conversation from an email and reads
+    // none back through a retry.
+    if (browser && input.emailThread)
+      return Response.json({ error: "Sign in with your email code to work on email." }, { status: 403 });
     const previous = await trace("conversation.read", { runId: input.requestId }, () => store.getRun(input.requestId));
     attributes({ runId: input.requestId });
-    if (previous) return Response.json({ run: previous });
+    if (previous)
+      return browser && previous.emailThread
+        ? Response.json({ error: "Invalid conversation" }, { status: 409 })
+        : Response.json({ run: previous });
     if (input.screenshots?.length && !(await runtimeStatus(store, env, input.requestId)).ready)
       return updatingScreenshots();
     // Quick work has its own hourly bound, sized for working through email.
@@ -774,7 +784,11 @@ export async function handle(
     )
       return Response.json({ error: "Unknown work issue." }, { status: 400 });
     try {
-      return Response.json({ run: await trace("conversation.create", { runId: input.requestId }, () => store.createRun(input)) });
+      const run = await trace("conversation.create", { runId: input.requestId }, () => store.createRun(input));
+      // Another sign-in may have saved this request ID since the check above.
+      return browser && run.emailThread
+        ? Response.json({ error: "Invalid conversation" }, { status: 409 })
+        : Response.json({ run });
     } catch {
       return Response.json(
         { error: "Conversation could not be saved. Check the screenshots or active conversation limit." },
@@ -819,6 +833,7 @@ export async function handle(
   if (imageRoute) {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const [, id, screenshotId] = imageRoute;
+    if (await emailRun(id)) return new Response("Screenshot not found", { status: 404 });
     const image = await trace("conversation.screenshot", { runId: id }, () => store.screenshot(id, screenshotId));
     return image ? new Response(image.bytes, { headers: {
       "Content-Type": image.metadata.mime,
@@ -832,6 +847,7 @@ export async function handle(
   if (runRoute) {
     const [, id, action] = runRoute;
     attributes({ runId: id });
+    if (await emailRun(id)) return Response.json({ run: null }, { status: 404 });
     if (request.method === "GET" && !action) {
       const run = await trace("conversation.read", { runId: id }, () => store.getRun(id));
       return Response.json({ run, runners: await store.runners() }, { status: run ? 200 : 404 });
@@ -987,22 +1003,33 @@ export async function handle(
   if (url.pathname === "/api/overview" && request.method === "GET")
     return Response.json({
       // Message text stays out of the 30-second poll; it is read per thread.
-      snapshots: (await store.overview()).map((snapshot) =>
-        snapshot.inbox
+      // A browser's own sign-in gets no inbox and no work item's email links;
+      // work text is shown as written.
+      snapshots: (await store.overview()).map(({ inbox, ...snapshot }) =>
+        browser
           ? {
               ...snapshot,
-              inbox: {
-                ...snapshot.inbox,
-                threads: snapshot.inbox.threads.map(
-                  ({ body: _body, ...thread }) => thread,
-                ),
-              },
+              ...(snapshot.work && {
+                work: {
+                  ...snapshot.work,
+                  issues: snapshot.work.issues?.map(({ emailLinks: _links, ...issue }) => issue) ?? null,
+                },
+              }),
             }
-          : snapshot,
+          : inbox
+            ? {
+                ...snapshot,
+                inbox: {
+                  ...inbox,
+                  threads: inbox.threads.map(({ body: _body, ...thread }) => thread),
+                },
+              }
+            : snapshot,
       ),
+      ...(browser && { emailHidden: true }),
       archives: await store.archives(),
       closes: await store.closes(),
-      inboxActions: await store.inboxActions(),
+      inboxActions: browser ? [] : await store.inboxActions(),
       machines: await store.machineList(),
       serverTime: Date.now(),
     });
