@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   SCREENSHOT_BYTES,
   SCREENSHOTS_PER_MESSAGE,
@@ -130,15 +130,17 @@ export function useScreenshots() {
       if (current !== version.current) return;
       if (!files.length) {
         setError(
-          "No screenshot was found. Copy an image or choose Add screenshots.",
+          "No screenshot was found. Copy an image or choose Add screenshot.",
         );
         return;
       }
       await add(files);
     } catch {
+      // iPhone Safari never offers Paste for an image in a text box's
+      // touch-and-hold menu, so only this button's Paste prompt works there.
       if (current === version.current)
         setError(
-          "Touch and hold the message to paste, use ⌘V / Ctrl+V, or choose Add screenshots.",
+          "Tap Paste again and allow it when asked, use ⌘V / Ctrl+V, or choose Add screenshot.",
         );
     }
   };
@@ -155,6 +157,21 @@ export function useScreenshots() {
   };
 }
 
+// A new preview pushes the message's buttons down: out of Today's own scrolling
+// list, or behind a phone's keyboard while typing. Scroll just enough to show
+// them again; scrollIntoView alone ignores the keyboard.
+export function revealAction(action: Element | null | undefined) {
+  if (!action) return;
+  action.scrollIntoView({ block: "nearest" });
+  const view = window.visualViewport;
+  const bottom = view ? view.offsetTop + view.height : window.innerHeight;
+  const hidden = action.getBoundingClientRect().bottom + 8 - bottom;
+  if (hidden > 0) window.scrollBy({ top: hidden });
+}
+// Tapping these leaves the message box focused, so a phone keeps its keyboard
+// and the page stays still while the browser asks to paste.
+const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+
 type Draft = { draft: ReturnType<typeof useScreenshots>; disabled: boolean };
 // Buttons sit in the composer's action row; previews and errors above it.
 export function ScreenshotButtons({ draft, disabled }: Draft) {
@@ -167,6 +184,7 @@ export function ScreenshotButtons({ draft, disabled }: Draft) {
         type="button"
         title={limits}
         disabled={disabled || draft.busy}
+        onMouseDown={keepFocus}
         onClick={() => input.current?.click()}
       >
         Add screenshot
@@ -176,6 +194,7 @@ export function ScreenshotButtons({ draft, disabled }: Draft) {
         type="button"
         title={limits}
         disabled={disabled || draft.busy}
+        onMouseDown={keepFocus}
         onClick={() => void draft.fromClipboard()}
       >
         Paste
@@ -197,9 +216,19 @@ export function ScreenshotButtons({ draft, disabled }: Draft) {
   );
 }
 export function ScreenshotPreviews({ draft, disabled }: Draft) {
-  if (!draft.busy && !draft.error && !draft.images.length) return null;
+  const root = useRef<HTMLDivElement>(null);
+  const count = draft.images.length,
+    shown = useRef(count);
+  useEffect(() => {
+    if (count > shown.current)
+      revealAction(
+        root.current?.closest("form")?.querySelector('button[type="submit"]'),
+      );
+    shown.current = count;
+  }, [count]);
+  if (!draft.busy && !draft.error && !count) return null;
   return (
-    <div className="screenshot-picker">
+    <div className="screenshot-picker" ref={root}>
       {draft.busy && <p role="status">Preparing screenshot…</p>}
       {!!draft.error && (
         <p className="error" role="alert">

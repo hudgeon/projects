@@ -166,17 +166,24 @@ export function ConversationRow({
   );
 }
 
-// Enter sends and Shift+Enter starts a new paragraph. Enter that confirms an
+// Enter sends and Shift+Enter starts a new paragraph. A phone or tablet keyboard
+// has no Shift+Return, so on touch Return starts a new line and the Send button
+// (or Cmd/Ctrl+Enter on an attached keyboard) sends. Enter that confirms an
 // input method's composition (keyCode 229 in Safari) only confirms the text.
+export const touchTyping = () =>
+  typeof matchMedia === "function" &&
+  matchMedia("(hover: none) and (pointer: coarse)").matches;
 export function sendOnEnter(
   event: React.KeyboardEvent<HTMLTextAreaElement>,
   send: () => void,
+  touch = touchTyping(),
 ) {
   if (
     event.key !== "Enter" ||
     event.shiftKey ||
     event.nativeEvent.isComposing ||
-    event.keyCode === 229
+    event.keyCode === 229 ||
+    (touch && !event.metaKey && !event.ctrlKey)
   )
     return;
   event.preventDefault();
@@ -336,7 +343,7 @@ export function Composer({
         value={text}
         placeholder={placeholder}
         disabled={create.isPending}
-        enterKeyHint="send"
+        enterKeyHint={touchTyping() ? "enter" : "send"}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) =>
           sendOnEnter(event, () => {
@@ -1213,7 +1220,7 @@ export function ConversationPage({
           maxLength={8000}
           rows={2}
           value={reply}
-          enterKeyHint="send"
+          enterKeyHint={touchTyping() ? "enter" : "send"}
           onChange={(e) => setReply(e.target.value)}
           onKeyDown={(event) => {
             const form = event.currentTarget.form;

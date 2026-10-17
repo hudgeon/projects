@@ -7,6 +7,7 @@ import { htmlToText, latestOnly, messageText, readInbox, unsubscribeOptions } fr
 import { privateAddress, publicHttps, publicLookup } from "../collector/inbox-actions";
 import { agenda, agendaOrder, rows, type Row } from "../src/work-view";
 import { sendOnEnter } from "../src/run-view";
+import { revealAction } from "../src/screenshots";
 import { awaitsYou } from "../src/run-model";
 import type { KeyboardEvent } from "react";
 import { readIssues } from "../collector/work";
@@ -485,28 +486,69 @@ test("old work agenda and conversation links open Today", () => {
   assert.deepEqual(parseNavigation({ view: "unknown" }), { view: "today" });
   assert.equal(parseNavigation({ view: "health" }).view, "health");
 });
+const press = (key: string, extra: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; isComposing?: boolean; keyCode?: number; touch?: boolean } = {}) => {
+  let sent = 0, prevented = false;
+  sendOnEnter(
+    {
+      key,
+      shiftKey: !!extra.shiftKey,
+      metaKey: !!extra.metaKey,
+      ctrlKey: !!extra.ctrlKey,
+      keyCode: extra.keyCode ?? 13,
+      nativeEvent: { isComposing: !!extra.isComposing },
+      preventDefault: () => { prevented = true; },
+    } as unknown as KeyboardEvent<HTMLTextAreaElement>,
+    () => sent++,
+    ...(extra.touch === undefined ? [] : [extra.touch]),
+  );
+  return [sent, prevented];
+};
 test("Enter sends a message; Shift+Enter and input-method Enter do not", () => {
-  const press = (key: string, extra: { shiftKey?: boolean; metaKey?: boolean; isComposing?: boolean; keyCode?: number } = {}) => {
-    let sent = 0, prevented = false;
-    sendOnEnter(
-      {
-        key,
-        shiftKey: !!extra.shiftKey,
-        metaKey: !!extra.metaKey,
-        keyCode: extra.keyCode ?? 13,
-        nativeEvent: { isComposing: !!extra.isComposing },
-        preventDefault: () => { prevented = true; },
-      } as unknown as KeyboardEvent<HTMLTextAreaElement>,
-      () => sent++,
-    );
-    return [sent, prevented];
-  };
   assert.deepEqual(press("Enter"), [1, true]);
   assert.deepEqual(press("Enter", { metaKey: true }), [1, true]);
   assert.deepEqual(press("Enter", { shiftKey: true }), [0, false], "Shift+Enter keeps the new paragraph");
   assert.deepEqual(press("Enter", { isComposing: true }), [0, false]);
   assert.deepEqual(press("Enter", { keyCode: 229 }), [0, false]);
   assert.deepEqual(press("a"), [0, false]);
+  assert.deepEqual(press("Enter", { touch: false }), [1, true]);
+});
+test("Return on a phone keyboard starts a new line instead of sending", () => {
+  assert.deepEqual(press("Enter", { touch: true }), [0, false], "the textarea inserts the new line");
+  assert.deepEqual(press("Enter", { touch: true, shiftKey: true }), [0, false]);
+  assert.deepEqual(press("Enter", { touch: true, metaKey: true }), [1, true], "an attached keyboard still sends");
+  assert.deepEqual(press("Enter", { touch: true, ctrlKey: true }), [1, true]);
+  assert.deepEqual(press("Enter", { touch: true, ctrlKey: true, isComposing: true }), [0, false]);
+});
+test("revealing the send button scrolls its list, then past the keyboard by the hidden amount", () => {
+  const scrolled: number[] = [];
+  let nested = 0;
+  const at = (bottom: number) =>
+    ({
+      getBoundingClientRect: () => ({ bottom }),
+      scrollIntoView: (options: ScrollIntoViewOptions) => {
+        assert.deepEqual(options, { block: "nearest" });
+        nested++;
+      },
+    }) as unknown as Element;
+  const original = (globalThis as { window?: unknown }).window;
+  // A phone with its keyboard up: 420px of a 659px layout viewport show.
+  (globalThis as { window?: unknown }).window = {
+    innerHeight: 659,
+    visualViewport: { offsetTop: 30, height: 420 },
+    scrollBy: ({ top }: { top: number }) => scrolled.push(top),
+  };
+  try {
+    revealAction(at(648));
+    revealAction(at(400));
+    revealAction(null);
+    assert.deepEqual(scrolled, [206], "only the hidden button scrolls, by its overlap plus a margin");
+    assert.equal(nested, 2, "scrollable lists reveal it first");
+    (globalThis as { window?: unknown }).window = { innerHeight: 659, scrollBy: ({ top }: { top: number }) => scrolled.push(top) };
+    revealAction(at(700));
+    assert.deepEqual(scrolled, [206, 49], "without visualViewport the window height bounds it");
+  } finally {
+    (globalThis as { window?: unknown }).window = original;
+  }
 });
 test("the user's move holds finished work and running work only they can unblock", () => {
   assert.equal(awaitsYou({ state: "completed" }), true);

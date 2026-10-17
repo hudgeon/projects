@@ -221,8 +221,11 @@ delivery.
   window; inline code, `data:` images and Google Fonts load, nothing else. Only
   repositories a machine reports open, and a request no machine answers within
   a minute says so.
-- **Screenshots** can be pasted or added to messages; the browser re-encodes
-  and bounds them and both master and children receive them.
+- **Screenshots** can be pasted or added to messages (on an iPhone, with the
+  Paste button); the browser re-encodes and bounds them and both master and
+  children receive them.
+- **Typing**: Enter sends and Shift+Enter starts a new line. On a phone,
+  Return starts a new line and the Send button sends.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
   prompts, so it never waits behind long work.
 - **Bounds**: ten active standard and thirty active quick conversations, 30 and
