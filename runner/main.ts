@@ -24,6 +24,8 @@ import { connectorAccess } from "./connectors";
 import { Failure } from "./native";
 import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
+import { readDocument } from "./documents";
+import { documentJobSchema } from "../src/document-model";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
 
 const absolute = z.string().refine(path.isAbsolute);
@@ -76,7 +78,8 @@ type Route =
   | "/api/runner/heartbeat"
   | "/api/runner/report"
   | "/api/runner/browser"
-  | "/api/runner/screenshot";
+  | "/api/runner/screenshot"
+  | "/api/runner/document";
 type Body = {
   runnerId: string;
   activeRunIds?: string[];
@@ -85,6 +88,10 @@ type Body = {
   generation?: number;
   progress?: Progress;
   screenshotId?: string;
+  documents?: boolean;
+  lease?: string;
+  content?: string;
+  failure?: string;
 };
 // The Worker's runner API. A failure is logged when it starts and at each
 // doubling of attempts, and its recovery once, so an outage cannot flood logs.
@@ -96,7 +103,8 @@ function client(endpoint: URL, token: string) {
     let response: Response | undefined;
     const context: TelemetryFields = {
       route,
-      runId: body.id,
+      // A document's id is not a conversation's.
+      runId: route === "/api/runner/document" ? undefined : body.id,
       generation: body.generation,
       seq: body.progress?.seq,
     };
@@ -661,6 +669,42 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       await needsInspection(config, post, runnerId, claim.run);
     }
   };
+  // An HTML edition the owner opened: read it with this machine's GitHub
+  // login and hand it over, or say why not. At most two at once, reserved
+  // before asking; a stopping or updating runner starts none and abandons
+  // any in flight, whose requests expire for the owner to ask again.
+  let fetching = 0;
+  const stopDocuments = AbortSignal.any([shutdown.signal, draining.signal]);
+  const reserve = () => (fetching < 2 && !stopDocuments.aborted ? (fetching++, true) : false);
+  const offered = (reserved: boolean, document: unknown) => {
+    const job = documentJobSchema.safeParse(document);
+    if (!reserved) return;
+    if (!job.success || stopDocuments.aborted) return void fetching--;
+    void (async () => {
+      try {
+        const result = await readDocument(job.data, undefined, stopDocuments);
+        if (!stopDocuments.aborted)
+          await post("/api/runner/document", { runnerId, id: job.data.id, lease: job.data.lease, ...result });
+      } catch {
+        /* Logged by post without the document. */
+      } finally {
+        fetching--;
+      }
+    })();
+  };
+  // Claims carry documents; a runner with every slot busy is not claiming,
+  // so it asks for them on its own. This timer also keeps a full runner
+  // running, since its executors are detached.
+  const busy = setInterval(() => {
+    if (stopDocuments.aborted) return clearInterval(busy);
+    if (executors.size < config.concurrency + config.quickConcurrency) return;
+    const reserved = reserve();
+    if (!reserved) return;
+    void post("/api/runner/document", { runnerId }).then(
+      (result) => offered(true, result.document),
+      () => offered(true, null),
+    );
+  }, 3000);
   try {
     await runPool({
       concurrency: config.concurrency,
@@ -671,11 +715,18 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       leave: true,
       once,
       claim: async (activeRunIds, lanes) => {
-        const claim = await post("/api/runner/claim", {
-          runnerId,
-          activeRunIds,
-          lanes,
-        });
+        const reserved = reserve();
+        let claim: Record<string, unknown> = {};
+        try {
+          claim = await post("/api/runner/claim", {
+            runnerId,
+            activeRunIds,
+            lanes,
+            documents: reserved,
+          });
+        } finally {
+          offered(reserved, claim.document);
+        }
         return claim.run ? (claim as ClaimedRun) : null;
       },
       // Transport failures are logged by post with conversation correlation.
@@ -695,6 +746,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
         : launch,
     });
   } finally {
+    clearInterval(busy);
     await unlink(lock);
   }
 }

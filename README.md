@@ -209,6 +209,18 @@ delivery.
   Documents named in results, notes or messages are listed with their saved
   edition. `src/run-text.ts` owns this presentation and only removes protocol
   residue.
+- **Pages**: an HTML mockup or slide deck linked at a saved commit opens
+  inside Projects, full screen over the current view, from the documents list
+  or the link itself; **Source** keeps the GitHub copy a tap away. The first
+  machine whose runner calls after you open one reads that edition with its own
+  GitHub login, and the Worker keeps it (up to 5 MB, the 30 most recently
+  opened). The commit is the version: nothing is republished. The page runs its
+  own scripts in an opaque origin (sandbox and `DOCUMENT_CSP` in
+  `src/document-model.ts`), so its slide controls, notes and clicks work but it
+  cannot reach your session, Projects' pages or APIs, the network or the top
+  window; inline code, `data:` images and Google Fonts load, nothing else. Only
+  repositories a machine reports open, and a request no machine answers within
+  a minute says so.
 - **Screenshots** can be pasted or added to messages; the browser re-encodes
   and bounds them and both master and children receive them.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
@@ -369,6 +381,9 @@ Screen.
   be same-origin.
 - **Machines** authenticate with their own tokens, stored as hashes; collector
   and runner tokens reach only their own routes and never read the overview.
+- **Pages** are untrusted HTML: served only to the signed-in owner, framed only
+  by Projects, sandboxed without same-origin, top navigation, forms or network.
+  Links may open in a new tab, outside Projects.
 - **Whoever can sign in can act on your machines** with your logins and
   connected accounts, so keep `ALLOWED_EMAILS` to yourself.
 - **Telemetry** (`src/telemetry.ts`) is a runtime-validated allowlist of fixed

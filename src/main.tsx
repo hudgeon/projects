@@ -57,6 +57,7 @@ import {
 } from "./model";
 import { overviewQueryOptions } from "./overview-query";
 import { NotificationPrompt } from "./notifications";
+import { DocumentViewer } from "./document-view";
 
 const quotaReasons = {
   login_expired: "login expired",
@@ -728,7 +729,7 @@ function Dashboard() {
   const quiet = visible.filter((g) => !(activity.get(g[0].project.id) ?? 0));
   return (
     <>
-      <header className="topbar">
+      <header className="topbar" inert={!!navigation.doc}>
         <Link className="brand" to="/" search={{ view: "today" }}>
           <span className="brand-mark" aria-hidden="true">
             ▤
@@ -778,7 +779,7 @@ function Dashboard() {
         </button>
       </header>
       <WeeklyQuotas snapshots={snapshots} />
-      <main className={`view-${view}`}>
+      <main className={`view-${view}`} inert={!!navigation.doc}>
         {view === "project" && (
           <h1 className="page-title">{selectedProjectName ?? "Project"}</h1>
         )}
@@ -984,6 +985,7 @@ function Dashboard() {
           </footer>
         )}
       </main>
+      {navigation.doc && <DocumentViewer key={navigation.doc} url={navigation.doc} />}
     </>
   );
 }

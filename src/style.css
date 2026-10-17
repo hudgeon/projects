@@ -1861,3 +1861,98 @@ a.work-card-head { text-decoration: none; display: block; color: inherit; }
 .speed-cohort { padding: 1rem; margin: 1rem 0; border: 1px solid var(--line, #d9dfe4); border-radius: .6rem; background: var(--surface, #fff); overflow-wrap: anywhere; }
 .speed-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .speed-pair p { margin: .3rem 0; }
+/* A committed HTML page, open over the current view on phone and desktop. */
+.doc-kind.page {
+  background: #e3f1ea;
+  color: #23694a;
+}
+.docs li.doc-page {
+  display: flex;
+  align-items: flex-start;
+}
+.docs li.doc-page > a:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.docs a.doc-source {
+  flex: none;
+  padding: 7px 6px;
+  color: var(--blue);
+  font-size: 12px;
+  text-decoration: underline;
+}
+.doc-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+.doc-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  padding-top: max(8px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.doc-viewer-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+.doc-viewer-title strong,
+.doc-viewer-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-viewer-title span {
+  color: var(--faint);
+  font-size: 12px;
+}
+.doc-viewer-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.doc-viewer-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #f3f6f8;
+}
+.doc-viewer-body iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+.doc-viewer-state {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  max-width: 520px;
+  margin: 12vh auto 0;
+  padding: 0 20px;
+  color: var(--muted);
+}
+.doc-viewer-state p {
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .doc-viewer-bar {
+    gap: 8px;
+  }
+  .doc-viewer-title span {
+    display: none;
+  }
+}

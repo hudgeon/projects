@@ -17,6 +17,9 @@ type Operation =
   | "conversation.archive"
   | "conversation.screenshot"
   | "runtime.check"
+  | "document.request"
+  | "document.read"
+  | "document.deliver"
   | "browser.grant"
   | "browser.status"
   | "browser.acquire"
@@ -74,6 +77,7 @@ export function requestRoute(pathname: string) {
     pathname.replace(/^\/api\/runs\/[a-f0-9-]{36}(?=\/|$)/, "/api/runs/:id")
       .replace(/^\/api\/inbox\/threads\/[a-f0-9]{10,40}$/, "/api/inbox/threads/:id")
       .replace(/^\/api\/browser\/[a-f0-9-]{36}\/cdp$/, "/api/browser/:id/cdp")
+      .replace(/^\/api\/documents\/[a-f0-9]{64}$/, "/api/documents/:id")
       .replace(/\/screenshots\/[a-f0-9-]{36}$/, "/screenshots/:id"),
   );
   return route.success

@@ -1,9 +1,23 @@
 import React from "react";
 import { renderInlineMarkdown, renderMarkdown } from "./markdown";
+import { htmlSource } from "./document-model";
+import { useOpenDocument } from "./document-view";
+// A plain click on a committed HTML page opens it here; other links, and
+// modified clicks, go where they point.
+function useDocumentClicks() {
+  const open = useOpenDocument();
+  return (event: React.MouseEvent) => {
+    const link = (event.target as Element).closest?.("a[href]");
+    const href = link?.getAttribute("href") ?? "";
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !htmlSource(href)) return;
+    event.preventDefault();
+    open(href);
+  };
+}
 // HTML is produced only by the shared, HTML-disabled Markdown renderer.
 export function MarkdownContent({ text, className }: { text: string; className?: string }) {
-  return <div className={className} dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
+  return <div className={className} onClick={useDocumentClicks()} dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
 }
 export function InlineMarkdown({ text }: { text: string }) {
-  return <span dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(text) }} />;
+  return <span onClick={useDocumentClicks()} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(text) }} />;
 }

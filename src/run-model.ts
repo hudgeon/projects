@@ -301,6 +301,8 @@ export const runnerClaimSchema = runnerIdentitySchema
     activeRunIds: z.array(uuid).max(20).default([]),
     // Lanes with a free slot; an older runner omits it and takes either.
     lanes: z.array(laneSchema).min(1).max(2).optional(),
+    // It can fetch an HTML edition the owner opened; an older runner cannot.
+    documents: z.boolean().optional(),
   })
   .strict();
 export const runnerReportSchema = runnerIdentitySchema

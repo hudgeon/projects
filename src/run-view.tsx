@@ -49,6 +49,7 @@ import {
   useScreenshots,
 } from "./screenshots";
 import { InlineMarkdown, MarkdownContent } from "./markdown-view";
+import { htmlSource } from "./document-model";
 import {
   api,
   overviewQueryOptions,
@@ -58,6 +59,7 @@ import { isArchived, type ArchiveEntry } from "./archive-model";
 import {
   conversationSearch,
   projectSearch,
+  withDocument,
   workSearch,
   type Navigation,
 } from "./navigation";
@@ -726,17 +728,33 @@ export function DocumentList({
   return (
     <>
       <ul className="docs">
-        {(all ? docs : docs.slice(0, limit)).map((doc) => (
-          <li key={doc.url}>
-            <a href={doc.url} target="_blank" rel="noreferrer">
-              <span className={`doc-kind ${doc.kind}`}>{kinds[doc.kind]}</span>
-              <span className="doc-text">
-                <span className="doc-label">{doc.label}</span>
-                <span className="doc-detail">{doc.detail}</span>
-              </span>
-            </a>
-          </li>
-        ))}
+        {(all ? docs : docs.slice(0, limit)).map((doc) =>
+          htmlSource(doc.url) ? (
+            // A committed HTML page opens here; its source stays a tap away.
+            <li key={doc.url} className="doc-page">
+              <Link to="/" search={(prev) => withDocument(prev, doc.url)}>
+                <span className="doc-kind page">Page</span>
+                <span className="doc-text">
+                  <span className="doc-label">{doc.label}</span>
+                  <span className="doc-detail">{doc.detail}</span>
+                </span>
+              </Link>
+              <a className="doc-source" href={doc.url} target="_blank" rel="noreferrer">
+                Source
+              </a>
+            </li>
+          ) : (
+            <li key={doc.url}>
+              <a href={doc.url} target="_blank" rel="noreferrer">
+                <span className={`doc-kind ${doc.kind}`}>{kinds[doc.kind]}</span>
+                <span className="doc-text">
+                  <span className="doc-label">{doc.label}</span>
+                  <span className="doc-detail">{doc.detail}</span>
+                </span>
+              </a>
+            </li>
+          ),
+        )}
       </ul>
       {docs.length > limit && !all && (
         <button className="link-button" onClick={() => setAll(true)}>

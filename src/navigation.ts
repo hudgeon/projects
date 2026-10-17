@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { htmlSource } from "./document-model";
 
 const key = z
   .string()
@@ -18,6 +19,13 @@ const searchSchema = z.object({
   project: key.optional().catch(undefined),
   run: z.uuid().optional().catch(undefined),
   archived: z.boolean().optional().catch(undefined),
+  // An HTML mockup or slide deck open over the view, by its pinned GitHub link.
+  doc: z
+    .string()
+    .max(1000)
+    .refine((url) => htmlSource(url) !== null)
+    .optional()
+    .catch(undefined),
 });
 // Bookmarks to the former work agenda and conversations tabs open Today.
 export const parseNavigation = (value: Record<string, unknown>) =>
@@ -44,3 +52,8 @@ export const workSearch = (
   email?: string,
   run?: string,
 ): Navigation => ({ view: "today", work, email, run });
+// Opens or closes a document over whatever view is showing.
+export const withDocument = (
+  prev: Partial<Navigation>,
+  doc?: string,
+): Navigation => ({ ...prev, view: prev.view ?? "today", doc });

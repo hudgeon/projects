@@ -7,6 +7,8 @@ import { pushEndpoint, sendPush, vapidPublicKey } from "./push";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { browserPath } from "./browser";
+import { Documents } from "./documents";
+import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
 import { runInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
 import { archiveInputSchema, archiveKey, type ArchiveEntry, type ArchiveTarget } from "../src/archive-model";
@@ -51,9 +53,11 @@ const KEEP_INBOX_MS = 3 * STALE_AFTER;
 export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
   private machines: Machines;
+  private documents: Documents;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
+    this.documents = new Documents(ctx.storage);
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
@@ -138,6 +142,17 @@ export class Portfolio extends DurableObject<Env> {
   moveRun(id: string) { return this.runs.move(id); }
   runners() { return this.runs.runners(); }
   claimRun(owner: string, activeRunIds: string[], lanes: Lane[] | undefined, host: RunnerHost) { return this.runs.claim(owner, activeRunIds, lanes, host); }
+  // HTML editions come only from repositories a machine reports: a project or
+  // the work repository.
+  requestDocument(source: HtmlSource, retry: boolean) {
+    const repo = source.repo.toLowerCase();
+    const known = this.overview().some((s) => s.projects.some((p) => p.repo.toLowerCase() === repo) || s.work?.repo?.toLowerCase() === repo);
+    return known ? this.documents.request(source, retry) : null;
+  }
+  documentStatus(source: HtmlSource) { return this.documents.status(source); }
+  leaseDocument(owner: string) { return this.documents.lease(owner); }
+  deliverDocument(owner: string, id: string, lease: string, result: { bytes: Uint8Array } | { failure: "not_found" | "too_large" | "not_html" | "unavailable" }) { return this.documents.deliver(owner, id, lease, result); }
+  documentContent(id: string) { return this.documents.content(id); }
   heartbeatRun(owner: string, id: string, generation: number, host: RunnerHost) { return this.runs.heartbeat(owner, id, generation, host); }
   async reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) {
     return this.runs.report(owner, id, generation, progress, host, recorded => {
@@ -471,7 +486,9 @@ export class Portfolio extends DurableObject<Env> {
 
 // Routes authorised by the collector token; every other route needs a session.
 export const collectorRoutes = new Set(["/api/ingest", "/api/closes", "/api/inbox/actions", "/api/review", "/api/collector/duties"]);
-export const runnerRoutes = new Set(["/api/runner/claim", "/api/runner/heartbeat", "/api/runner/report", "/api/runner/screenshot", "/api/runner/readiness", "/api/runner/browser"]);
+export const runnerRoutes = new Set(["/api/runner/claim", "/api/runner/heartbeat", "/api/runner/report", "/api/runner/screenshot", "/api/runner/readiness", "/api/runner/browser", "/api/runner/document"]);
+// An owner's HTML edition, served only to their signed-in session.
+export const documentPath = /^\/api\/documents\/([a-f0-9]{64})$/;
 async function runtimeStatus(store: DurableObjectStub<Portfolio>, env: Env, id?: string) {
   try {
     const versions = await trace("runtime.check", {}, () => store.runtimeVersions(id));
@@ -537,8 +554,20 @@ export async function handle(
       return new Response("Method not allowed", { status: 405 });
     const host = runner.machine;
     try {
-      const raw = await readJson(request, 1_000_000);
+      const delivery = url.pathname.endsWith("/document");
+      const raw = await readJson(request, delivery ? Math.ceil(MAX_DOCUMENT_BYTES / 3) * 4 + 4096 : 1_000_000);
       const owner = await runnerOwner(runner, z.object({ runnerId: z.uuid() }).parse(raw).runnerId);
+      if (delivery) {
+        // A runner whose slots are all busy asks here, since it is not claiming.
+        if (runnerLeaseSchema.safeParse(raw).success) {
+          const document = await store.leaseDocument(owner);
+          return Response.json(document ? { document } : {});
+        }
+        const input = runnerDocumentSchema.parse(raw);
+        const accepted = await trace("document.deliver", {}, () =>
+          store.deliverDocument(owner, input.id, input.lease, input.failure ? { failure: input.failure } : { bytes: new Uint8Array(Buffer.from(input.content!, "base64")) }));
+        return Response.json({ accepted }, { status: accepted ? 200 : 409 });
+      }
       if (url.pathname.endsWith("/browser")) {
         const input = runnerHeartbeatSchema.parse(raw);
         const conversation = env.CONVERSATIONS.getByName(JSON.stringify([env.PORTFOLIO_ID, input.id]));
@@ -573,7 +602,9 @@ export async function handle(
               })),
             }))
           : [];
-        return Response.json({ run, activity, settings: await store.executionSettings() });
+        // A runner that can fetch documents takes the oldest one waiting.
+        const document = input.documents ? await store.leaseDocument(owner) : null;
+        return Response.json({ run, activity, settings: await store.executionSettings(), ...(document ? { document } : {}) });
       }
       if (url.pathname.endsWith("/heartbeat")) {
         const input = runnerHeartbeatSchema.parse(raw);
@@ -726,6 +757,39 @@ export async function handle(
         { status: 409 },
       );
     }
+  }
+  // The viewer asks with POST, so no repository or file name enters a URL.
+  if (url.pathname === "/api/documents") {
+    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+    let source: HtmlSource | null, retry: boolean;
+    try {
+      const input = documentRequestSchema.parse(await readJson(request, 2048));
+      source = htmlSource(input.url);
+      retry = input.retry ?? false;
+    } catch {
+      return Response.json({ error: "Invalid document request" }, { status: 400 });
+    }
+    if (!source) return Response.json({ error: "Only HTML files linked at a saved commit open here." }, { status: 400 });
+    const known = await store.documentStatus(source);
+    if (known && !(retry && known.state === "failed")) return Response.json({ document: known });
+    if (!(await store.rate(`documents:${caller}`, 120, 3600_000)))
+      return Response.json({ error: "Try again later." }, { status: 429 });
+    const document = await trace("document.request", {}, () => store.requestDocument(source, retry));
+    return Response.json(document ? { document } : { error: "This repository is not on a connected machine." }, { status: document ? 200 : 404 });
+  }
+  const documentRoute = documentPath.exec(url.pathname);
+  if (documentRoute) {
+    if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+    const bytes = await trace("document.read", {}, () => store.documentContent(documentRoute[1]));
+    return bytes
+      ? new Response(bytes, { headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Disposition": "inline",
+          "Cross-Origin-Resource-Policy": "same-origin",
+          // For browsers without CSP frame-ancestors.
+          "X-Frame-Options": "SAMEORIGIN",
+        } })
+      : new Response("This document is not available.", { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
   const imageRoute = /^\/api\/runs\/([a-f0-9-]{36})\/screenshots\/([a-f0-9-]{36})$/.exec(url.pathname);
   if (imageRoute) {
@@ -925,7 +989,9 @@ export async function handle(
   return env.ASSETS.fetch(request);
 }
 
-export function secure(response: Response) {
+// A document's own policy keeps its HTML in an opaque origin even when opened
+// directly; everything else gets the app's.
+export function secure(response: Response, document = false) {
   const result = new Response(response.body, {status: response.status, statusText: response.statusText, headers: response.headers, webSocket: response.webSocket});
   result.headers.set("Cache-Control", "no-store");
   result.headers.set("X-Content-Type-Options", "nosniff");
@@ -933,12 +999,15 @@ export function secure(response: Response) {
   result.headers.set("Strict-Transport-Security", "max-age=31536000");
   result.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    document
+      ? DOCUMENT_CSP
+      : "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   );
   return result;
 }
 export default {
   async fetch(request: Request, env: Env) {
+    const document = documentPath.test(new URL(request.url).pathname);
     return secure(
       await observeRequest(request, async () => {
         const pathname = new URL(request.url).pathname,
@@ -982,6 +1051,7 @@ export default {
         );
         return handle(request, env, caller);
       }),
+      document,
     );
   },
 } satisfies ExportedHandler<Env>;
