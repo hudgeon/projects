@@ -19,8 +19,31 @@ export const sourceSchema = z
   .strict();
 // Provider-reported subscription limits: never inferred from session tokens.
 export const quotaSchema = z.discriminatedUnion("state", [
-  z.object({state: z.literal("ok"), observedAt: time, weekly: z.object({usedPercent: z.number().min(0).max(100), resetsAt: time}).strict()}).strict(),
-  z.object({state: z.enum(["unavailable", "unsupported"]), observedAt: time}).strict(),
+  z
+    .object({
+      state: z.literal("ok"),
+      observedAt: time,
+      weekly: z
+        .object({ usedPercent: z.number().min(0).max(100), resetsAt: time })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.enum(["unavailable", "unsupported"]),
+      observedAt: time,
+      reason: z
+        .enum([
+          "login_expired",
+          "login_unavailable",
+          "provider_rejected",
+          "rate_limited",
+          "no_weekly_limit",
+          "read_failed",
+        ])
+        .optional(),
+    })
+    .strict(),
 ]);
 export type Quota = z.infer<typeof quotaSchema>;
 export const sessionSchema = z
@@ -113,7 +136,10 @@ export const snapshotSchema = z
     unassignedSessions: z.array(sessionSchema).max(2000),
     work: workSnapshotSchema.optional(),
     inbox: inboxSchema.optional(),
-    quotas: z.object({codex: quotaSchema, claude: quotaSchema}).strict().optional(),
+    quotas: z
+      .object({ codex: quotaSchema, claude: quotaSchema })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Project = z.infer<typeof projectSchema>;
@@ -148,9 +174,30 @@ export function freshness(at: number, now = Date.now()) {
 // Machines can share a subscription. Select one observation; never add them.
 // A failed newest read is shown as unavailable rather than hiding it with an
 // older successful value. The source machine remains visible in the UI.
-export function currentQuota(snapshots: Snapshot[], provider: "codex" | "claude") {
-  return snapshots.flatMap((s) => s.quotas ? [{host: s.host, ...s.quotas[provider]}] : [])
-    .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null;
+export function currentQuota(
+  snapshots: Snapshot[],
+  provider: "codex" | "claude",
+) {
+  return (
+    snapshots
+      .flatMap((s) =>
+        s.quotas ? [{ host: s.host, ...s.quotas[provider] }] : [],
+      )
+      .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
+  );
+}
+// A straight-line budget across the provider's seven-day window. This is a
+// planning comparison, not a provider-enforced daily allowance or forecast.
+export function weeklyPace(quota: Quota, now = Date.now()) {
+  if (quota.state !== "ok" || freshness(quota.observedAt, now)) return null;
+  const week = 7 * 24 * 60 * 60_000;
+  const remaining = quota.weekly.resetsAt - now;
+  if (remaining <= 0 || remaining > week) return null;
+  const elapsedPercent = 100 * (1 - remaining / week);
+  return {
+    elapsedPercent,
+    difference: quota.weekly.usedPercent - elapsedPercent,
+  };
 }
 function worktreeFor(cwd: string, worktrees: Worktree[]) {
   return worktrees

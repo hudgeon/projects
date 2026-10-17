@@ -42,6 +42,7 @@ import {
   currentGithub,
   freshness,
   currentQuota,
+  weeklyPace,
   lastActivity,
   projectHealth,
   pullConcern,
@@ -57,30 +58,110 @@ import {
 import { overviewQueryOptions } from "./overview-query";
 import { NotificationPrompt } from "./notifications";
 
+const quotaReasons = {
+  login_expired: "login expired",
+  login_unavailable: "login unavailable",
+  provider_rejected: "usage request rejected",
+  rate_limited: "usage read rate limited",
+  no_weekly_limit: "no weekly limit reported",
+  read_failed: "usage read failed",
+};
 const verdicts: Record<ProjectHealth["verdict"], [string, string]> = {
   stale: ["Update overdue", "warning"],
   attention: ["Needs a look", "warning"],
   progress: ["In progress", "working"],
   clean: ["Git clean", "good"],
 };
-function WeeklyQuotas({snapshots}: {snapshots: Snapshot[]}) {
+function WeeklyQuotas({ snapshots }: { snapshots: Snapshot[] }) {
   const now = Date.now();
-  return <aside className="weekly-quotas" aria-label="Weekly quota remaining">
-    <span className="quota-heading">Weekly remaining</span>
-    {(["codex", "claude"] as const).map((provider) => {
-      const quota = currentQuota(snapshots, provider);
-      const stale = !!quota && freshness(quota.observedAt, now);
-      const expired = quota?.state === "ok" && quota.weekly.resetsAt <= now;
-      const available = quota?.state === "ok" && !stale && !expired;
-      const name = provider === "codex" ? "Codex" : "Claude";
-      const reset = quota?.state === "ok" ? new Date(quota.weekly.resetsAt).toLocaleString(undefined, {weekday: "short", hour: "numeric", minute: "2-digit"}) : null;
-      const value = available ? `${Math.floor(100 - quota.weekly.usedPercent)}% left` : stale ? "update overdue" : expired ? "awaiting refresh" : "unavailable";
-      return <span key={provider} className={`quota-item${available && quota.weekly.usedPercent >= 90 ? " quota-low" : ""}`} title={quota ? `Latest report from ${hostName(quota.host)} · ${new Date(quota.observedAt).toLocaleString()}${reset ? ` · resets ${reset}` : ""}. Subscription limit, not a token balance.` : "Waiting for a machine to report its subscription limit."}>
-        <strong>{name}</strong> <span>{value}</span>
-        {available && <span className="quota-reset">resets {reset}</span>}
-      </span>;
-    })}
-  </aside>;
+  return (
+    <aside className="weekly-quotas" aria-label="Weekly quota remaining">
+      <span className="quota-heading">Weekly remaining</span>
+      {(["codex", "claude"] as const).map((provider) => {
+        const quota = currentQuota(snapshots, provider);
+        const stale = !!quota && freshness(quota.observedAt, now);
+        const expired = quota?.state === "ok" && quota.weekly.resetsAt <= now;
+        const available = quota?.state === "ok" && !stale && !expired;
+        const pace = quota ? weeklyPace(quota, now) : null;
+        const name = provider === "codex" ? "Codex" : "Claude";
+        const reset =
+          quota?.state === "ok"
+            ? new Date(quota.weekly.resetsAt).toLocaleString(undefined, {
+                weekday: "short",
+                hour: "numeric",
+                minute: "2-digit",
+              })
+            : null;
+        const value = available
+          ? `${Math.floor(100 - quota.weekly.usedPercent)}% left`
+          : stale
+            ? "update overdue"
+            : expired
+              ? "awaiting refresh"
+              : quota && quota.state !== "ok" && quota.reason
+                ? quotaReasons[quota.reason]
+                : "unavailable";
+        const difference = pace ? Math.round(Math.abs(pace.difference)) : 0;
+        const paceLabel = !pace
+          ? null
+          : difference === 0
+            ? "on weekly pace"
+            : `${difference} pp ${pace.difference > 0 ? "ahead of" : "behind"} weekly pace`;
+        return (
+          <span
+            key={provider}
+            className={`quota-item${available && quota.weekly.usedPercent >= 90 ? " quota-low" : ""}`}
+            title={
+              quota
+                ? `Latest report from ${hostName(quota.host)} · ${new Date(quota.observedAt).toLocaleString()}${reset ? ` · resets ${reset}` : ""}. Subscription limit, not a token balance.`
+                : "Waiting for a machine to report its subscription limit."
+            }
+          >
+            <strong>{name}</strong> <span>{value}</span>
+            {available && (
+              <>
+                <span className="quota-reset">resets {reset}</span>
+                {pace && (
+                  <span
+                    className={`quota-pace${pace.difference >= 0.5 ? " quota-ahead" : ""}`}
+                  >
+                    <span
+                      className="quota-gauge"
+                      role="meter"
+                      aria-label={`${name} weekly usage consumed; marker shows elapsed week`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={quota.weekly.usedPercent}
+                      aria-valuetext={`${quota.weekly.usedPercent}% used; ${pace.elapsedPercent.toFixed(1)}% of week elapsed; ${paceLabel}`}
+                      title="Bar: allowance consumed. Marker: share of the week elapsed. Ahead means using faster than an even weekly budget; behind means using slower."
+                    >
+                      <span
+                        className="quota-fill"
+                        style={{ width: `${quota.weekly.usedPercent}%` }}
+                      />
+                      <span
+                        className="quota-marker"
+                        style={{ left: `${pace.elapsedPercent}%` }}
+                      />
+                    </span>
+                    <span>{paceLabel}</span>
+                  </span>
+                )}
+              </>
+            )}
+            {!available &&
+              quota?.state !== "ok" &&
+              (quota?.reason === "login_expired" ||
+                quota?.reason === "login_unavailable") && (
+                <span className="quota-reset">
+                  open Claude Code on {hostName(quota.host)} to renew its login
+                </span>
+              )}
+          </span>
+        );
+      })}
+    </aside>
+  );
 }
 function group(snapshots: Snapshot[]) {
   const groups = new Map<string, Observation[]>();

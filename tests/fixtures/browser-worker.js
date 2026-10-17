@@ -21,7 +21,7 @@ export class Conversation extends Base {
     const connections = [];
     super(ctx, {
       ...env,
-      BROWSER_HOSTS: "projects.example.com",
+      BROWSER_HOSTS: "projects.example.com, mockups.example.net",
       BROWSER: {
         async acquire(options) {
           const count = (read("acquisitions") ?? 0) + 1;

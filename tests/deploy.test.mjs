@@ -515,3 +515,74 @@ test("runtime verification does not retry a malformed readiness response", async
     await assert.rejects(verifyProduction(f.options), /runtime_invalid_response/);
   }
 });
+
+test("conversation browsers reach the site plus only exact approved hosts", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "projects-config-"));
+  const placeholder = await readFile("wrangler.jsonc", "utf8");
+  const configure = async (browserHosts) => {
+    await writeFile(path.join(directory, "wrangler.jsonc"), placeholder);
+    const env = {
+      PATH: process.env.PATH,
+      PROJECTS_HOST: "projects.example.com",
+      PROJECTS_PORTFOLIO: "example",
+      PROJECTS_OWNER_EMAIL: "owner@example.com",
+      PROJECTS_EMAIL_FROM: "sign-in@notify.example.com",
+      ...(browserHosts === undefined
+        ? {}
+        : { PROJECTS_BROWSER_HOSTS: browserHosts }),
+    };
+    execFileSync(
+      process.execPath,
+      [path.resolve(".github/scripts/deployment-config.mjs")],
+      { cwd: directory, env, stdio: "pipe" },
+    );
+    return JSON.parse(await readFile(path.join(directory, "wrangler.jsonc"), "utf8"))
+      .vars.BROWSER_HOSTS;
+  };
+  try {
+    // An unset repository variable arrives empty; both keep today's default.
+    assert.equal(await configure(undefined), "projects.example.com");
+    assert.equal(await configure(""), "projects.example.com");
+    assert.equal(
+      await configure(" mockups.example.net , projects.example.com,mockups.example.net"),
+      "projects.example.com,mockups.example.net",
+      "the site comes first and duplicates collapse",
+    );
+    const many = Array.from({ length: 11 }, (_, i) => `m${i}.example.net`);
+    assert.equal((await configure(many.slice(0, 10).join(","))).split(",").length, 11);
+    for (const refused of [
+      "*",
+      "*.example.net",
+      "mockups.*.example.net",
+      "https://mockups.example.net",
+      "mockups.example.net:443",
+      "mockups.example.net/path",
+      "Mockups.example.net",
+      "mockups example.net",
+      "mockups.example.net,,other.example.net",
+      "mockups.example.net,",
+      " ",
+      "localhost",
+      "net",
+      "-mockups.example.net",
+      "mockups-.example.net",
+      "127.0.0.1",
+      many.join(","),
+    ]) {
+      let failure;
+      try {
+        await configure(refused);
+      } catch (error) {
+        failure = String(error.stderr);
+      }
+      assert.match(failure ?? "", /PROJECTS_BROWSER_HOSTS repository variable to a valid value/, refused);
+      assert.equal(
+        await readFile(path.join(directory, "wrangler.jsonc"), "utf8"),
+        placeholder,
+        "a refused host list writes nothing",
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

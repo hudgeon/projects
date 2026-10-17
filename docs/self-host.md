@@ -34,6 +34,7 @@ variables on your copy of the repository.
 | `PROJECTS_OWNER_EMAIL` | Legacy daily-brief setting, retained for deployment compatibility; sign-in uses `ALLOWED_EMAILS`. |
 | `PROJECTS_EMAIL_FROM` | The sender for sign-in codes, on a domain set up in step 2. |
 | `PROJECTS_TIME_ZONE` | Legacy daily-brief setting, retained for deployment compatibility; no longer affects the workspace. |
+| `PROJECTS_BROWSER_HOSTS` | Optional. Exact host names, comma separated, that conversation browsers may reach besides your site, such as `mockups.example.net`; at most ten, no wildcards. Unset, browsers reach only your site. |
 | `SECURITY_REVIEW_BOT_ID` | The id of a bot whose passing `security-review` status each release needs, or `none`. `none` needs `"securityReview": "optional"` in `.github/release-policy.json`, changed by a reviewed pull request. |
 
 ## 2. Set up email sign-in
@@ -142,3 +143,15 @@ device, and a machine without Codex runs Claude regardless.
 
 Whoever can sign in can run code on your machines with your logins, so keep
 `ALLOWED_EMAILS` to yourself.
+
+Weekly usage shows each provider's reported subscription allowance remaining.
+The bar is the percentage consumed; its marker is the share of the seven-day
+window elapsed, calculated from that provider's reset time. Ahead of weekly pace
+means consuming faster than an even weekly budget; behind means slower. The gap
+is in percentage points (pp), not a forecast or a provider-enforced daily limit.
+Stale, expired or unavailable readings have no pace gauge.
+
+Claude usage reads the machine's existing Claude Code login without refreshing
+credentials. If it reports an expired or unavailable login, open Claude Code on
+the named machine and renew its login there. Rejected requests and rate limits
+have separate labels. Older collectors may still report only “unavailable”.

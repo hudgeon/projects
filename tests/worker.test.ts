@@ -74,7 +74,7 @@ test("conversation browsers isolate claims, preserve WebSockets and clean up pai
     }
     let provider = await conversation.inspectProvider();
     assert.equal(provider.acquisitions, 1, "concurrent connections use one paid session");
-    assert.deepEqual(provider.options, {keepAlive: 300000, recording: false, guardrails: {allowedDomains: ["projects.example.com"]}});
+    assert.deepEqual(provider.options, {keepAlive: 300000, recording: false, guardrails: {allowedDomains: ["projects.example.com", "mockups.example.net"]}});
     const browserRoute = `/api/runs/${runId}/browser`;
     for (const headers of [{}, {Authorization: `Bearer ${runner}`}, {Authorization: `Bearer ${collector}`}])
       assert.equal((await mf.dispatchFetch(origin + browserRoute, {headers})).status, 401);

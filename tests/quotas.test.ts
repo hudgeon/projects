@@ -8,9 +8,12 @@ import {
   claudeWeekly,
   readQuotas,
   codexLimits,
+  claudeLimits,
+  QuotaReadError,
 } from "../collector/quotas";
 import {
   currentQuota,
+  weeklyPace,
   quotaSchema,
   snapshotSchema,
   freshness,
@@ -226,4 +229,96 @@ readline.createInterface({input:process.stdin}).on('line', line=>{const m=JSON.p
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("weekly pace uses each reset and excludes stale, expired and invalid windows", () => {
+  const week = 7 * 86400000;
+  const quota = (usedPercent: number, remaining = week / 2) => ({
+    state: "ok" as const,
+    observedAt: now,
+    weekly: { usedPercent, resetsAt: now + remaining },
+  });
+  assert.deepEqual(weeklyPace(quota(70), now), {
+    elapsedPercent: 50,
+    difference: 20,
+  });
+  assert.deepEqual(weeklyPace(quota(30), now), {
+    elapsedPercent: 50,
+    difference: -20,
+  });
+  assert.deepEqual(weeklyPace(quota(50), now), {
+    elapsedPercent: 50,
+    difference: 0,
+  });
+  assert.deepEqual(weeklyPace(quota(0, week), now), {
+    elapsedPercent: 0,
+    difference: 0,
+  });
+  assert.equal(weeklyPace(quota(100, 0), now), null);
+  assert.equal(weeklyPace(quota(10, week + 1), now), null);
+  assert.equal(
+    weeklyPace({ ...quota(10), observedAt: now - 600000 }, now),
+    null,
+  );
+  assert.equal(
+    weeklyPace({ state: "unavailable", observedAt: now }, now),
+    null,
+  );
+});
+
+test("Claude quota failures expose only fixed reasons and never renew credentials", async () => {
+  let requests = 0;
+  const credentials = (expiresAt: number) => async () =>
+    JSON.stringify({
+      claudeAiOauth: { accessToken: "MUST-NOT-LEAVE", expiresAt },
+    });
+  await assert.rejects(
+    claudeLimits("/unused", subprocessEnv(), {
+      credentials: credentials(Date.now() - 1),
+      request: async () => {
+        requests++;
+        throw Error("must not run");
+      },
+    }),
+    (e: unknown) => e instanceof QuotaReadError && e.reason === "login_expired",
+  );
+  assert.equal(requests, 0);
+  await assert.rejects(
+    claudeLimits("/unused", subprocessEnv(), {
+      credentials: async () => {
+        throw Error("MUST-NOT-LEAVE");
+      },
+      request: fetch,
+    }),
+    (e: unknown) =>
+      e instanceof QuotaReadError && e.reason === "login_unavailable",
+  );
+  for (const [status, reason] of [
+    [401, "login_expired"],
+    [403, "provider_rejected"],
+    [429, "rate_limited"],
+    [500, "provider_rejected"],
+  ] as const) {
+    const quotas = await readQuotas("/unused", ["claude"], subprocessEnv(), {
+      codex: async () => {
+        throw Error("must not run");
+      },
+      claude: () =>
+        claudeLimits("/unused", subprocessEnv(), {
+          credentials: credentials(Date.now() + 60000),
+          request: async () => new Response("MUST-NOT-LEAVE", { status }),
+        }),
+    });
+    assert.equal(quotas.claude.state !== "ok" && quotas.claude.reason, reason);
+    assert.doesNotMatch(JSON.stringify(quotas), /MUST-NOT-LEAVE|accessToken/);
+    assert.equal(quotaSchema.safeParse(quotas.claude).success, true);
+  }
+  assert.equal(
+    quotaSchema.safeParse({
+      state: "unavailable",
+      observedAt: now,
+      reason: "MUST-NOT-LEAVE",
+    }).success,
+    false,
+  );
 });

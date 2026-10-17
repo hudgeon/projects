@@ -12,6 +12,14 @@ const {
 } = process.env;
 // Optional: an unset repository variable arrives empty.
 const timeZone = process.env.PROJECTS_TIME_ZONE || "UTC";
+// Optional: exact host names, comma separated, that conversation browsers may
+// reach besides the site itself. No wildcards, schemes, ports or paths.
+const browserHosts = process.env.PROJECTS_BROWSER_HOSTS || "";
+const extraHosts = browserHosts
+  ? browserHosts.split(",").map((entry) => entry.trim())
+  : [];
+const exactHost =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 function validZone(zone) {
   try {
@@ -27,6 +35,11 @@ for (const [name, value, valid] of [
   ["PROJECTS_OWNER_EMAIL", owner, email.test(owner)],
   ["PROJECTS_EMAIL_FROM", from, email.test(from)],
   ["PROJECTS_TIME_ZONE", timeZone, validZone(timeZone)],
+  [
+    "PROJECTS_BROWSER_HOSTS",
+    browserHosts,
+    extraHosts.length <= 10 && extraHosts.every((entry) => exactHost.test(entry)),
+  ],
 ])
   if (!valid)
     throw Error(
@@ -61,7 +74,7 @@ config.vars = {
   ...config.vars,
   PORTFOLIO_ID: portfolio,
   SITE_URL: `https://${host}`,
-  BROWSER_HOSTS: host,
+  BROWSER_HOSTS: [...new Set([host, ...extraHosts])].join(","),
   OWNER_EMAIL: owner,
   EMAIL_FROM: from,
   TIME_ZONE: timeZone,

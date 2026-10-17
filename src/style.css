@@ -754,9 +754,50 @@ button.signout {
   background: #fff;
   font-size: 13px;
 }
-.quota-heading, .quota-reset { color: var(--muted); }
-.quota-item { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; }
-.quota-low { color: #a04d12; }
+.quota-heading,
+.quota-reset {
+  color: var(--muted);
+}
+.quota-item {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.quota-pace {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #27664d;
+}
+.quota-ahead {
+  color: #a04d12;
+}
+.quota-gauge {
+  position: relative;
+  display: inline-block;
+  width: 88px;
+  height: 8px;
+  background: #e4e9ec;
+  border-radius: 4px;
+}
+.quota-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  border-radius: inherit;
+}
+.quota-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--navy);
+  transform: translateX(-1px);
+}
+.quota-low {
+  color: #a04d12;
+}
 .topbar .brand {
   color: #fff;
   text-decoration: none;

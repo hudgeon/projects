@@ -256,7 +256,8 @@ Native sessions use the pinned Playwright MCP client over CDP with the Worker's
 Cloudflare Browser Run binding. Before each turn the runner exchanges its claim
 for a short-lived browser capability signed by the conversation; each WebSocket
 handshake checks it with the current claim, generation and heartbeat. The
-browser starts on first use and can reach only `BROWSER_HOSTS`. Read sessions
+browser starts on first use and can reach only `BROWSER_HOSTS`: the site plus
+any exact hosts in `PROJECTS_BROWSER_HOSTS` (docs/self-host.md). Read sessions
 navigate and wait; change children may also click, type and capture. The
 conversation page offers **Watch browser** and **Open browser / sign in**
 (one-minute links for the signed-in owner). Browsers close after five idle
@@ -433,7 +434,7 @@ request and a manual **Deploy** workflow run on `main`, which:
 1. fills `wrangler.jsonc` (which holds placeholders) with the deployment's
    identity from repository variables (`PROJECTS_HOST`, `PROJECTS_PORTFOLIO`,
    `PROJECTS_OWNER_EMAIL`, `PROJECTS_EMAIL_FROM` and optionally
-   `PROJECTS_TIME_ZONE`);
+   `PROJECTS_TIME_ZONE` and `PROJECTS_BROWSER_HOSTS`);
 2. checks the merged pull request, CI and, when
    `.github/release-policy.json` requires it, a passing `security-review`
    status from the bot named by `SECURITY_REVIEW_BOT_ID`;

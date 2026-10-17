@@ -38,7 +38,7 @@ export function codexWeekly(input: unknown, observedAt = Date.now()): Quota {
           resetsAt: weekly.resetsAt * 1000,
         },
       })
-    : { state: "unavailable", observedAt };
+    : { state: "unavailable", observedAt, reason: "no_weekly_limit" };
 }
 export function claudeWeekly(input: unknown, observedAt = Date.now()): Quota {
   const response = z
@@ -60,7 +60,7 @@ export function claudeWeekly(input: unknown, observedAt = Date.now()): Quota {
           resetsAt: Date.parse(response.seven_day.resets_at),
         },
       })
-    : { state: "unavailable", observedAt };
+    : { state: "unavailable", observedAt, reason: "no_weekly_limit" };
 }
 
 // Read-only RPC: no thread or model turn is started. Do not reuse the runner's
@@ -125,28 +125,45 @@ export function codexLimits(env: NodeJS.ProcessEnv): Promise<unknown> {
   });
 }
 
+type QuotaFailure = NonNullable<
+  Extract<Quota, { state: "unavailable" | "unsupported" }>["reason"]
+>;
+export class QuotaReadError extends Error {
+  constructor(readonly reason: QuotaFailure) {
+    super("Quota read unavailable");
+  }
+}
+
 // Credentials stay on their native machine, in memory for this one HTTPS read.
 // Expired logins are left to the native app; no refresh or rotation is attempted.
+async function claudeCredentials(home: string, env: NodeJS.ProcessEnv) {
+  return process.platform === "darwin"
+    ? (
+        await exec(
+          "/usr/bin/security",
+          ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+          { env, timeout: 8000, maxBuffer: 256_000 },
+        )
+      ).stdout
+    : await (async () => {
+        const file = path.join(home, ".claude", ".credentials.json");
+        const info = await stat(file);
+        if (!info.isFile() || info.size > 256_000 || info.mode & 0o077)
+          throw Error("Quota read unavailable");
+        return readFile(file, "utf8");
+      })();
+}
 export async function claudeLimits(
   home: string,
   env: NodeJS.ProcessEnv,
+  io = { credentials: () => claudeCredentials(home, env), request: fetch },
 ): Promise<unknown> {
-  const raw =
-    process.platform === "darwin"
-      ? (
-          await exec(
-            "/usr/bin/security",
-            ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            { env, timeout: 8000, maxBuffer: 256_000 },
-          )
-        ).stdout
-      : await (async () => {
-          const file = path.join(home, ".claude", ".credentials.json");
-          const info = await stat(file);
-          if (!info.isFile() || info.size > 256_000 || info.mode & 0o077)
-            throw Error("Quota read unavailable");
-          return readFile(file, "utf8");
-        })();
+  let raw: string;
+  try {
+    raw = await io.credentials();
+  } catch {
+    throw new QuotaReadError("login_unavailable");
+  }
   const auth = z
     .object({
       claudeAiOauth: z.object({
@@ -155,16 +172,26 @@ export async function claudeLimits(
       }),
     })
     .parse(JSON.parse(raw)).claudeAiOauth;
-  if (auth.expiresAt <= Date.now()) throw Error("Quota read unavailable");
-  const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: {
-      Authorization: `Bearer ${auth.accessToken}`,
-      "anthropic-beta": "oauth-2025-04-20",
+  if (auth.expiresAt <= Date.now()) throw new QuotaReadError("login_expired");
+  const response = await io.request(
+    "https://api.anthropic.com/api/oauth/usage",
+    {
+      headers: {
+        Authorization: `Bearer ${auth.accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
     },
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) throw Error("Quota read unavailable");
+  );
+  if (!response.ok)
+    throw new QuotaReadError(
+      response.status === 401
+        ? "login_expired"
+        : response.status === 429
+          ? "rate_limited"
+          : "provider_rejected",
+    );
   const body = await response.text();
   if (body.length > 64_000) throw Error("Quota read unavailable");
   return JSON.parse(body);
@@ -186,8 +213,12 @@ export async function readQuotas(
       return (provider === "codex" ? codexWeekly : claudeWeekly)(
         await readers[provider](),
       );
-    } catch {
-      return { state: "unavailable", observedAt: Date.now() };
+    } catch (error) {
+      return {
+        state: "unavailable",
+        observedAt: Date.now(),
+        reason: error instanceof QuotaReadError ? error.reason : "read_failed",
+      };
     }
   };
   const [codex, claude] = await Promise.all([read("codex"), read("claude")]);
