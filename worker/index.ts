@@ -6,7 +6,7 @@ import { Runs } from "./run-directory";
 import { pushEndpoint, sendPush, vapidPublicKey } from "./push";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
-import { browserPath } from "./browser";
+import { BrowserSignIns, browserPath } from "./browser";
 import { Documents } from "./documents";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
@@ -25,6 +25,8 @@ import {
   SESSION_SECONDS,
   type Caller,
   allowed,
+  browserMay,
+  signsIn,
 } from "./auth";
 import { freshness, snapshotSchema, STALE_AFTER, type Snapshot } from "../src/model";
 import { Machines, type MachineCaller, type MachineRole } from "./machines";
@@ -54,10 +56,12 @@ export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
   private machines: Machines;
   private documents: Documents;
+  private signIns: BrowserSignIns;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
     this.documents = new Documents(ctx.storage);
+    this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
@@ -107,7 +111,9 @@ export class Portfolio extends DurableObject<Env> {
     return this.machines.caller(role, hash);
   }
   machineList() {
-    return this.machines.list();
+    return this.machines
+      .list()
+      .map((machine) => ({ ...machine, browserSignIn: signsIn(this.env, machine.id) }));
   }
   runnable() {
     return this.machines.runnable();
@@ -128,7 +134,16 @@ export class Portfolio extends DurableObject<Env> {
     return this.machines.move(id, position);
   }
   removeMachine(id: string) {
-    return this.machines.remove(id);
+    const removed = this.machines.remove(id);
+    if (removed) this.signIns.endMachine(id);
+    return removed;
+  }
+  // Only a conversation's own browser starts and ends these (worker/browser.ts).
+  startBrowserSignIn(hash: string, run: string, machine: string, expires: number) {
+    return this.signIns.start(hash, run, machine, expires);
+  }
+  endBrowserSignIn(run: string) {
+    this.signIns.end(run);
   }
   listRuns(options: RunListOptions = {}) { return this.runs.list(options); }
   runtimeVersions(id?: string) { return this.runs.runtimeVersions(id); }
@@ -242,19 +257,20 @@ export class Portfolio extends DurableObject<Env> {
       return true;
     });
   }
-  session(hash: string) {
-    return (
-      this.ctx.storage.sql
-        .exec<{ email: string }>(
-          "SELECT email FROM sessions WHERE hash=? AND expires>?",
-          hash,
-          Date.now(),
-        )
-        .toArray()[0]?.email ?? null
-    );
+  // The owner's own sign-in, or a conversation browser's, with its machine.
+  session(hash: string): { email: string; machine: string | null } | null {
+    const email = this.ctx.storage.sql
+      .exec<{ email: string }>(
+        "SELECT email FROM sessions WHERE hash=? AND expires>?",
+        hash,
+        Date.now(),
+      )
+      .toArray()[0]?.email;
+    return email ? { email, machine: null } : this.signIns.find(hash);
   }
   revoke(hash: string) {
     this.ctx.storage.sql.exec("DELETE FROM sessions WHERE hash=?", hash);
+    this.signIns.revoke(hash);
   }
   async publish(snapshot: Snapshot) {
     this.ctx.storage.sql.exec(
@@ -520,14 +536,22 @@ const pushRequestSchema = z
 export async function handle(
   request: Request,
   env: Env,
-  caller: Caller | null,
+  signedIn: Caller | null,
 ): Promise<Response> {
   const url = new URL(request.url);
-  if (!caller)
+  if (!signedIn)
     return Response.json(
       { error: "Sign in with your email code to view projects." },
       { status: 401 },
     );
+  // A conversation browser's own sign-in acts as the owner within its limits.
+  const browser = typeof signedIn !== "string" && signedIn.role === "browser" ? signedIn : null;
+  if (browser && !browserMay(url.pathname, request.method))
+    return Response.json(
+      { error: "This browser signed in automatically and cannot do this. Sign in with your email code." },
+      { status: 403 },
+    );
+  const caller: string | MachineCaller = browser ? browser.email : (signedIn as string | MachineCaller);
   // A machine's tokens never reach a session route, and the bearer, not the
   // request body, says which machine is calling.
   const machine = typeof caller === "string" ? null : caller;

@@ -31,10 +31,11 @@ variables on your copy of the repository.
 | --- | --- |
 | `PROJECTS_HOST` | Your site's host name, such as `projects.example.com`, on a domain in your Cloudflare account. |
 | `PROJECTS_PORTFOLIO` | Any stable short name for your portfolio; changing it later starts empty. |
-| `PROJECTS_OWNER_EMAIL` | Legacy daily-brief setting, retained for deployment compatibility; sign-in uses `ALLOWED_EMAILS`. |
+| `PROJECTS_OWNER_EMAIL` | The owner's address. Sign-in uses `ALLOWED_EMAILS`; conversation browsers on machines in `PROJECTS_BROWSER_SIGN_IN` start signed in as this address, which must also be allowed. |
 | `PROJECTS_EMAIL_FROM` | The sender for sign-in codes, on a domain set up in step 2. |
 | `PROJECTS_TIME_ZONE` | Legacy daily-brief setting, retained for deployment compatibility; no longer affects the workspace. |
 | `PROJECTS_BROWSER_HOSTS` | Optional. Exact host names, comma separated, that conversation browsers may reach besides your site, such as `mockups.example.net`; at most ten, no wildcards. Unset, browsers reach only your site. |
+| `PROJECTS_BROWSER_SIGN_IN` | Optional. Machine IDs, comma separated, whose conversation browsers start signed in to your site, so their agents never wait for you to enter a code; at most ten. Each browser gets its own session, which ends when that browser closes; it cannot change machines, open other browsers, read or act on email, or change how agents run. Removing the machine in Settings revokes its browsers at once; removing its ID does so at the next Deploy. Unset, every browser signs in by hand. |
 | `SECURITY_REVIEW_BOT_ID` | The id of a bot whose passing `security-review` status each release needs, or `none`. `none` needs `"securityReview": "optional"` in `.github/release-policy.json`, changed by a reviewed pull request. |
 
 ## 2. Set up email sign-in

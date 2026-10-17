@@ -26,6 +26,7 @@
     "PORTFOLIO_ID": "owner",
     "SITE_URL": "https://projects.example.com",
     "BROWSER_HOSTS": "projects.example.com",
+    "BROWSER_SIGN_IN": "",
     "OWNER_EMAIL": "owner@example.com",
     "EMAIL_FROM": "projects@notify.example.com",
     "TIME_ZONE": "UTC",

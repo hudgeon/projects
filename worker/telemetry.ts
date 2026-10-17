@@ -25,6 +25,7 @@ type Operation =
   | "browser.acquire"
   | "browser.connect"
   | "browser.view"
+  | "browser.sign_in"
   | "browser.close"
   | "archive.update"
   | "inbox.action"

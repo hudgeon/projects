@@ -251,6 +251,14 @@ export function Machines({
                 {machine.duties && machine.lastCollected && (
                   <span className="badge quiet">On duty</span>
                 )}
+                {machine.browserSignIn && (
+                  <span
+                    className="badge quiet"
+                    title="Its conversation browsers start signed in to Projects."
+                  >
+                    Browser signs in
+                  </span>
+                )}
                 {health && (
                   <span className="machine-counts">{counts(health)}</span>
                 )}

@@ -48,9 +48,17 @@ export class Conversation extends Base {
                 const pair = new WebSocketPair();
                 pair[1].accept();
                 connections.push(pair[1]);
-                pair[1].addEventListener("message", (event) =>
-                  pair[1].send(event.data),
-                );
+                pair[1].addEventListener("message", (event) => {
+                  // The Worker's own sign-in: record the cookie and reply as a
+                  // browser does. Everything else is the runner's CDP, echoed.
+                  const message = JSON.parse(String(event.data).startsWith("{") ? event.data : "null");
+                  if (message?.method !== "Storage.setCookies")
+                    return pair[1].send(event.data);
+                  save("signIns", [...(read("signIns") ?? []), { session: id, ...message.params }]);
+                  pair[1].send(JSON.stringify(read("failSignIn")
+                    ? { id: message.id, error: { code: -32000, message: "refused" } }
+                    : { id: message.id, result: {} }));
+                });
                 return new Response(null, { status: 101, webSocket: pair[0] });
               },
             },
@@ -88,6 +96,7 @@ export class Conversation extends Base {
       closeAttempts: this.readProvider("closeAttempts"),
       options: this.readProvider("options"),
       view: this.readProvider("view"),
+      signIns: this.readProvider("signIns"),
     };
   }
   failProvider(operation, enabled = true) {
@@ -103,6 +112,13 @@ export class Conversation extends Base {
       "UPDATE browser_session SET payload=?",
       JSON.stringify(session),
     );
+  }
+  // The provider ends the browser on its own, as after five idle minutes, and
+  // the last liveness check is old enough for another.
+  endProviderSession() {
+    const session = JSON.parse(this.testStorage.sql.exec("SELECT payload FROM browser_session").one().payload);
+    this.saveProvider(session.id, null);
+    this.testStorage.sql.exec("UPDATE browser_session SET payload=json_set(payload,'$.checkedAt',0)");
   }
   retryCleanup() {
     this.testStorage.sql.exec("UPDATE browser_session SET payload=json_set(payload,'$.retryAt',0)");

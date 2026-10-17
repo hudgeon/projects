@@ -275,6 +275,19 @@ conversation page offers **Watch browser** and **Open browser / sign in**
 (one-minute links for the signed-in owner). Browsers close after five idle
 minutes or thirty in all; no Cloudflare credential reaches a machine.
 
+On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new browser starts
+signed in as `PROJECTS_OWNER_EMAIL`. The Worker sets the cookie itself over
+its own CDP connection before the runner's opens; no runner route returns it.
+The session belongs to that browser alone: only its hash is kept, it ends when
+the browser closes or the provider ends it (checked every five minutes), on
+Sign out, when the machine is removed or a Deploy drops it from the list, or
+when the conversation continues on another machine, and it cannot connect or
+change machines, change execution settings, open Live View, read or act on
+email, or subscribe to notifications. The machine's runner drives that browser,
+so while it lives the runner can act through it, and could read its cookie over
+CDP, within those limits: narrower than signing the browser in by hand, which
+leaves it a seven-day session without them.
+
 ## Work items (optional)
 
 With `workRepo` set, a work item is a GitHub issue labelled `work` in that
@@ -449,7 +462,7 @@ request and a manual **Deploy** workflow run on `main`, which:
 1. fills `wrangler.jsonc` (which holds placeholders) with the deployment's
    identity from repository variables (`PROJECTS_HOST`, `PROJECTS_PORTFOLIO`,
    `PROJECTS_OWNER_EMAIL`, `PROJECTS_EMAIL_FROM` and optionally
-   `PROJECTS_TIME_ZONE` and `PROJECTS_BROWSER_HOSTS`);
+   `PROJECTS_TIME_ZONE`, `PROJECTS_BROWSER_HOSTS` and `PROJECTS_BROWSER_SIGN_IN`);
 2. checks the merged pull request, CI and, when
    `.github/release-policy.json` requires it, a passing `security-review`
    status from the bot named by `SECURITY_REVIEW_BOT_ID`;

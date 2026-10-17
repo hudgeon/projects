@@ -11,6 +11,8 @@ import {
   token,
   sameOrigin,
   login,
+  browserMay,
+  signsIn,
 } from "../worker/auth";
 test("OTP and sessions use distinct random credentials and host-only secure cookies", () => {
   assert.match(otp(), /^\d{6}$/);
@@ -76,6 +78,50 @@ test("a machine token authorises only its own routes, and only its hash leaves t
   assert.equal(await authorize(request, env, false), null);
   assert.equal(await authorize(new Request("https://example.com"), env, true), null);
   assert.ok(!seen.includes(value), "the token itself never reaches the portfolio");
+});
+test("a conversation browser's sign-in is the owner's, marked with its machine and limited", async () => {
+  const value = token();
+  const env = {
+    PORTFOLIO_ID: "test",
+    ALLOWED_EMAILS: "owner@example.com",
+    PORTFOLIOS: {
+      getByName: () => ({
+        session: async (hash: string) =>
+          hash === digest(value) ? { email: "owner@example.com", machine: "studio" } : null,
+      }),
+    },
+  } as unknown as Env;
+  const request = new Request("https://example.com", {
+    headers: { cookie: sessionCookie(value) },
+  });
+  assert.deepEqual(await authorize(request, env, false), {
+    role: "browser",
+    email: "owner@example.com",
+    machine: "studio",
+  });
+  assert.equal(
+    await authorize(request, { ...env, ALLOWED_EMAILS: "other@example.com" } as Env, false),
+    null,
+    "an owner the allowlist no longer names is signed out",
+  );
+  assert.equal(await authorize(request, env, true), null, "never a machine's route");
+  assert.equal(browserMay("/api/overview", "GET"), true);
+  assert.equal(browserMay("/api/runs", "POST"), true);
+  assert.equal(browserMay("/api/machines", "GET"), true);
+  for (const [path, method] of [
+    ["/api/machines", "POST"],
+    ["/api/machines/studio/tokens", "POST"],
+    ["/api/execution-settings", "POST"],
+    ["/api/runs/00000000-0000-4000-8000-000000000000/browser/view", "POST"],
+    ["/api/inbox/threads/abcdef1234", "GET"],
+    ["/api/inbox/act", "POST"],
+    ["/api/push/key", "GET"],
+  ])
+    assert.equal(browserMay(path, method), false, path);
+  assert.equal(signsIn({ BROWSER_SIGN_IN: " studio,laptop " }, "laptop"), true);
+  assert.equal(signsIn({ BROWSER_SIGN_IN: "studio" }, "studio-2"), false);
+  assert.equal(signsIn({ BROWSER_SIGN_IN: "" }, ""), false);
+  assert.equal(signsIn({}, "studio"), false);
 });
 test("sign-in codes go out through the email binding and stay out of responses", async () => {
   const sent: { from: unknown; to: string; text: string }[] = [];

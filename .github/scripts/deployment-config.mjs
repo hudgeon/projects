@@ -18,6 +18,10 @@ const browserHosts = process.env.PROJECTS_BROWSER_HOSTS || "";
 const extraHosts = browserHosts
   ? browserHosts.split(",").map((entry) => entry.trim())
   : [];
+// Optional: machine IDs, comma separated, whose conversation browsers start
+// signed in as PROJECTS_OWNER_EMAIL. Unset, every browser signs in by hand.
+const signIn = process.env.PROJECTS_BROWSER_SIGN_IN || "";
+const signInMachines = signIn ? signIn.split(",").map((entry) => entry.trim()) : [];
 const exactHost =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -39,6 +43,12 @@ for (const [name, value, valid] of [
     "PROJECTS_BROWSER_HOSTS",
     browserHosts,
     extraHosts.length <= 10 && extraHosts.every((entry) => exactHost.test(entry)),
+  ],
+  [
+    "PROJECTS_BROWSER_SIGN_IN",
+    signIn,
+    signInMachines.length <= 10 &&
+      signInMachines.every((entry) => /^[a-z0-9-]{1,32}$/.test(entry)),
   ],
 ])
   if (!valid)
@@ -75,6 +85,7 @@ config.vars = {
   PORTFOLIO_ID: portfolio,
   SITE_URL: `https://${host}`,
   BROWSER_HOSTS: [...new Set([host, ...extraHosts])].join(","),
+  BROWSER_SIGN_IN: [...new Set(signInMachines)].join(","),
   OWNER_EMAIL: owner,
   EMAIL_FROM: from,
   TIME_ZONE: timeZone,

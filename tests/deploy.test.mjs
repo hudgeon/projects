@@ -516,6 +516,48 @@ test("runtime verification does not retry a malformed readiness response", async
   }
 });
 
+test("conversation browsers start signed in only on exact listed machines", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "projects-config-"));
+  const placeholder = await readFile("wrangler.jsonc", "utf8");
+  const configure = async (machines) => {
+    await writeFile(path.join(directory, "wrangler.jsonc"), placeholder);
+    execFileSync(
+      process.execPath,
+      [path.resolve(".github/scripts/deployment-config.mjs")],
+      {
+        cwd: directory,
+        env: {
+          PATH: process.env.PATH,
+          PROJECTS_HOST: "projects.example.com",
+          PROJECTS_PORTFOLIO: "example",
+          PROJECTS_OWNER_EMAIL: "owner@example.com",
+          PROJECTS_EMAIL_FROM: "sign-in@notify.example.com",
+          ...(machines === undefined ? {} : { PROJECTS_BROWSER_SIGN_IN: machines }),
+        },
+        stdio: "pipe",
+      },
+    );
+    return JSON.parse(await readFile(path.join(directory, "wrangler.jsonc"), "utf8"))
+      .vars.BROWSER_SIGN_IN;
+  };
+  try {
+    assert.equal(await configure(undefined), "", "unset, every browser signs in by hand");
+    assert.equal(await configure(""), "");
+    assert.equal(await configure(" studio , laptop-2,studio"), "studio,laptop-2");
+    for (const refused of ["*", "Studio", "studio,", "studio laptop", " ", "a".repeat(33), Array.from({ length: 11 }, (_, i) => `m${i}`).join(",")]) {
+      let failure;
+      try {
+        await configure(refused);
+      } catch (error) {
+        failure = String(error.stderr);
+      }
+      assert.match(failure ?? "", /PROJECTS_BROWSER_SIGN_IN repository variable to a valid value/, refused);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("conversation browsers reach the site plus only exact approved hosts", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "projects-config-"));
   const placeholder = await readFile("wrangler.jsonc", "utf8");

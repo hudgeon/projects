@@ -20,6 +20,7 @@ export function allowed(email: string, env: { ALLOWED_EMAILS: string }) {
     .filter(Boolean)
     .includes(email);
 }
+export const SESSION_COOKIE = "__Host-projects";
 export function cookie(request: Request) {
   return (
     /(?:^|;\s*)__Host-projects=([a-f0-9]{64})(?:;|$)/.exec(
@@ -28,7 +29,7 @@ export function cookie(request: Request) {
   );
 }
 export function sessionCookie(value: string) {
-  return `__Host-projects=${value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}`;
+  return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}`;
 }
 export class BodyError extends Error {
   constructor(
@@ -72,9 +73,40 @@ export async function readJson(request: Request, limit: number) {
 export function sameOrigin(request: Request) {
   return request.headers.get("origin") === new URL(request.url).origin;
 }
-// A signed-in owner's email, "local" in the local emulator, or a machine's
-// collector or runner token.
-export type Caller = string | MachineCaller;
+// A conversation browser a machine's runner drives, signed in as the owner by
+// the Worker itself (worker/browser.ts). It acts as the owner, less the routes
+// browserMay() keeps for the owner's own sign-in.
+export type BrowserCaller = { role: "browser"; email: string; machine: string };
+// Machines whose conversation browsers start signed in as the owner: exact
+// machine IDs, comma separated, from the deployment's BROWSER_SIGN_IN.
+export function signsIn(
+  env: { BROWSER_SIGN_IN?: string },
+  machine: string | null | undefined,
+) {
+  return (
+    !!machine &&
+    (env.BROWSER_SIGN_IN ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .includes(machine)
+  );
+}
+// A browser's sign-in acts as the owner, except for what outlives the browser
+// or reaches beyond it: connecting, changing or removing machines, how agents
+// run, watching or driving browsers, email, and notifications.
+export function browserMay(pathname: string, method: string) {
+  const read = method === "GET" || method === "HEAD";
+  if (/^\/api\/machines(?:\/|$)/.test(pathname) || pathname === "/api/execution-settings")
+    return read;
+  return !(
+    /^\/api\/runs\/[^/]+\/browser\/view$/.test(pathname) ||
+    pathname.startsWith("/api/inbox/") ||
+    pathname.startsWith("/api/push/")
+  );
+}
+// A signed-in owner's email, "local" in the local emulator, a machine's
+// collector or runner token, or a conversation browser's own sign-in.
+export type Caller = string | MachineCaller | BrowserCaller;
 // Who is calling: a machine on its own routes, otherwise a signed-in email.
 export async function authorize(
   request: Request,
@@ -94,10 +126,14 @@ export async function authorize(
   }
   const value = cookie(request);
   if (!value) return null;
-  const email = await env.PORTFOLIOS.getByName(env.PORTFOLIO_ID).session(
+  const found = await env.PORTFOLIOS.getByName(env.PORTFOLIO_ID).session(
     digest(value),
   );
-  return email !== null && allowed(email, env) ? email : null;
+  if (!found || !allowed(found.email, env)) return null;
+  // Only the owner's own sign-in has no machine; anything else is limited.
+  return found.machine === null
+    ? found.email
+    : { role: "browser", email: found.email, machine: found.machine };
 }
 export async function login(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST")

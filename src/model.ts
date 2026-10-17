@@ -157,6 +157,8 @@ export type MachineView = {
   lastRunner: number | null;
   duties: boolean;
   newWork: boolean;
+  // Its conversation browsers start signed in (the deployment's BROWSER_SIGN_IN).
+  browserSignIn?: boolean;
 };
 export type PortfolioView = {
   archives?: import("./archive-model").ArchiveEntry[];
