@@ -8,6 +8,7 @@ import {
   contextVersion,
   JEV_MODEL,
   JEV_INPUT_COST_PER_TOKEN,
+  keptKey,
   selectContext,
 } from "../runner/context";
 import type { Child, RunMessage } from "../src/run-model";
@@ -571,4 +572,19 @@ test("selector credentials never enter helper or collector subprocess environmen
       else process.env[key] = value;
     }
   }
+});
+
+test("an executor reads the selector key once and retries only failed or empty reads", async () => {
+  const results = [Error("unavailable"), "", "secret-value"];
+  let reads = 0;
+  const key = keptKey(async () => {
+    const next = results[reads++];
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  await assert.rejects(key());
+  assert.equal(await key(), "");
+  assert.equal(await key(), "secret-value");
+  assert.equal(await key(), "secret-value");
+  assert.equal(reads, 3);
 });

@@ -16,7 +16,11 @@ export const JEV_MODEL = "jev-1.14.0";
 // output tokens are free. Keep this rate beside the pinned model.
 export const JEV_INPUT_COST_PER_TOKEN = 0.000000042;
 export const OMIT_BELOW = 0.05;
-const REQUEST_BYTES = 28_000; // Also bounds worst-case tokens below 32k.
+// The model reads at most 64k tokens per request, and 32k for the state with
+// any one question. A token covers at least one UTF-8 byte, so counting bytes
+// overstates tokens; the margins leave room for the model's own framing.
+export const REQUEST_BYTES = 60_000;
+export const QUESTION_BYTES = 30_000;
 const POLICY = 1;
 export const contextConfigSchema = z
   .object({
@@ -108,6 +112,12 @@ export type Selector = {
   gateway?: ContextConfig["gateway"];
   fetch?: typeof fetch;
 };
+// The key is read once and kept in memory, so selections do not wait on the
+// secret store; a failed or empty read is tried again at the next selection.
+export function keptKey(read: () => Promise<string>) {
+  let key = "";
+  return async () => (key ||= await read());
+}
 export function contextVersion(messages: RunMessage[], children: Child[]) {
   return createHash("sha256")
     .update(JSON.stringify({ policy: POLICY, messages, children }))
@@ -168,11 +178,30 @@ function transportFailure(
   };
 }
 
+// Whether a request fits the model's documented limits, counted in bytes.
+function fitsRequest(
+  state: unknown,
+  questions: Record<string, unknown>,
+) {
+  const largest = Math.max(
+    0,
+    ...Object.values(questions).map((q) =>
+      Buffer.byteLength(JSON.stringify(q)),
+    ),
+  );
+  return (
+    Buffer.byteLength(JSON.stringify(state)) + largest <= QUESTION_BYTES &&
+    Buffer.byteLength(JSON.stringify({ model: JEV_MODEL, state, questions })) <=
+      REQUEST_BYTES
+  );
+}
+
 // Both conversation handovers and project reviews use the same bounded,
 // priced transport and strict answer coverage. Retrieval and policy stay in code.
 export async function judgeContext(o: {
   version: string;
-  body: string;
+  state: unknown;
+  questions: Record<string, unknown>;
   count: number;
   signal: AbortSignal;
   selector: Selector;
@@ -193,7 +222,12 @@ export async function judgeContext(o: {
     }
 > {
   const started = performance.now(),
-    selectionId = randomUUID();
+    selectionId = randomUUID(),
+    body = JSON.stringify({
+      model: JEV_MODEL,
+      state: o.state,
+      questions: o.questions,
+    });
   let stage: ContextFailure["stage"] = "prepare",
     stageStarted = started;
   let response: Response | undefined;
@@ -217,7 +251,7 @@ export async function judgeContext(o: {
           durationMs: Math.round(performance.now() - started),
           stageDurationMs: Math.round(performance.now() - stageStarted),
           timeoutMs: 8000,
-          requestBytes: Buffer.byteLength(o.body),
+          requestBytes: Buffer.byteLength(body),
           candidateCount: o.count,
           ...(response
             ? {
@@ -240,7 +274,7 @@ export async function judgeContext(o: {
       : undefined,
   });
   if (o.selector.mode === "off") return failed("disabled");
-  if (Buffer.byteLength(o.body) > REQUEST_BYTES)
+  if (!fitsRequest(o.state, o.questions))
     return failed("request_too_large", { kind: "request_too_large" });
   let record: SelectionRecord;
   const cached = selectionRecordSchema.safeParse(o.cached);
@@ -301,7 +335,7 @@ export async function judgeContext(o: {
               }
             : {}),
         },
-        body: o.body,
+        body,
         signal: AbortSignal.any([o.signal, timeout]),
       });
       move("response");
@@ -309,7 +343,7 @@ export async function judgeContext(o: {
         return failed(`http_${response.status === 429 ? "limited" : "error"}`, {
           kind: "http",
         });
-      const body = await response.json();
+      const answer = await response.json();
       move("validation");
       const parsed = z
         .object({
@@ -326,7 +360,7 @@ export async function judgeContext(o: {
             output_tokens: z.number().int().nonnegative(),
           }),
         })
-        .parse(body);
+        .parse(answer);
       if (
         Object.keys(parsed.answers).length !== o.count ||
         !Array.from({ length: o.count }).every(
@@ -470,8 +504,8 @@ export async function selectContext(o: {
       },
     ]),
   );
-  const body = JSON.stringify({
-    model: JEV_MODEL,
+  const judgment = await judgeContext({
+    version,
     state: {
       instructions: o.messages
         .filter((m) => m.role === "user")
@@ -485,10 +519,6 @@ export async function selectContext(o: {
       })),
     },
     questions,
-  });
-  const judgment = await judgeContext({
-    version,
-    body,
     count: candidates.length,
     signal: o.signal,
     selector: o.selector,

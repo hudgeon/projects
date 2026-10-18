@@ -55,8 +55,8 @@ import {
   tokenLine,
 } from "../src/run-text";
 import { connectorAccess, type ConnectorAccess } from "./connectors";
-import { childContext, contextConversation, contextVersion, selectContext, type Selector } from "./context";
-import { reviewProjectContext } from "./project-context";
+import { childContext, contextConversation, contextVersion, keptKey, selectContext, type Selector } from "./context";
+import { contextBrief } from "./project-context";
 export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 import {
   pushPending,
@@ -403,6 +403,8 @@ export type EngineOptions = {
   limits?: Partial<typeof TURN_LIMITS>;
 };
 export async function executeRun(o: EngineOptions) {
+  // An executor reads the selector's key once and keeps it in memory.
+  const selector = o.contextSelector && {...o.contextSelector, key: keptKey(o.contextSelector.key)};
   const file = path.join(o.stateDir, "runs", `${o.run.id}.json`);
   let journal: Journal | null = null;
   try {
@@ -1015,34 +1017,9 @@ export async function executeRun(o: EngineOptions) {
     .digest("hex")
     .slice(0, 24);
   let contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
-  const projectBrief = async (project: ProjectDirectory | undefined, cwd: string, task: string, actor: string, agent: Agent, session?: string | null) => {
-    if (!project || !o.contextSelector || o.contextSelector.mode === "off") return {prompt: "", remember: async (_session?: string | null) => {}};
-    const instructions = messages.filter(m => m.role === "user").map(m => m.text);
-    const key = createHash("sha256").update(JSON.stringify([project.id, cwd, task, instructions])).digest("hex");
-    const cacheFile = path.join(o.stateDir, "project-context", key + ".json");
-    let cached: unknown;
-    try { cached = JSON.parse(await readFile(cacheFile, "utf8")); } catch { /* No reusable review. */ }
-    const review = await reviewProjectContext({project, cwd, task,
-      instructions,
-      workIssue: o.workRepo && o.run.workIssue ? {repo: o.workRepo, number: o.run.workIssue} : undefined,
-      signal: o.signal, selector: o.contextSelector, cached});
-    if (review.record) await savePrivate(cacheFile, review.record);
-    const receipt = path.join(o.stateDir, "runs", `${o.run.id}.project-context.${actor}.json`);
-    const version = createHash("sha256").update(JSON.stringify([key, review.prompt])).digest("hex");
-    const sessionFile = (id: string) => path.join(o.stateDir, "project-context", "sessions",
-      createHash("sha256").update(`${agent}:${id}`).digest("hex") + ".json");
-    let reusedInSession = false;
-    if (session) try {reusedInSession = JSON.parse(await readFile(sessionFile(session), "utf8")).version === version;} catch { /* New native context. */ }
-    await savePrivate(receipt, {...review.receipt, at: Date.now(), record: review.record, reusedInSession});
-    if (review.receipt.failure) telemetry("runner", "jev_selection_failed", {
-      runId: o.run.id, generation: o.run.generation, host: o.host,
-      actor: actor === "master" ? "master" : agent,
-      childId: actor === "master" ? undefined : actor,
-      contextTrigger: "project-turn", contextFailure: review.receipt.failure,
-    }, "warn");
-    return {prompt: `${reusedInSession ? `Project context is unchanged from the view already supplied in this native session.` : review.prompt}\nPrivate project context receipt: ${receipt}\n`,
-      remember: async (id?: string | null) => {if (id) await savePrivate(sessionFile(id), {version});}};
-  };
+  const projectBrief = (project: ProjectDirectory | undefined, cwd: string, task: string, actor: string, agent: Agent, session?: string | null, query?: string) =>
+    contextBrief({stateDir: o.stateDir, run: o.run, host: o.host, workRepo: o.workRepo, selector, signal: o.signal, save: savePrivate,
+      instructions: messages.filter(m => m.role === "user").map(m => m.text)}, project, cwd, task, actor, agent, session, query);
   const instructionsVersion = () => createHash("sha256").update(JSON.stringify(messages
     .filter(m => m.role === "user").map(m => [m.id, m.text, m.screenshots]))).digest("hex");
   // Quick work skips the repository activity dump: it is most of a first turn's
@@ -1144,7 +1121,7 @@ export async function executeRun(o: EngineOptions) {
     const browser = await o.browser?.();
     const projectContext = await projectBrief(project, child.cwd,
       "Read-only recovery inspection of the same native session and existing workspace; verify uncertain prior effects without replaying them.",
-      child.id, child.agent, child.sessionId);
+      child.id, child.agent, child.sessionId, "");
     child.state = "unknown";
     j.phase = "child";
     await publish(
@@ -1332,7 +1309,7 @@ export async function executeRun(o: EngineOptions) {
           let cached: unknown;
           try { cached = JSON.parse(await readFile(contextFile + ".selection.json", "utf8")); } catch { /* No reusable selection. */ }
           contextPlan = await selectContext({messages, children: j.progress.children,
-            signal: o.signal, selector: o.contextSelector, cached});
+            signal: o.signal, selector, cached});
           if (contextPlan.failure) telemetry("runner", "jev_selection_failed", {
             runId: o.run.id, generation: o.run.generation, host: o.host, actor: "master",
             contextTrigger: "coordinator-rotation", contextFailure: contextPlan.failure,
@@ -1385,7 +1362,7 @@ export async function executeRun(o: EngineOptions) {
         const reviewVersion = instructionsVersion();
         const selectedProject = o.projects.find(p => p.id === (o.run.projectId ?? j.progress.children.at(-1)?.projectId));
         const projectContext = await projectBrief(selectedProject, selectedProject?.cwd ?? o.masterCwd,
-          "Coordinate the current user request in this project; verify returned work before deciding what remains.", "master", masterAgent, j.progress.masterSessionId);
+          "Coordinate the current user request in this project; verify returned work before deciding what remains.", "master", masterAgent, j.progress.masterSessionId, "");
         if (projectContext.prompt) {await refreshMessages(); messages = o.latestMessages?.() ?? messages;}
         if (reviewVersion !== instructionsVersion()) {
           nextPrompt = "New user feedback arrived during project context selection. Review it before deciding; no native turn or helper action started for that review.";

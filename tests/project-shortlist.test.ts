@@ -1,0 +1,126 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { reviewProjectContext } from "../runner/project-context";
+import { QUESTION_BYTES, REQUEST_BYTES } from "../runner/context";
+import { fixture, selector } from "./project-fixtures";
+
+test("the work issue's body sections and newest comments are candidates", async () => {
+  const { cwd, options } = await fixture();
+  const mock = selector((body) => {
+    const paths = body.state.candidates.map((c: { path: string }) => c.path);
+    assert.ok(paths.includes("https://github.com/example/work/issues/9"));
+    assert.ok(
+      paths.includes(
+        "https://github.com/example/work/issues/9#comment-2026-01-07T00:00:00Z",
+      ),
+    );
+    assert.ok(
+      !paths.includes(
+        "https://github.com/example/work/issues/9#comment-2026-01-02T00:00:00Z",
+      ),
+    );
+    const latest = body.state.candidates.find((c: { path: string }) =>
+      c.path.endsWith("01-07T00:00:00Z"),
+    );
+    assert.equal(latest.section, "Comment 2026-01-07T00:00:00Z > Status");
+  });
+  try {
+    await reviewProjectContext({
+      ...options,
+      selector: mock.value,
+      workIssue: { repo: "example/work", number: 9 },
+      readIssue: async () => ({
+        title: "Invoice importer",
+        body: "## Current position\nThe delimiter check remains.",
+        updatedAt: "2026-01-07T00:00:00Z",
+        comments: Array.from({ length: 7 }, (_, i) => ({
+          body: `## Status\nInvoice update ${i + 1}.`,
+          createdAt: `2026-01-0${i + 1}T00:00:00Z`,
+        })),
+      }),
+    });
+    assert.equal(mock.calls, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("a large project sends 20 to 40 candidates within the documented request limits", async () => {
+  const { cwd, options } = await fixture();
+  await mkdir(path.join(cwd, "docs"));
+  for (let i = 0; i < 30; i++)
+    await writeFile(
+      path.join(cwd, `docs/invoices-${i}.md`),
+      Array.from(
+        { length: 4 },
+        (_, j) =>
+          `## Invoice note ${j}\n${"The invoice importer keeps its delimiter. ".repeat(12)}\n`,
+      ).join("\n"),
+    );
+  let candidates = 0;
+  const mock = selector((body) => {
+    candidates = body.state.candidates.length;
+    const largest = Math.max(
+      ...Object.values(body.questions).map((q) =>
+        Buffer.byteLength(JSON.stringify(q)),
+      ),
+    );
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(body.state)) + largest <= QUESTION_BYTES,
+    );
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) <= REQUEST_BYTES);
+  });
+  try {
+    const view = await reviewProjectContext({
+      ...options,
+      selector: mock.value,
+    });
+    assert.ok(candidates >= 20 && candidates <= 40, String(candidates));
+    assert.equal(view.receipt.considered.length, candidates);
+    assert.ok(view.receipt.selectedChars <= 6_000);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("files a brief names lead the shortlist; only its opening steers retrieval", async () => {
+  const { cwd, options } = await fixture();
+  await writeFile(
+    path.join(cwd, "src/ledger.ts"),
+    "export const rows: string[] = [];\n",
+  );
+  await mkdir(path.join(cwd, "docs"));
+  await writeFile(
+    path.join(cwd, "docs/display.md"),
+    "## Display\nThe weather display uses rounded tiles.\n",
+  );
+  for (let i = 0; i < 60; i++)
+    await writeFile(
+      path.join(cwd, `docs/importer-${i}.md`),
+      `## Importer note ${i}\n${"The invoice importer reads each invoice line. ".repeat(20)}\n`,
+    );
+  let paths: string[] = [];
+  const mock = selector((body) => {
+    paths = body.state.candidates.map((c: { path: string }) => c.path);
+  });
+  try {
+    await reviewProjectContext({
+      ...options,
+      task: `change: Fix the invoice importer; the row store is src/ledger.ts.\n${"Keep the delivery gates. ".repeat(50)}Check the weather display too.`,
+      selector: mock.value,
+    });
+    assert.ok(
+      paths.includes("src/ledger.ts"),
+      "a named file is a candidate without matching words",
+    );
+    assert.ok(
+      !paths.includes("docs/display.md"),
+      "words past the brief's opening do not steer retrieval",
+    );
+    assert.ok(paths.length >= 20);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

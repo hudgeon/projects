@@ -1,113 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { reviewProjectContext } from "../runner/project-context";
 import { git } from "../runner/workspaces";
-import { JEV_MODEL } from "../runner/context";
-
-async function fixture() {
-  const cwd = await mkdtemp(path.join(tmpdir(), "project-context-"));
-  await mkdir(path.join(cwd, "src"));
-  await writeFile(
-    path.join(cwd, ".gitignore"),
-    ".state/\n.env\n.wip/\nnode_modules/\n",
-  );
-  await writeFile(
-    path.join(cwd, "AGENTS.md"),
-    "Drafting only. Publishing requires the owner's approval.\n",
-  );
-  await writeFile(
-    path.join(cwd, "PLAN.md"),
-    "The invoice importer must preserve the pipe delimiter and account boundary.\n",
-  );
-  await writeFile(
-    path.join(cwd, "README.md"),
-    "The project imports invoices.\n",
-  );
-  await writeFile(
-    path.join(cwd, "src/invoices.ts"),
-    'export const delimiter = "|"; // Invoice format\n',
-  );
-  await writeFile(
-    path.join(cwd, "src/weather.ts"),
-    'export const weather = "sunny";\n',
-  );
-  await git(cwd, ["init", "-b", "main"]);
-  await git(cwd, ["add", "."]);
-  await git(cwd, [
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.com",
-    "commit",
-    "-m",
-    "Initial fixture",
-  ]);
-  return {
-    cwd,
-    options: {
-      project: {
-        id: "example/importer",
-        name: "Importer",
-        cwd,
-        plan: "PLAN.md",
-      },
-      instructions: ["Inspect the invoice delimiter. Draft only."],
-      task: "Inspect the invoice importer",
-      signal: new AbortController().signal,
-    },
-  };
-}
-function selector(
-  onRequest?: (body: any, init: RequestInit) => Promise<void> | void,
-) {
-  let calls = 0;
-  return {
-    get calls() {
-      return calls;
-    },
-    value: {
-      mode: "select" as const,
-      gateway: { accountId: "a".repeat(32), gatewayId: "example" },
-      key: async () => "fixture-key",
-      fetch: (async (_url, init) => {
-        calls++;
-        const body = JSON.parse(init!.body as string);
-        await onRequest?.(body, init!);
-        return Response.json({
-          model: JEV_MODEL,
-          answers: Object.fromEntries(
-            body.state.candidates.map((c: { path: string }, i: number) => [
-              `keep_${i}`,
-              { type: "noul", noul: c.path.includes("weather") ? 0 : 0.9 },
-            ]),
-          ),
-          usage: { input_tokens: 500, output_tokens: 40 },
-        });
-      }) as typeof fetch,
-    },
-  };
-}
+import { JEV_MODEL, REQUEST_BYTES } from "../runner/context";
+import { fixture, selector } from "./project-fixtures";
 
 test("a first turn selects project evidence through the priced gateway and retains instructions verbatim", async () => {
   const { cwd, options } = await fixture();
   const mock = selector((body, init) => {
     assert.deepEqual(body.state.userInstructions, options.instructions);
-    assert.match(body.state.repositoryInstructions[0].text, /Drafting only/);
-    assert.ok(
-      body.state.candidates.every(
-        (c: { path: string }) => c.path !== "AGENTS.md",
-      ),
+    assert.equal(
+      body.state.repositoryInstructions,
+      undefined,
+      "protected instructions are not relevance candidates",
+    );
+    assert.doesNotMatch(JSON.stringify(body), /Drafting only/);
+    assert.equal(
+      Object.keys(body.questions).length,
+      body.state.candidates.length,
     );
     const headers = new Headers(init.headers);
     assert.equal(headers.get("cf-aig-collect-log-payload"), "false");
@@ -141,7 +55,7 @@ test("a first turn selects project evidence through the priced gateway and retai
   }
 });
 
-test("reviews cache exact inputs and invalidate on task, instruction, dirty-source and inventory changes", async () => {
+test("reviews cache what Jev judged and invalidate on task, instruction, dirty-source and new-source changes", async () => {
   const { cwd, options } = await fixture(),
     mock = selector();
   try {
@@ -189,6 +103,11 @@ test("reviews cache exact inputs and invalidate on task, instruction, dirty-sour
       cached: view.record,
     });
     assert.match(view.prompt, /recovery copy/);
+    assert.equal(
+      view.receipt.cached,
+      true,
+      "instructions reach the prompt fresh; Jev never judged them",
+    );
     view = await reviewProjectContext({
       ...options,
       task: "Inspect the weather display instead",
@@ -204,7 +123,7 @@ test("reviews cache exact inputs and invalidate on task, instruction, dirty-sour
       selector: mock.value,
       cached: view.record,
     });
-    assert.equal(mock.calls, 6);
+    assert.equal(mock.calls, 5);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -263,7 +182,11 @@ test("sources changing during Jev selection discard that judgment and retain a f
     assert.equal(view.receipt.strategy, "baseline");
     assert.equal(view.record, undefined);
     assert.match(view.prompt, /Corrected invoice delimiter/);
-    assert.match(view.prompt, /sunny/, "fallback retains optional evidence");
+    assert.match(
+      view.prompt,
+      /pipe delimiter/,
+      "fallback retains retrieval evidence",
+    );
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -330,15 +253,9 @@ test("nested instructions stay protected and bounded excerpts preserve exact off
     "Never change the account boundary in this directory.\n",
   );
   await writeFile(path.join(cwd, "src/invoices.ts"), text);
-  const mock = selector((body) => {
-    for (const c of body.state.candidates.filter(
-      (c: { path: string }) => c.path === "src/invoices.ts",
-    )) {
-      assert.equal(c.text, text.slice(c.startChar, c.endChar));
-      assert.match(c.hash, /^[a-f0-9]{64}$/);
-    }
-    assert.ok(Buffer.byteLength(JSON.stringify(body)) < 28_000);
-  });
+  const mock = selector((body) =>
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) <= REQUEST_BYTES),
+  );
   try {
     const view = await reviewProjectContext({
       ...options,
@@ -346,7 +263,24 @@ test("nested instructions stay protected and bounded excerpts preserve exact off
     });
     assert.match(view.prompt, /Never change the account boundary/);
     assert.match(view.prompt, /Invoice delimiter correction/);
+    const evidence = JSON.parse(
+      view.prompt.split("offsets are characters): ")[1],
+    ) as {
+      path: string;
+      hash: string;
+      startChar: number;
+      endChar: number;
+      text: string;
+    }[];
+    for (const e of evidence.filter((e) => e.path === "src/invoices.ts")) {
+      assert.equal(e.text, text.slice(e.startChar, e.endChar));
+      assert.match(e.hash, /^[a-f0-9]{64}$/);
+    }
+    assert.ok(
+      view.receipt.considered.every((c) => c.endChar - c.startChar <= 1_200),
+    );
     assert.ok((view.receipt.baselineChars ?? 0) <= 6_000);
+    assert.ok((view.receipt.selectedChars ?? 0) <= 6_000);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -375,7 +309,7 @@ test("HTTP and invalid-answer failures retain baseline evidence; cancellation pr
       );
       assert.ok(view.receipt.failure?.selectionId);
       assert.match(view.prompt, /pipe delimiter/);
-      assert.match(view.prompt, /sunny/);
+      assert.match(view.prompt, /imports invoices/);
       assert.match(view.prompt, /Drafting only/);
     }
     const controller = new AbortController(),
@@ -425,6 +359,117 @@ test("recognizable credentials in normally named source or work issues are exclu
     );
     assert.match(view.prompt, /credential_like_content/);
     assert.match(view.prompt, /Drafting only/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("Jev ranks the shortlist; code supplies the best units at or above the cutoff", async () => {
+  const { cwd, options } = await fixture();
+  await writeFile(
+    path.join(cwd, "PLAN.md"),
+    [
+      "# Importer plan",
+      "## Phase 1: delimiter",
+      "The invoice importer must preserve the pipe delimiter. Every exported line keeps its columns in the account's order, and a missing column is an error rather than an empty value.",
+      "```sh",
+      "# not a heading inside a fence",
+      "```",
+      "## Phase 2: invoice archive",
+      "Archive imported invoice files after a week. The archive keeps the original file name and the import date, and a second import of the same file is refused.",
+      "## Phase 3: weather",
+      "Show invoice-free weather tiles.",
+      "",
+    ].join("\n"),
+  );
+  await writeFile(
+    path.join(cwd, "src/invoices.ts"),
+    [
+      'import { readFile } from "node:fs/promises";',
+      "",
+      "// Splits one invoice line at the pipe delimiter.",
+      "export function splitInvoice(line: string) {",
+      "  const parts = line.split(DELIMITER);",
+      '  if (parts.length < COLUMNS) throw Error("Missing invoice column");',
+      "",
+      "  return parts;",
+      "}",
+      "",
+      "export function archiveInvoice(file: string) {",
+      `  return readFile(file, "utf8"); // ${"archive ".repeat(40)}`,
+      "}",
+      "",
+    ].join("\n"),
+  );
+  let sent: { path: string; section?: string; text: string }[] = [];
+  const nouls: Record<string, number> = {
+    "Phase 1": 0.6,
+    splitInvoice: 0.95,
+    "Phase 2": 0.4,
+    archiveInvoice: 0.2,
+  };
+  const value = {
+    ...selector().value,
+    fetch: (async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      sent = body.state.candidates;
+      assert.equal(Object.keys(body.questions).length, sent.length);
+      for (const [i, q] of Object.values(body.questions).entries())
+        assert.match(
+          (q as { instructions: string }).instructions,
+          new RegExp(`candidates\\[${i}\\]`),
+        );
+      return Response.json({
+        model: JEV_MODEL,
+        answers: Object.fromEntries(
+          sent.map((c, i) => [
+            `keep_${i}`,
+            {
+              type: "noul",
+              noul:
+                Object.entries(nouls).find(([k]) =>
+                  `${c.section ?? ""} ${c.text}`.includes(k),
+                )?.[1] ?? 0.1,
+            },
+          ]),
+        ),
+        usage: { input_tokens: 900, output_tokens: 40 },
+      });
+    }) as typeof fetch,
+  };
+  try {
+    const view = await reviewProjectContext({ ...options, selector: value });
+    const evidence = JSON.parse(
+      view.prompt.split("offsets are characters): ")[1],
+    ) as { text: string }[];
+    assert.deepEqual(
+      evidence.map((e) => e.text.split("\n")[0]),
+      ["// Splits one invoice line at the pipe delimiter.", "# Importer plan"],
+      "ranked by probability; units below the cutoff are not supplied",
+    );
+    assert.equal(view.receipt.selected, 2);
+    assert.equal(view.receipt.omitted, sent.length - 2);
+    assert.equal(view.receipt.keepFrom, 0.5);
+    assert.ok(
+      view.receipt.considered.every((c) => typeof c.score === "number"),
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("shadow mode records Jev's ranking but supplies the retrieval baseline", async () => {
+  const { cwd, options } = await fixture();
+  const mock = selector();
+  try {
+    const view = await reviewProjectContext({
+      ...options,
+      selector: { ...mock.value, mode: "shadow" },
+    });
+    assert.equal(view.receipt.strategy, "shadow");
+    assert.ok(view.record);
+    assert.equal(view.receipt.selectedChars, view.receipt.baselineChars);
+    assert.match(view.prompt, /pipe delimiter/);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
