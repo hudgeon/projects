@@ -3292,6 +3292,27 @@ test("fresh coordinators consume selected evidence once; changed feedback discar
   }
 });
 
+test("conversation selection failures persist the same safe diagnostic that the runner logs", async (t) => {
+  const dir = await fixture(), o = engineOptions(dir), lines: string[] = [];
+  t.mock.method(console, "warn", (line: string) => lines.push(line));
+  const children: Child[] = Array.from({length: 3}, () => ({id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "read", cwd: dir, branch: "owned", sessionId: randomUUID(), state: "completed", evidence: [], result}));
+  o.contextSelector = {mode: "select", key: async () => "private-key", fetch: async () => {throw new DOMException("private timeout", "TimeoutError");}};
+  o.turn = async opts => {await opts.onSession(randomUUID()); return complete;};
+  try {
+    await savePrivate(path.join(dir, "runs", o.run.id + ".json"), {generation: 1, phase: "ready", pid: null, progress: {...progress(), masterSessionId: null, children}});
+    await executeRun(o);
+    const file = path.join(dir, "runs", o.run.id + ".context.json.view.json");
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    const failure = lines.map(line => JSON.parse(line)).find(x => x.contextTrigger === "coordinator-rotation");
+    assert.equal(receipt.strategy, "baseline");
+    assert.equal(receipt.failure.kind, "timeout");
+    assert.equal(failure.runId, o.run.id);
+    assert.deepEqual(failure.contextFailure, receipt.failure);
+    assert.equal((await stat(file)).mode & 0o077, 0);
+    assert.doesNotMatch(JSON.stringify(failure), /private timeout|private-key/);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
+
 async function projectReviewFixture() {
   const dir = await fixture();
   await writeFile(path.join(dir, ".gitignore"), ".state/\n");
@@ -3310,6 +3331,36 @@ function projectResponder(callback?: (body: any) => void): NonNullable<EngineOpt
     return Response.json({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(body.questions).map(k => [k, {type: "noul", noul: 0.9}])), usage: {input_tokens: 100, output_tokens: 10}});
   }};
 }
+
+test("Jev project failure receipts and logs correlate while baseline evidence still reaches native execution", async (t) => {
+  const {dir, o} = await projectReviewFixture();
+  const lines: string[] = [];
+  t.mock.method(console, "warn", (line: string) => lines.push(line));
+  let natives = 0;
+  o.contextSelector = {mode: "select", key: async () => "private-key", fetch: async () => {throw new TypeError("private host", {cause: {code: "ENOTFOUND"}});}};
+  o.turn = async opts => {
+    natives++;
+    assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/);
+    assert.match(opts.prompt, /Draft only/);
+    assert.doesNotMatch(opts.prompt, /ENOTFOUND|private host/);
+    await opts.onSession(randomUUID()); return complete;
+  };
+  try {
+    await executeRun(o);
+    const file = path.join(o.stateDir, "runs", o.run.id + ".project-context.master.json");
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    const failures = lines.map(line => JSON.parse(line)).filter(x => x.event === "jev_selection_failed");
+    assert.equal(natives, 1);
+    assert.equal(receipt.reason, "service_failed");
+    assert.equal(receipt.failure.kind, "dns");
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].runId, o.run.id);
+    assert.equal(failures[0].contextTrigger, "project-turn");
+    assert.deepEqual(failures[0].contextFailure, receipt.failure);
+    assert.equal((await stat(file)).mode & 0o077, 0);
+    assert.doesNotMatch(JSON.stringify(failures), /private|pipe delimiter|Draft only/);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
 
 test("project review precedes the first native turn and a resumed unchanged view is not reinserted", async () => {
   const {dir, o} = await projectReviewFixture();

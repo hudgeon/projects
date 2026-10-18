@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { z } from "zod";
+import type { ContextFailure } from "../src/telemetry";
 import { nativeEnv } from "./native";
 import type { ProjectDirectory } from "./workspaces";
 import {
@@ -428,11 +429,13 @@ export async function reviewProjectContext(o: Options) {
         omitted: 0,
         baselineChars: 0,
         selectedChars: 0,
+        failure: undefined as ContextFailure | undefined,
       },
       record: undefined,
     };
   }
   let record: SelectionRecord | undefined,
+    failure: ContextFailure | undefined,
     cached = false,
     reason = "disabled";
   if (
@@ -472,6 +475,7 @@ export async function reviewProjectContext(o: Options) {
       trigger: "project-turn",
     });
     record = judgment.record;
+    failure = judgment.failure;
     cached = judgment.cached;
     reason = judgment.reason ?? "selected";
     if (record && !cached) {
@@ -514,6 +518,7 @@ export async function reviewProjectContext(o: Options) {
     omitted: snapshot.candidates.length - kept.length,
     baselineChars: snapshot.candidates.reduce((n, c) => n + c.text.length, 0),
     selectedChars: kept.reduce((n, c) => n + c.text.length, 0),
+    failure,
   };
   return {
     record,

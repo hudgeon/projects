@@ -92,11 +92,14 @@ test("gateway selection reports priced usage without logging or caching conversa
           per_token_out: 0,
         });
         assert.equal(JEV_INPUT_COST_PER_TOKEN, 0.000000042);
-        assert.deepEqual(JSON.parse(headers.get("cf-aig-metadata")!), {
+        const metadata = JSON.parse(headers.get("cf-aig-metadata")!);
+        assert.match(metadata.selectionId, /^[a-f0-9-]{36}$/);
+        assert.deepEqual(metadata, {
           process: "context-selection",
           trigger: "coordinator-rotation",
           worker: "projects-runner",
           model: JEV_MODEL,
+          selectionId: metadata.selectionId,
         });
         return responder(Array(7).fill(0.5))(url, init);
       },
@@ -106,6 +109,195 @@ test("gateway selection reports priced usage without logging or caching conversa
   assert.equal(view.record?.transport, "gateway");
   assert.equal(view.record?.inputTokens, 100);
   assert.equal(calls, 1);
+});
+
+test("failure diagnostics distinguish bounded nested transport causes without retaining raw errors", async () => {
+  const cases = [
+    [new DOMException("private timeout", "TimeoutError"), "timeout", undefined],
+    [
+      new TypeError("private host", {
+        cause: Object.assign(new Error("private DNS"), { code: "ENOTFOUND" }),
+      }),
+      "dns",
+      "ENOTFOUND",
+    ],
+    [
+      new TypeError("private address", {
+        cause: new AggregateError([
+          Object.assign(new Error("private socket"), { code: "ECONNREFUSED" }),
+        ]),
+      }),
+      "connect",
+      "ECONNREFUSED",
+    ],
+    [
+      Object.assign(new Error("private certificate"), {
+        code: "CERT_HAS_EXPIRED",
+      }),
+      "tls",
+      "CERT_HAS_EXPIRED",
+    ],
+    [
+      Object.assign(new Error("private socket"), { code: "UND_ERR_SOCKET" }),
+      "socket",
+      "UND_ERR_SOCKET",
+    ],
+    [
+      new TypeError("private token", { cause: { code: "private-code" } }),
+      "network",
+      undefined,
+    ],
+  ] as const;
+  const cyclic: { cause?: unknown } = {};
+  cyclic.cause = cyclic;
+  for (const [error, kind, code] of [
+    ...cases,
+    [cyclic, "unexpected", undefined] as const,
+  ]) {
+    let calls = 0,
+      selectionId: string | undefined;
+    const view = await selectContext({
+      ...fixture(),
+      selector: {
+        mode: "select",
+        gateway: { accountId: "a".repeat(32), gatewayId: "example" },
+        key: async () => "private-key",
+        fetch: async (_url, init) => {
+          calls++;
+          selectionId = JSON.parse(
+            new Headers(init?.headers).get("cf-aig-metadata")!,
+          ).selectionId;
+          throw error;
+        },
+      },
+    });
+    assert.equal(view.strategy, "baseline");
+    assert.equal(view.reason, "service_failed");
+    assert.equal(view.failure?.selectionId, selectionId);
+    assert.equal(view.failure?.kind, kind);
+    assert.equal(view.failure?.errorCode, code);
+    assert.equal(view.failure?.stage, "request");
+    assert.equal(view.failure?.transport, "gateway");
+    assert.equal(view.failure?.timeoutMs, 8000);
+    assert.ok(view.failure!.requestBytes > 0);
+    assert.equal(view.failure?.candidateCount, 7);
+    assert.ok(view.failure!.durationMs >= view.failure!.stageDurationMs);
+    assert.equal(calls, 1);
+    assert.doesNotMatch(
+      JSON.stringify(view.failure),
+      /private|cause|stack|message|https?:/,
+    );
+  }
+});
+
+test("HTTP and response diagnostics retain only validated correlation IDs and distinguish parsing from validation", async () => {
+  const id = randomUUID(),
+    providerId = randomUUID();
+  const cases = [
+    {
+      fetch: async () =>
+        new Response("private body", {
+          status: 429,
+          headers: {
+            "cf-aig-log-id": id,
+            "x-request-id": providerId,
+            "cf-ray": "abcdef0123456789-SYD",
+          },
+        }),
+      kind: "http",
+      stage: "response",
+      status: 429,
+    },
+    {
+      fetch: async () =>
+        new Response("private body", {
+          status: 502,
+          headers: {
+            "cf-aig-log-id": "private token",
+            "x-request-id": "private request",
+            "cf-ray": "private path",
+          },
+        }),
+      kind: "http",
+      stage: "response",
+      status: 502,
+    },
+    {
+      fetch: async () => new Response("private malformed JSON"),
+      kind: "invalid_json",
+      stage: "response",
+      status: 200,
+    },
+    {
+      fetch: async () => Response.json({ private: "schema input" }),
+      kind: "invalid_schema",
+      stage: "validation",
+      status: 200,
+    },
+    {
+      fetch: responder([0]),
+      kind: "answer_coverage",
+      stage: "validation",
+      status: 200,
+    },
+    {
+      fetch: async () => {
+        const response = new Response();
+        response.json = async () => {
+          throw Object.assign(new Error("private body stream"), {
+            code: "UND_ERR_BODY_TIMEOUT",
+          });
+        };
+        return response;
+      },
+      kind: "timeout",
+      stage: "response",
+      status: 200,
+    },
+  ];
+  for (const [i, c] of cases.entries()) {
+    const view = await selectContext({
+      ...fixture(),
+      selector: {
+        mode: "select",
+        key: async () => "private-key",
+        fetch: c.fetch,
+      },
+    });
+    assert.equal(view.failure?.kind, c.kind);
+    assert.equal(view.failure?.stage, c.stage);
+    assert.equal(view.failure?.status, c.status);
+    assert.equal(view.failure?.gatewayLogId, i === 0 ? id : undefined);
+    assert.equal(
+      view.failure?.providerRequestId,
+      i === 0 ? providerId : undefined,
+    );
+    assert.equal(
+      view.failure?.cfRay,
+      i === 0 ? "abcdef0123456789-SYD" : undefined,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(view.failure),
+      /private|body stream|schema input/,
+    );
+  }
+  let calls = 0;
+  const missingKey = await selectContext({
+    ...fixture(),
+    selector: {
+      mode: "select",
+      key: async () => {
+        throw Error("private credential failure");
+      },
+      fetch: async () => {
+        calls++;
+        throw Error("must not fetch");
+      },
+    },
+  });
+  assert.equal(missingKey.failure?.stage, "key");
+  assert.equal(missingKey.failure?.kind, "key_unavailable");
+  assert.equal(calls, 0);
 });
 
 test("a failed gateway retains baseline context without an unreported direct retry", async () => {
@@ -295,6 +487,8 @@ test("oversized context is never silently shortened for Jev; cancellation preven
     },
   });
   assert.equal(large.reason, "request_too_large");
+  assert.equal(large.failure?.stage, "prepare");
+  assert.equal(large.failure?.kind, "request_too_large");
   assert.equal(large.sources.length, f.messages.length);
   const controller = new AbortController();
   await assert.rejects(

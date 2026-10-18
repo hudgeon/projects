@@ -1034,6 +1034,12 @@ export async function executeRun(o: EngineOptions) {
     let reusedInSession = false;
     if (session) try {reusedInSession = JSON.parse(await readFile(sessionFile(session), "utf8")).version === version;} catch { /* New native context. */ }
     await savePrivate(receipt, {...review.receipt, at: Date.now(), record: review.record, reusedInSession});
+    if (review.receipt.failure) telemetry("runner", "jev_selection_failed", {
+      runId: o.run.id, generation: o.run.generation, host: o.host,
+      actor: actor === "master" ? "master" : agent,
+      childId: actor === "master" ? undefined : actor,
+      contextTrigger: "project-turn", contextFailure: review.receipt.failure,
+    }, "warn");
     return {prompt: `${reusedInSession ? `Project context is unchanged from the view already supplied in this native session.` : review.prompt}\nPrivate project context receipt: ${receipt}\n`,
       remember: async (id?: string | null) => {if (id) await savePrivate(sessionFile(id), {version});}};
   };
@@ -1327,6 +1333,10 @@ export async function executeRun(o: EngineOptions) {
           try { cached = JSON.parse(await readFile(contextFile + ".selection.json", "utf8")); } catch { /* No reusable selection. */ }
           contextPlan = await selectContext({messages, children: j.progress.children,
             signal: o.signal, selector: o.contextSelector, cached});
+          if (contextPlan.failure) telemetry("runner", "jev_selection_failed", {
+            runId: o.run.id, generation: o.run.generation, host: o.host, actor: "master",
+            contextTrigger: "coordinator-rotation", contextFailure: contextPlan.failure,
+          }, "warn");
           const latest = o.latestMessages?.();
           if (latest && contextVersion(latest, j.progress.children) !== contextPlan.version) {
             messages = latest;
@@ -1344,6 +1354,7 @@ export async function executeRun(o: EngineOptions) {
             selected: contextPlan.selected, omitted: contextPlan.omitted,
             baselineChars: contextPlan.baselineChars, proposedChars: contextPlan.proposedChars,
             cached: contextPlan.cached,
+            failure: contextPlan.failure,
             omittedUserInstructions: contextPlan.conversation.omittedUserInstructions,
             omittedProposals: contextPlan.omittedProposals,
           });

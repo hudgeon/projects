@@ -199,6 +199,20 @@ existing provider key stays in executor memory. If the gateway fails, context
 falls back to the deterministic view without retrying the provider directly.
 With no gateway configured, requests use the direct TypeSafe endpoint.
 
+Failed Jev selections retain a bounded `failure` diagnostic in the private
+project receipt or conversation `.view.json` and emit `jev_selection_failed`
+in the runner's structured logs. It distinguishes key access, request, response
+body and validation stages, with total/stage timings, the eight-second request
+deadline, request size, candidate count, HTTP status, and allowlisted network
+error codes (including nested causes). Timeouts, DNS, connections, TLS, sockets,
+invalid JSON/schema and missing answers have separate categories. A generated
+`selectionId` also goes into gateway metadata, allowing correlation even when
+the client receives no response. Validated gateway log IDs, UUID request IDs
+and Cloudflare Ray IDs are retained when returned. Diagnostics contain no
+prompts, source text, key values, URLs, raw exceptions or response bodies;
+unknown codes and malformed IDs are discarded. User cancellation still
+propagates without a misleading failure log or a fallback native turn.
+
 `runner/context.ts` owns the deterministic conversation view and shared Jev
 transport. `runner/project-context.ts` owns bounded repository retrieval and
 project relevance selection. Code

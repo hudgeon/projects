@@ -1,6 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Child, RunMessage } from "../src/run-model";
+import {
+  contextErrorCodeSchema,
+  contextFailureSchema,
+  type ContextFailure,
+} from "../src/telemetry";
 
 // User instructions are never candidates for semantic removal. The bounded
 // prompt is a view of the retained sources, not a new source of authority.
@@ -93,6 +98,7 @@ export const selectionRecordSchema = z
     outputTokens: z.number().int().nonnegative(),
     durationMs: z.number().nonnegative(),
     transport: z.enum(["direct", "gateway"]).optional(),
+    selectionId: z.uuid().optional(),
   })
   .strict();
 export type SelectionRecord = z.infer<typeof selectionRecordSchema>;
@@ -108,6 +114,60 @@ export function contextVersion(messages: RunMessage[], children: Child[]) {
     .digest("hex");
 }
 
+// Error messages, stacks, hostnames and arbitrary codes are never diagnostic data.
+// Node fetch can wrap a system error in a cause or AggregateError; inspect at
+// most eight objects, including cyclic chains, and retain only known codes.
+function transportFailure(
+  error: unknown,
+): Pick<ContextFailure, "kind" | "errorCode"> {
+  const pending: unknown[] = [error];
+  for (let i = 0; i < pending.length && i < 8; i++) {
+    const value = pending[i];
+    if (!value || typeof value !== "object") continue;
+    const e = value as {
+      code?: unknown;
+      cause?: unknown;
+      name?: unknown;
+      errors?: unknown;
+    };
+    const parsed = contextErrorCodeSchema.safeParse(e.code);
+    if (parsed.success) {
+      const code = parsed.data;
+      const kind =
+        code === "ENOTFOUND" || code === "EAI_AGAIN"
+          ? "dns"
+          : code.includes("TIMEOUT") || code === "ETIMEDOUT"
+            ? "timeout"
+            : code.includes("CERT") || code.includes("SIGNATURE")
+              ? "tls"
+              : ["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"].includes(code)
+                ? "socket"
+                : ["UND_ERR_ABORTED", "ABORT_ERR"].includes(code)
+                  ? "aborted"
+                  : [
+                        "ERR_INVALID_URL",
+                        "ERR_INVALID_CHAR",
+                        "UND_ERR_INVALID_ARG",
+                      ].includes(code)
+                    ? "request_invalid"
+                    : "connect";
+      return { kind, errorCode: code };
+    }
+    if (e.cause) pending.push(e.cause);
+    if (Array.isArray(e.errors)) pending.push(...e.errors.slice(0, 4));
+  }
+  return {
+    kind:
+      error instanceof Error && error.name === "TimeoutError"
+        ? "timeout"
+        : error instanceof Error && error.name === "AbortError"
+          ? "aborted"
+          : error instanceof TypeError
+            ? "network"
+            : "unexpected",
+  };
+}
+
 // Both conversation handovers and project reviews use the same bounded,
 // priced transport and strict answer coverage. Retrieval and policy stay in code.
 export async function judgeContext(o: {
@@ -119,17 +179,69 @@ export async function judgeContext(o: {
   cached?: unknown;
   trigger: "coordinator-rotation" | "project-turn";
 }): Promise<
-  | { record: SelectionRecord; cached: boolean; reason: null }
-  | { record: undefined; cached: false; reason: string }
+  | {
+      record: SelectionRecord;
+      cached: boolean;
+      reason: null;
+      failure?: undefined;
+    }
+  | {
+      record: undefined;
+      cached: false;
+      reason: string;
+      failure?: ContextFailure;
+    }
 > {
-  const failed = (reason: string) => ({
+  const started = performance.now(),
+    selectionId = randomUUID();
+  let stage: ContextFailure["stage"] = "prepare",
+    stageStarted = started;
+  let response: Response | undefined;
+  const move = (next: ContextFailure["stage"]) => {
+    stage = next;
+    stageStarted = performance.now();
+  };
+  const failed = (
+    reason: string,
+    details?: Pick<ContextFailure, "kind" | "errorCode">,
+  ) => ({
     record: undefined,
     cached: false as const,
     reason,
+    failure: details
+      ? contextFailureSchema.parse({
+          selectionId,
+          stage,
+          ...details,
+          transport: o.selector.gateway ? "gateway" : "direct",
+          durationMs: Math.round(performance.now() - started),
+          stageDurationMs: Math.round(performance.now() - stageStarted),
+          timeoutMs: 8000,
+          requestBytes: Buffer.byteLength(o.body),
+          candidateCount: o.count,
+          ...(response
+            ? {
+                status: response.status,
+                ...Object.fromEntries(
+                  [
+                    ["gatewayLogId", "cf-aig-log-id"],
+                    ["providerRequestId", "x-request-id"],
+                    ["cfRay", "cf-ray"],
+                  ].flatMap(([field, header]) => {
+                    const value = contextFailureSchema.shape[
+                      field as "gatewayLogId" | "providerRequestId" | "cfRay"
+                    ].safeParse(response!.headers.get(header));
+                    return value.success ? [[field, value.data]] : [];
+                  }),
+                ),
+              }
+            : {}),
+        })
+      : undefined,
   });
   if (o.selector.mode === "off") return failed("disabled");
   if (Buffer.byteLength(o.body) > REQUEST_BYTES)
-    return failed("request_too_large");
+    return failed("request_too_large", { kind: "request_too_large" });
   let record: SelectionRecord;
   const cached = selectionRecordSchema.safeParse(o.cached);
   if (
@@ -142,21 +254,27 @@ export async function judgeContext(o: {
   )
     record = cached.data;
   else {
-    const started = performance.now();
+    move("key");
     let key: string;
     try {
       key = await o.selector.key();
-    } catch {
+    } catch (error) {
       o.signal.throwIfAborted();
-      return failed("key_unavailable");
+      return failed("key_unavailable", {
+        ...transportFailure(error),
+        kind: "key_unavailable",
+      });
     }
-    if (!key.trim()) return failed("key_unavailable");
+    if (!key.trim())
+      return failed("key_unavailable", { kind: "key_unavailable" });
+    move("request");
+    const timeout = AbortSignal.timeout(8000);
     try {
       const gateway = o.selector.gateway;
       const endpoint = gateway
         ? `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`
         : "https://api.typesafe.ai/v1/systemone";
-      const response = await (o.selector.fetch ?? fetch)(endpoint, {
+      response = await (o.selector.fetch ?? fetch)(endpoint, {
         method: "POST",
         redirect: "error",
         headers: {
@@ -178,15 +296,21 @@ export async function judgeContext(o: {
                   trigger: o.trigger,
                   worker: "projects-runner",
                   model: JEV_MODEL,
+                  selectionId,
                 }),
               }
             : {}),
         },
         body: o.body,
-        signal: AbortSignal.any([o.signal, AbortSignal.timeout(8000)]),
+        signal: AbortSignal.any([o.signal, timeout]),
       });
+      move("response");
       if (!response.ok)
-        return failed(`http_${response.status === 429 ? "limited" : "error"}`);
+        return failed(`http_${response.status === 429 ? "limited" : "error"}`, {
+          kind: "http",
+        });
+      const body = await response.json();
+      move("validation");
       const parsed = z
         .object({
           model: z.literal(JEV_MODEL),
@@ -202,14 +326,14 @@ export async function judgeContext(o: {
             output_tokens: z.number().int().nonnegative(),
           }),
         })
-        .parse(await response.json());
+        .parse(body);
       if (
         Object.keys(parsed.answers).length !== o.count ||
         !Array.from({ length: o.count }).every(
           (_, i) => parsed.answers[`keep_${i}`],
         )
       )
-        return failed("invalid_response");
+        return failed("invalid_response", { kind: "answer_coverage" });
       record = {
         version: o.version,
         policy: POLICY,
@@ -221,6 +345,7 @@ export async function judgeContext(o: {
         outputTokens: parsed.usage.output_tokens,
         durationMs: performance.now() - started,
         transport: gateway ? "gateway" : "direct",
+        selectionId,
       };
     } catch (error) {
       o.signal.throwIfAborted();
@@ -228,6 +353,14 @@ export async function judgeContext(o: {
         error instanceof z.ZodError || error instanceof SyntaxError
           ? "invalid_response"
           : "service_failed",
+        error instanceof z.ZodError
+          ? { kind: "invalid_schema" }
+          : error instanceof SyntaxError
+            ? { kind: "invalid_json" }
+            : {
+                ...transportFailure(error),
+                ...(timeout.aborted ? { kind: "timeout" as const } : {}),
+              },
       );
     }
   }
@@ -307,13 +440,18 @@ export async function selectContext(o: {
     strategy: "baseline" as "baseline" | "shadow" | "select",
     reason: "disabled",
     record: undefined as SelectionRecord | undefined,
+    failure: undefined as ContextFailure | undefined,
     selected: 0,
     omitted: candidates.length,
     cached: false,
     baselineChars: childContext(o.children, 6).length,
     proposedChars: childContext(o.children, 6).length,
   };
-  const fallback = (reason: string) => ({ ...base, reason });
+  const fallback = (reason: string, failure?: ContextFailure) => ({
+    ...base,
+    reason,
+    failure,
+  });
   if (!o.selector || o.selector.mode === "off") return fallback("disabled");
   if (!candidates.length) return fallback("no_candidates");
   // Never send an abridged candidate to a model and then let it discard the
@@ -357,7 +495,7 @@ export async function selectContext(o: {
     cached: o.cached,
     trigger: "coordinator-rotation",
   });
-  if (!judgment.record) return fallback(judgment.reason);
+  if (!judgment.record) return fallback(judgment.reason, judgment.failure);
   const { record } = judgment;
   o.signal.throwIfAborted();
   // Uncertainty stays. Only an empirically checked, very low relevance

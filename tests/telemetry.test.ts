@@ -5,6 +5,7 @@ import {
   telemetry,
   executionEventSchema,
   TELEMETRY_LIMIT,
+  contextFailureSchema,
 } from "../src/telemetry";
 import { progressSchema } from "../src/run-model";
 
@@ -53,6 +54,52 @@ test("telemetry strips unknown fields and never logs validation inputs or raw er
     throw Error("logging unavailable");
   });
   assert.doesNotThrow(() => telemetry("runner", "runner_started"));
+});
+
+test("Jev logs retain diagnostic correlation and reject unapproved nested data", (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "warn", (line: string) => lines.push(line));
+  const failure = {
+    selectionId: randomUUID(),
+    stage: "request" as const,
+    kind: "dns" as const,
+    transport: "gateway" as const,
+    durationMs: 12,
+    stageDurationMs: 10,
+    timeoutMs: 8000,
+    requestBytes: 400,
+    candidateCount: 2,
+    errorCode: "ENOTFOUND" as const,
+  };
+  const fields = {
+    runId: randomUUID(),
+    contextTrigger: "project-turn" as const,
+    contextFailure: failure,
+  };
+  telemetry(
+    "runner",
+    "jev_selection_failed",
+    { ...fields, ...{ token: "private key", error: Error("private stderr") } },
+    "warn",
+  );
+  assert.deepEqual(JSON.parse(lines[0]).contextFailure, failure);
+  assert.equal(JSON.parse(lines[0]).runId, fields.runId);
+  for (const invalid of [
+    { ...failure, message: "private host" },
+    { ...failure, errorCode: "private token" },
+    { ...failure, providerRequestId: "private token" },
+    { ...failure, cfRay: "private path" },
+  ]) {
+    assert.equal(contextFailureSchema.safeParse(invalid).success, false);
+    telemetry(
+      "runner",
+      "jev_selection_failed",
+      { ...fields, contextFailure: invalid as typeof failure },
+      "warn",
+    );
+    assert.equal(JSON.parse(lines.at(-1)!).event, "telemetry_invalid");
+  }
+  assert.doesNotMatch(lines.join("\n"), /private|stderr|message|token/);
 });
 
 test("runner receipt telemetry is bounded, typed and excludes native payloads", () => {

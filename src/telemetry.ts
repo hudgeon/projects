@@ -5,6 +5,70 @@ export const machineIdSchema = z
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/);
 
 const ms = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const contextErrorCodeSchema = z.enum([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UND_ERR_ABORTED",
+  "ABORT_ERR",
+  "ERR_INVALID_URL",
+  "ERR_INVALID_CHAR",
+  "UND_ERR_INVALID_ARG",
+]);
+export const contextFailureSchema = z
+  .object({
+    selectionId: z.uuid(),
+    stage: z.enum(["prepare", "key", "request", "response", "validation"]),
+    kind: z.enum([
+      "request_too_large",
+      "key_unavailable",
+      "timeout",
+      "dns",
+      "connect",
+      "tls",
+      "socket",
+      "aborted",
+      "request_invalid",
+      "network",
+      "unexpected",
+      "http",
+      "invalid_json",
+      "invalid_schema",
+      "answer_coverage",
+    ]),
+    transport: z.enum(["direct", "gateway"]),
+    durationMs: ms,
+    stageDurationMs: ms,
+    timeoutMs: ms,
+    requestBytes: ms,
+    candidateCount: ms,
+    status: z.number().int().min(100).max(599).optional(),
+    errorCode: contextErrorCodeSchema.optional(),
+    gatewayLogId: z.uuid().optional(),
+    providerRequestId: z.uuid().optional(),
+    cfRay: z
+      .string()
+      .regex(/^[a-f0-9]{16}(?:-[A-Z]{3})?$/i)
+      .optional(),
+  })
+  .strict();
+export type ContextFailure = z.infer<typeof contextFailureSchema>;
 const outcome = z.enum([
   "completed",
   "blocked",
@@ -84,8 +148,14 @@ export const executionEventSchema = z
     durationMs: ms.optional(),
     // Requested speed and resolved session configuration, never prompt text.
     codexFast: z.boolean().optional(),
-    model: z.string().regex(/^[a-zA-Z0-9._:-]{1,100}$/).optional(),
-    effort: z.string().regex(/^[a-zA-Z0-9_-]{1,30}$/).optional(),
+    model: z
+      .string()
+      .regex(/^[a-zA-Z0-9._:-]{1,100}$/)
+      .optional(),
+    effort: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]{1,30}$/)
+      .optional(),
     firstOutputMs: ms.optional(),
     attempts: z.number().int().min(1).max(3).optional(),
     tokenUsageObserved: z.boolean().optional(),
@@ -184,13 +254,20 @@ export const telemetryFieldsSchema = executionEventSchema
     conversationAgeMs: ms.optional(),
     concurrency: z.number().int().min(1).max(5).optional(),
     host: machineIdSchema.optional(),
-    browserOperation: z.enum(["lookup", "connect", "close", "sign_in"]).optional(),
+    browserOperation: z
+      .enum(["lookup", "connect", "close", "sign_in"])
+      .optional(),
     childCount: z.number().int().min(0).max(24).optional(),
     attempt: z.number().int().positive().optional(),
     sampleRate: z.number().min(0).max(1).optional(),
   })
   .strip();
 export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
+// These diagnostics belong to local runner logs, not Worker span attributes.
+const logFieldsSchema = telemetryFieldsSchema.extend({
+  contextTrigger: z.enum(["coordinator-rotation", "project-turn"]).optional(),
+  contextFailure: contextFailureSchema.optional(),
+});
 const logEventSchema = z.enum([
   ...executionEventSchema.shape.event.options,
   "request_finished",
@@ -228,17 +305,18 @@ const logEventSchema = z.enum([
   "runner_draining",
   "runner_executor_adopted",
   "runner_executor_failed",
+  "jev_selection_failed",
   "notification_sent",
 ]);
 export function telemetry(
   component: "worker" | "conversation" | "runner",
   event: z.infer<typeof logEventSchema>,
-  fields: TelemetryFields = {},
+  fields: z.infer<typeof logFieldsSchema> = {},
   level: "info" | "warn" | "error" = "info",
 ) {
   // Observability must never change execution or delivery semantics.
   try {
-    const parsed = telemetryFieldsSchema.safeParse(fields);
+    const parsed = logFieldsSchema.safeParse(fields);
     const name = logEventSchema.safeParse(event);
     if (!parsed.success || !name.success) {
       console.warn(

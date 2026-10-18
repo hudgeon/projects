@@ -369,6 +369,11 @@ test("HTTP and invalid-answer failures retain baseline evidence; cancellation pr
         selector: { mode: "select", key: async () => "fixture-key", fetch },
       });
       assert.equal(view.receipt.strategy, "baseline");
+      assert.equal(
+        view.receipt.failure?.stage,
+        view.receipt.reason === "http_error" ? "response" : "validation",
+      );
+      assert.ok(view.receipt.failure?.selectionId);
       assert.match(view.prompt, /pipe delimiter/);
       assert.match(view.prompt, /sunny/);
       assert.match(view.prompt, /Drafting only/);
