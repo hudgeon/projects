@@ -152,8 +152,8 @@ investigates as part of the work. A follow-up reuses its worktree; its session
 continues only while it is small, and a review of a change always gets a fresh
 one, which starts from the earlier report. Child results resume the same
 master, which is sent only what it has not seen; once its own session grows
-large, a fresh master takes over with the full brief. There is no additional
-provider API key, hosted agent runtime or inbound tunnel.
+large, a fresh master takes over with the full brief. Native agents use their
+existing sign-ins. There is no hosted agent runtime or inbound tunnel.
 
 Context follows the task rather than the age of its conversation. The master
 can set `resetContext: true` on a decision when the task changes materially,
@@ -175,6 +175,41 @@ acceptance checks. Repository instructions and canonical plans stay in their
 existing files and are read when relevant. This applies the task-scoped
 handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
 without discarding saved work, approval boundaries or recovery journals.
+
+Optional Jev context selection runs locally in the coordinator's executor,
+only when a fresh coordinator is about to start. Set `context.mode` in the
+machine config to `select`, `shadow` (evaluate without changing the prompt),
+or `off` (the default). The executor reads `JEV_API_KEY` from that machine's
+Doppler config through its existing read-only service token; no key enters
+the Worker, collector, agent environment or repository. Enabling a new
+consumer requires the deployment owner's credential and data-scope approval.
+
+`runner/context.ts` owns both the deterministic view and the selector. Code
+retains exact original/recent user instructions, their preceding proposal
+exchanges when they fit, the latest position and every child's execution and
+evidence index. Jev judges only optional older agent replies and completed
+child reports, keeping selected text verbatim. The latest child and unresolved
+children keep their full reports. A probability never grants permission or
+proves delivery. Omitted instructions/proposals still require reading the
+exact source before acting; the selector never deletes a source or alters
+native session history.
+
+Each handover keeps a private full source index and selection receipt beside
+the conversation's context file. They record a source-version hash, exact model,
+raw probabilities, usage and latency; changed evidence invalidates cached
+judgments. The model is pinned to `jev-1.14.0`; optional detail is omitted only
+at relevance probability at most 0.05, validated on the synthetic evaluation.
+An oversized request is never silently abridged. Missing credentials, invalid
+or incomplete answers, timeouts and service failures use the deterministic
+handover and preserve retrieval. Cancellation still stops the turn.
+
+To repeat the synthetic evaluation, inject the approved evaluation key as
+`API_KEY` or `TYPESAFE_API_KEY` and run
+`npm run context:evaluate -- --live`. It writes `.wip/jev-context-evaluation.json`
+with retained-evidence coverage, character counts, actual API input/output
+tokens and latency, and estimated cost at the documented model rate. These
+measurements do not establish production savings or native-agent accuracy;
+those need ordinary-use measurement. No customer history is used by this script.
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.

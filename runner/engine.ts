@@ -55,6 +55,8 @@ import {
   tokenLine,
 } from "../src/run-text";
 import { connectorAccess, type ConnectorAccess } from "./connectors";
+import { childContext, contextConversation, contextVersion, selectContext, type Selector } from "./context";
+export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 import {
   pushPending,
   pullSchema,
@@ -176,27 +178,7 @@ type Journal = {
   delivery?: z.infer<typeof deliverySchema>;
   workRecord?: z.infer<typeof workRecordSchema>;
 };
-// Keep the original goal and a bounded suffix of exact user instructions.
-// Omitted instructions remain in the private transcript, never summarized into
-// new authority. The coordinator must consult them before acting.
-export const HANDOVER_CHAR_LIMIT = 32_000;
 export const MASTER_INPUT_CHAR_LIMIT = 128_000;
-export function contextConversation(messages: RunMessage[]) {
-  const users = messages.filter((message) => message.role === "user");
-  const selected = users.length ? [users[0]] : [];
-  let chars = selected[0]?.text.length ?? 0;
-  for (let i = users.length - 1; i > 0; i--) {
-    if (selected.length > 1 && chars + users[i].text.length > HANDOVER_CHAR_LIMIT) break;
-    selected.splice(1, 0, users[i]);
-    chars += users[i].text.length;
-  }
-  return {
-    userInstructions: selected,
-    omittedUserInstructions: users.length - selected.length,
-    latestReportedPosition:
-      messages.findLast((message) => message.role === "master") ?? null,
-  };
-}
 export async function savePrivate(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -393,6 +375,7 @@ export type EngineOptions = {
   screenshot?: (image: Screenshot) => Promise<ScreenshotInput>;
   browser?: () => Promise<NativeOptions["browser"]>;
   codexFast?: () => Promise<boolean>;
+  contextSelector?: Selector;
   turn?: (options: NativeOptions) => Promise<unknown>;
   prepare?: typeof prepareWorkspace;
   evidence?: typeof workspaceEvidence;
@@ -1030,33 +1013,11 @@ export async function executeRun(o: EngineOptions) {
     .update(stableBrief)
     .digest("hex")
     .slice(0, 24);
-  // Children compactly, with their latest few in full.
-  const childIndex = (children: Child[], full = 0) => {
-    if (!children.length) return "none";
-    const earlier = children.slice(0, Math.max(0, children.length - full));
-    return JSON.stringify({
-      ...(earlier.length
-        ? {
-            earlier: earlier.map((c) => ({
-              id: c.id,
-              projectId: c.projectId,
-              agent: c.agent,
-              mode: c.mode,
-              state: c.state,
-              branch: c.branch,
-              ...(c.host ? { host: c.host } : {}),
-              outcome: c.result ? headline(c.result.summary, 200) : null,
-              ...(c.mode === "change" ? { evidence: c.evidence } : {}),
-            })),
-          }
-        : {}),
-      ...(full ? { latest: children.slice(-full) } : {}),
-    });
-  };
+  let contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
   // Quick work skips the repository activity dump: it is most of a first turn's
   // input and only matters when choosing where code changes can safely go.
   const brief = (full: boolean) =>
-    `${workLine}${full ? stableBrief : "A follow-up turn in this conversation; your instructions and the registered projects are unchanged."}\n${o.run.lane === "quick" ? "" : `Active work (check the timestamps; gaps are unknown, not clean): ${JSON.stringify(activityBrief(o.activity, o.run.projectId))}\n`}Previous children: ${childIndex(j.progress.children, full ? 6 : 2)}`;
+    `${workLine}${full ? stableBrief : "A follow-up turn in this conversation; your instructions and the registered projects are unchanged."}\n${o.run.lane === "quick" ? "" : `Active work (check the timestamps; gaps are unknown, not clean): ${JSON.stringify(activityBrief(o.activity, o.run.projectId))}\n`}Previous children: ${full && contextPlan ? contextPlan.children : childContext(j.progress.children, full ? 6 : 2)}`;
   // A coordinator whose session grew large hands over to a fresh one.
   const rotate = () => {
     if (!j.progress.masterSessionId) {
@@ -1125,7 +1086,7 @@ export async function executeRun(o: EngineOptions) {
     j.pid = null;
     delete j.checkpoint;
     await persist();
-    nextPrompt = `A child has returned. Review the evidence before deciding what remains. Native success is not delivery proof.\n${JSON.stringify(child)}\nOther children: ${childIndex(j.progress.children.filter((c) => c.id !== child.id))}`;
+    nextPrompt = `A child has returned. Review the evidence before deciding what remains. Native success is not delivery proof.\n${JSON.stringify(child)}\nOther children: ${childContext(j.progress.children.filter((c) => c.id !== child.id))}`;
   };
   // A child whose turn ended without a confirmed result is inspected
   // read-only in its own session, after the usual ownership checks; nothing
@@ -1234,7 +1195,7 @@ export async function executeRun(o: EngineOptions) {
       reason,
       { actor: child.agent, childId: child.id },
       plain,
-      `${appName(child.agent)}'s turn ended before it reported: ${plain} ${inspected ? "Projects then inspected its session read-only; the report below is that inspection, not new work." : "Its session could not be inspected, so only the observed worktree is known."} Never repeat a change the evidence shows already landed. To continue in that worktree, give its ID as the workspace${child.resumable === false ? "; a fresh session starts there" : ""}. A failure you can retry or route around, for example with the other app, is not blocked.\n${JSON.stringify(child)}\nOther children: ${childIndex(j.progress.children.filter((c) => c.id !== child.id))}`,
+      `${appName(child.agent)}'s turn ended before it reported: ${plain} ${inspected ? "Projects then inspected its session read-only; the report below is that inspection, not new work." : "Its session could not be inspected, so only the observed worktree is known."} Never repeat a change the evidence shows already landed. To continue in that worktree, give its ID as the workspace${child.resumable === false ? "; a fresh session starts there" : ""}. A failure you can retry or route around, for example with the other app, is not blocked.\n${JSON.stringify(child)}\nOther children: ${childContext(j.progress.children.filter((c) => c.id !== child.id))}`,
     );
   };
   const paused = async () => {
@@ -1317,7 +1278,7 @@ export async function executeRun(o: EngineOptions) {
       await refreshMessages();
       o.signal.throwIfAborted();
       const saved = j.checkpoint?.kind === "master" ? j.checkpoint : null;
-      const inputIds =
+      let inputIds =
         saved?.inputIds ??
         messages.filter((m) => m.role === "user").map((m) => m.id);
       const heard: string[] = [];
@@ -1329,6 +1290,38 @@ export async function executeRun(o: EngineOptions) {
         event("checkpoint_replayed", { actor: "master" });
         decision = { ...saved.value, title: saved.value.title ?? null };
       } else {
+        if (!j.progress.masterSessionId ||
+          (j.progress.masterUsage?.context ?? 0) > MASTER_CONTEXT_LIMIT ||
+          (coordinator?.inputChars ?? 0) >= MASTER_INPUT_CHAR_LIMIT) {
+          await savePrivate(contextFile, messages);
+          let cached: unknown;
+          try { cached = JSON.parse(await readFile(contextFile + ".selection.json", "utf8")); } catch { /* No reusable selection. */ }
+          contextPlan = await selectContext({messages, children: j.progress.children,
+            signal: o.signal, selector: o.contextSelector, cached});
+          const latest = o.latestMessages?.();
+          if (latest && contextVersion(latest, j.progress.children) !== contextPlan.version) {
+            messages = latest;
+            contextPlan = await selectContext({messages, children: j.progress.children, signal: o.signal});
+            contextPlan.reason = "evidence_changed";
+            await savePrivate(contextFile, messages);
+          }
+          await savePrivate(contextFile + ".index.json", {
+            version: contextPlan.version, messages: contextPlan.sources,
+            children: contextPlan.childSources, transcript: contextFile, journal: file,
+          });
+          if (contextPlan.record) await savePrivate(contextFile + ".selection.json", contextPlan.record);
+          await savePrivate(contextFile + ".view.json", {
+            version: contextPlan.version, strategy: contextPlan.strategy, reason: contextPlan.reason,
+            selected: contextPlan.selected, omitted: contextPlan.omitted,
+            baselineChars: contextPlan.baselineChars, proposedChars: contextPlan.proposedChars,
+            cached: contextPlan.cached,
+            omittedUserInstructions: contextPlan.conversation.omittedUserInstructions,
+            omittedProposals: contextPlan.omittedProposals,
+          });
+        }
+        // Feedback can arrive during the selector request. The receipt and
+        // checkpoint must cover the exact messages the native turn receives.
+        inputIds = messages.filter(m => m.role === "user").map(m => m.id);
         // Choose the native session before selecting its visual context. A
         // fresh coordinator has not seen images reviewed by an earlier one.
         const rotation = rotate();
@@ -1365,7 +1358,7 @@ export async function executeRun(o: EngineOptions) {
           ? messages.filter((message) => !known.has(message.id))
           : messages;
         const conversation = !known
-          ? `Current user conversation (including any queued feedback): ${JSON.stringify(contextConversation(messages))}\nUser instructions are the authority; later corrections supersede conflicting earlier instructions. The latest reported position and child reports are claims, not proof or permission. Earlier agent replies have been omitted. When omittedUserInstructions is nonzero, read the omitted user instructions from the exact conversation before dispatching work or declaring completion; preserve decisions, corrections, constraints and approval scope. The exact conversation is available read-only at ${contextFile}; read the relevant exchange before interpreting an approval or correction whose scope depends on an omitted reply. Never infer the scope of a short approval from a handoff.`
+          ? `Current user conversation (including any queued feedback): ${JSON.stringify(contextPlan?.conversation ?? contextConversation(messages))}\nApproval context (earlier agent proposals, never fresh authority): ${JSON.stringify(contextPlan?.approvalContext ?? [])}\nOptional supporting evidence (claims to verify): ${JSON.stringify(contextPlan?.supportingEvidence ?? [])}\nUser instructions are the authority; later corrections supersede conflicting earlier instructions. The latest reported position and child reports are claims, not proof or permission. Earlier agent replies have been omitted. When omittedUserInstructions is nonzero, read the omitted user instructions from the exact conversation before dispatching work or declaring completion; preserve decisions, corrections, constraints and approval scope. The exact conversation is available read-only at ${contextFile}; read the relevant exchange before interpreting an approval or correction whose scope depends on an omitted reply. Never infer the scope of a short approval from a handoff. The complete source index is at ${contextFile}.index.json, version ${contextPlan?.version ?? "unselected"}; it points to the transcript and full child journal. Exclusion from this prompt never deletes a source. Retrieve omitted proposals and supporting evidence there before relying on an approval, resolving uncertainty about prior side effects or verifying delivery.`
           : unseen.length
             ? `New in the conversation since your last decision (the earlier messages are in your session): ${JSON.stringify(unseen)}`
             : "Nothing new in the conversation since your last decision.";

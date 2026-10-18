@@ -26,6 +26,7 @@ import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
 import { readDocument } from "./documents";
 import { documentJobSchema } from "../src/document-model";
+import { contextConfigSchema } from "./context";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
 
 const absolute = z.string().refine(path.isAbsolute);
@@ -44,6 +45,9 @@ const schema = configSchema
     // runner-token file beside this config, else RUNNER_TOKEN from the
     // machine's Doppler config.
     tokenFile: absolute.optional(),
+    // The selector reads JEV_API_KEY only in this executor's memory. Native
+    // agents and the collector never receive it. Off until explicitly enabled.
+    context: contextConfigSchema.default({mode: "off"}),
     // Local MCP servers Claude helpers may use on this machine, and tools to
     // hide from them as Claude permission rules (mcp__server__tool).
     helpers: z
@@ -338,6 +342,7 @@ async function executeClaim(o: {
       latestMessages: () => messages,
       report,
       codexFast: async () => { await heartbeat(); return codexFast; },
+      contextSelector: {mode: config.context.mode, key: () => machineSecret(config, "JEV_API_KEY")},
       browser,
       screenshot: async (image) => {
         const result = await post("/api/runner/screenshot", {

@@ -36,6 +36,7 @@ import {
 import { continuesSession, git, liveChanges, prepareWorkspace, privateOrigin, pruneSaved, saveWorkspace, savedRef, savedRuns, SESSION_CONTEXT_LIMIT, UnsavedWorkspace, workspaceEvidence } from "../runner/workspaces";
 import { claudeRules, codexConfig, parseMcpList } from "../runner/connectors";
 import { runPool } from "../runner/pool";
+import { JEV_MODEL } from "../runner/context";
 import {
   childResultSchema,
   masterDecisionSchema,
@@ -3243,4 +3244,50 @@ test("more than forty user messages keep bounded durable receipts and resume wit
     assert.match(calls.at(-1)!.prompt, /LATEST REQUEST/);
     assert.doesNotMatch(calls.at(-1)!.prompt, /Request 0|Reply 0/);
   } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("fresh coordinators consume selected evidence once; changed feedback discards stale selections", async () => {
+  for (const changeFeedback of [false, true]) {
+    const dir = await fixture(), o = engineOptions(dir);
+    let calls = 0, turns = 0, last: Progress | undefined;
+    let messages = structuredClone(o.run.messages);
+    const children: Child[] = Array.from({length: 3}, (_, i) => ({
+      id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "read", cwd: dir,
+      branch: "owned", sessionId: randomUUID(), state: "completed", evidence: ["Synthetic observed version"],
+      result: {...result, summary: `Report ${i}: ${"historical detail ".repeat(30)} END-${i}`},
+    }));
+    o.latestMessages = () => messages;
+    o.contextSelector = {mode: "select", key: async () => "test-key", fetch: async (_url, init) => {
+      calls++;
+      const request = JSON.parse(init!.body as string);
+      if (changeFeedback) messages.push({id: randomUUID(), role: "user", text: "NEW CORRECTION: keep the draft pending", at: Date.now()});
+      return Response.json({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(request.questions).map(k => [k, {type: "noul", noul: 0}])), usage: {input_tokens: 100, output_tokens: 20}});
+    }};
+    o.report = async p => { last = structuredClone(p); };
+    o.turn = async opts => {
+      turns++;
+      assert.equal(opts.readOnly, true);
+      await opts.onSession(opts.sessionId ?? "context-master");
+      assert.match(opts.prompt, /complete source index/);
+      if (changeFeedback) assert.match(opts.prompt, /NEW CORRECTION/);
+      else assert.doesNotMatch(opts.prompt, /END-0/);
+      return complete;
+    };
+    try {
+      await savePrivate(path.join(dir, "runs", o.run.id + ".json"), {generation: 1, phase: "ready", pid: null, progress: {...progress(), masterSessionId: null, children}});
+      await executeRun(o);
+      const view = JSON.parse(await readFile(path.join(dir, "runs", o.run.id + ".context.json.view.json"), "utf8"));
+      assert.equal(view.reason, changeFeedback ? "evidence_changed" : "selected");
+      assert.equal(calls, 1);
+      assert.equal(last!.children.length, 3, "selection cannot replay or remove executions");
+      if (changeFeedback) assert.ok(last!.reviewedMessageIds!.includes(messages.at(-1)!.id));
+      assert.ok(((await stat(path.join(dir, "runs", o.run.id + ".context.json.index.json"))).mode & 0o077) === 0);
+      const followup = {id: randomUUID(), role: "user" as const, text: "Continue within scope", at: Date.now()};
+      o.latestMessages = () => [...messages, followup];
+      o.turn = async opts => { turns++; assert.equal(opts.sessionId, "context-master"); return complete; };
+      await executeRun({...o, run: {...o.run, generation: 2, progress: last!, messages: [...messages, followup]}});
+      assert.equal(calls, 1, "ordinary continuation does not call Jev");
+      assert.equal(turns, 2);
+    } finally { await rm(dir, {recursive: true, force: true}); }
+  }
 });

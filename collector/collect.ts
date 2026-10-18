@@ -29,6 +29,8 @@ export function subprocessEnv() {
     "CLOUDFLARE_API_TOKEN",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "JEV_API_KEY",
+    "TYPESAFE_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
   ])
     delete env[key];
