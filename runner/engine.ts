@@ -56,6 +56,7 @@ import {
 } from "../src/run-text";
 import { connectorAccess, type ConnectorAccess } from "./connectors";
 import { childContext, contextConversation, contextVersion, selectContext, type Selector } from "./context";
+import { reviewProjectContext } from "./project-context";
 export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 import {
   pushPending,
@@ -1014,6 +1015,30 @@ export async function executeRun(o: EngineOptions) {
     .digest("hex")
     .slice(0, 24);
   let contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
+  const projectBrief = async (project: ProjectDirectory | undefined, cwd: string, task: string, actor: string, agent: Agent, session?: string | null) => {
+    if (!project || !o.contextSelector || o.contextSelector.mode === "off") return {prompt: "", remember: async (_session?: string | null) => {}};
+    const instructions = messages.filter(m => m.role === "user").map(m => m.text);
+    const key = createHash("sha256").update(JSON.stringify([project.id, cwd, task, instructions])).digest("hex");
+    const cacheFile = path.join(o.stateDir, "project-context", key + ".json");
+    let cached: unknown;
+    try { cached = JSON.parse(await readFile(cacheFile, "utf8")); } catch { /* No reusable review. */ }
+    const review = await reviewProjectContext({project, cwd, task,
+      instructions,
+      workIssue: o.workRepo && o.run.workIssue ? {repo: o.workRepo, number: o.run.workIssue} : undefined,
+      signal: o.signal, selector: o.contextSelector, cached});
+    if (review.record) await savePrivate(cacheFile, review.record);
+    const receipt = path.join(o.stateDir, "runs", `${o.run.id}.project-context.${actor}.json`);
+    const version = createHash("sha256").update(JSON.stringify([key, review.prompt])).digest("hex");
+    const sessionFile = (id: string) => path.join(o.stateDir, "project-context", "sessions",
+      createHash("sha256").update(`${agent}:${id}`).digest("hex") + ".json");
+    let reusedInSession = false;
+    if (session) try {reusedInSession = JSON.parse(await readFile(sessionFile(session), "utf8")).version === version;} catch { /* New native context. */ }
+    await savePrivate(receipt, {...review.receipt, at: Date.now(), record: review.record, reusedInSession});
+    return {prompt: `${reusedInSession ? `Project context is unchanged from the view already supplied in this native session.` : review.prompt}\nPrivate project context receipt: ${receipt}\n`,
+      remember: async (id?: string | null) => {if (id) await savePrivate(sessionFile(id), {version});}};
+  };
+  const instructionsVersion = () => createHash("sha256").update(JSON.stringify(messages
+    .filter(m => m.role === "user").map(m => [m.id, m.text, m.screenshots]))).digest("hex");
   // Quick work skips the repository activity dump: it is most of a first turn's
   // input and only matters when choosing where code changes can safely go.
   const brief = (full: boolean) =>
@@ -1111,6 +1136,9 @@ export async function executeRun(o: EngineOptions) {
     );
     child.evidence = await evidence(child.cwd);
     const browser = await o.browser?.();
+    const projectContext = await projectBrief(project, child.cwd,
+      "Read-only recovery inspection of the same native session and existing workspace; verify uncertain prior effects without replaying them.",
+      child.id, child.agent, child.sessionId);
     child.state = "unknown";
     j.phase = "child";
     await publish(
@@ -1126,7 +1154,7 @@ export async function executeRun(o: EngineOptions) {
         readOnly: true,
         signal: o.signal,
         schema: outputSchema(childResultSchema),
-        prompt: `${workLine}RECOVERY INSPECTION ONLY. Your previous turn ended without a confirmed receipt. Review this same session's history and inspect the existing workspace read-only. Do not repeat mutating commands, execute changes, publish, close issues, or retry external side effects. You may repeat read-only checks to establish current evidence. Return the required structured result describing what is demonstrably complete and what remains uncertain. A historical success claim is not current verification. Use outcome blocked for any unresolved work or uncertainty; the master will decide what happens next. Observed workspace: ${JSON.stringify(child.evidence)}`,
+        prompt: `${workLine}${projectContext.prompt}\nRECOVERY INSPECTION ONLY. Your previous turn ended without a confirmed receipt. Review this same session's history and inspect the existing workspace read-only. Do not repeat mutating commands, execute changes, publish, close issues, or retry external side effects. You may repeat read-only checks to establish current evidence. Return the required structured result describing what is demonstrably complete and what remains uncertain. A historical success claim is not current verification. Use outcome blocked for any unresolved work or uncertainty; the master will decide what happens next. Observed workspace: ${JSON.stringify(child.evidence)}`,
         onSession: async (id) => {
           if (id !== child.sessionId)
             throw Error("Recovery must use the existing native session.");
@@ -1145,6 +1173,7 @@ export async function executeRun(o: EngineOptions) {
         };
       },
     );
+    await projectContext.remember(child.sessionId);
     await acceptChild(child, childResultSchema.parse(recovered));
   };
   // A helper turn failed while this runner watched it. Its process has
@@ -1342,6 +1371,16 @@ export async function executeRun(o: EngineOptions) {
           messages.filter((message) => !known?.has(message.id)),
         );
         const browser = await o.browser?.();
+        const reviewVersion = instructionsVersion();
+        const selectedProject = o.projects.find(p => p.id === (o.run.projectId ?? j.progress.children.at(-1)?.projectId));
+        const projectContext = await projectBrief(selectedProject, selectedProject?.cwd ?? o.masterCwd,
+          "Coordinate the current user request in this project; verify returned work before deciding what remains.", "master", masterAgent, j.progress.masterSessionId);
+        if (projectContext.prompt) {await refreshMessages(); messages = o.latestMessages?.() ?? messages;}
+        if (reviewVersion !== instructionsVersion()) {
+          nextPrompt = "New user feedback arrived during project context selection. Review it before deciding; no native turn or helper action started for that review.";
+          continue;
+        }
+        if (await paused()) return;
         j.phase = "master";
         j.pid = null;
         await persist();
@@ -1365,7 +1404,7 @@ export async function executeRun(o: EngineOptions) {
         const shown = messages.map((message) => message.id);
         await savePrivate(contextFile, messages);
         const progressLine = `This turn so far: ${Math.round((performance.now() - begun) / 60_000)} minutes, ${dispatched} helper turns.${tokenLine(j.progress) ? ` ${tokenLine(j.progress)}.` : ""}`;
-        const prompt = `${nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`;
+        const prompt = `${nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${projectContext.prompt}\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`;
         try {
           const raw = await runTurn(
             {
@@ -1398,6 +1437,7 @@ export async function executeRun(o: EngineOptions) {
             { exclude: inputIds, received: heard },
           );
           decision = masterDecisionSchema.parse(raw);
+          await projectContext.remember(j.progress.masterSessionId);
           if (j.progress.masterSessionId) {
             coordinator = {
               sessionId: j.progress.masterSessionId,
@@ -1636,12 +1676,35 @@ export async function executeRun(o: EngineOptions) {
         mode: task.mode,
         ...place,
         host: here,
-        state: "running",
+        // A prepared workspace has no native execution yet. The durable
+        // checkpoint reuses it if an update arrives during project review.
+        state: "cancelled",
         result: null,
         evidence: [],
       };
       if (decision.resetContext) resetCoordinator();
       j.progress.children.push(child);
+      j.phase = "ready";
+      j.checkpoint = {kind: "master", value: {...decision, task: {...task, workspace: child.id}}, inputIds: reviewedIds};
+      await persist();
+      let projectContext: Awaited<ReturnType<typeof projectBrief>>;
+      try {
+        projectContext = await projectBrief(project, child.cwd, `${task.mode}: ${task.prompt}`, child.id, child.agent, child.sessionId);
+        if (projectContext.prompt) {await refreshMessages(); messages = o.latestMessages?.() ?? messages;}
+      } catch (error) {
+        delete j.checkpoint;
+        await persist();
+        throw error;
+      }
+      if (messages.some(m => m.role === "user" && !reviewedIds.includes(m.id))) {
+        delete j.checkpoint;
+        await persist();
+        nextPrompt = `New feedback arrived during project context selection. No helper turn started. The prepared workspace is retained as child ${child.id}; reconsider the current request before reusing it.`;
+        continue;
+      }
+      if (await paused()) return;
+      delete j.checkpoint;
+      child.state = "running";
       dispatched++;
       j.phase = "child";
       await persist();
@@ -1656,7 +1719,7 @@ export async function executeRun(o: EngineOptions) {
               sessionId: child.sessionId ?? undefined,
               screenshots: images,
               browser,
-              prompt: `${workLine}${workContext ? `${workContext}\n\n` : ""}${handoff}${restored ? `This worktree was recreated on this machine from another machine's copy on GitHub${savedAt ? `, which holds its work as of ${new Date(savedAt).toISOString()}` : ""}; its uncommitted changes are present. Work after that may be missing and the earlier session's memory is not available: review git status, the branch and its pull request before continuing, and never repeat a change that already landed.\n\n` : ""}${task.prompt}\n\n${messages.some((message) => message.screenshots?.length) ? "The attached screenshots are user-provided evidence, ordered by these messages: " + JSON.stringify(messages.filter((message) => message.screenshots?.length)) + "\n\n" : ""}Work only on this assigned task. Read repository instructions and the relevant plan. Preserve other sessions. Use this worktree for changes. Carry this assigned outcome through its authorized checks, required review, merge, deployment, visual verification and required machine sync before returning; a draft-only request ends at the verified saved draft. Keep working through routine fixable failures and delivery stages in this same session. Report actual gate evidence and remaining steps; a green open PR or a native turn ending is not release completion. Stop for missing authority or a failed gate you cannot fix within scope. Return the required structured result with actual check evidence and GitHub links; no secrets or raw tool output.\n\n${connectorInstructions}${task.agent === "codex" ? `\n\n${codexBrowserInstructions}` : ""}`,
+              prompt: `${workLine}${workContext ? `${workContext}\n\n` : ""}${projectContext.prompt}\n${handoff}${restored ? `This worktree was recreated on this machine from another machine's copy on GitHub${savedAt ? `, which holds its work as of ${new Date(savedAt).toISOString()}` : ""}; its uncommitted changes are present. Work after that may be missing and the earlier session's memory is not available: review git status, the branch and its pull request before continuing, and never repeat a change that already landed.\n\n` : ""}${task.prompt}\n\n${messages.some((message) => message.screenshots?.length) ? "The attached screenshots are user-provided evidence, ordered by these messages: " + JSON.stringify(messages.filter((message) => message.screenshots?.length)) + "\n\n" : ""}Work only on this assigned task. Read repository instructions and the relevant plan. Preserve other sessions. Use this worktree for changes. Carry this assigned outcome through its authorized checks, required review, merge, deployment, visual verification and required machine sync before returning; a draft-only request ends at the verified saved draft. Keep working through routine fixable failures and delivery stages in this same session. Report actual gate evidence and remaining steps; a green open PR or a native turn ending is not release completion. Stop for missing authority or a failed gate you cannot fix within scope. Return the required structured result with actual check evidence and GitHub links; no secrets or raw tool output.\n\n${connectorInstructions}${task.agent === "codex" ? `\n\n${codexBrowserInstructions}` : ""}`,
               schema: outputSchema(childResultSchema),
               readOnly: task.mode === "read",
               connectors: await (o.connectors ?? connectorAccess)(),
@@ -1712,6 +1775,7 @@ export async function executeRun(o: EngineOptions) {
         await recoverChild(child, project, error);
         continue;
       }
+      await projectContext.remember(child.sessionId);
       await acceptChild(child, value);
       await publish(
         "running",

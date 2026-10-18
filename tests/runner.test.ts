@@ -3291,3 +3291,125 @@ test("fresh coordinators consume selected evidence once; changed feedback discar
     } finally { await rm(dir, {recursive: true, force: true}); }
   }
 });
+
+async function projectReviewFixture() {
+  const dir = await fixture();
+  await writeFile(path.join(dir, ".gitignore"), ".state/\n");
+  await writeFile(path.join(dir, "AGENTS.md"), "Draft only; publishing requires approval.\n");
+  await writeFile(path.join(dir, "README.md"), "The invoice fixture uses the pipe delimiter.\n");
+  await git(dir, ["init", "-b", "main"]);
+  await git(dir, ["add", "."]);
+  await git(dir, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "Fixture"]);
+  const o = engineOptions(dir);
+  o.stateDir = path.join(dir, ".state");
+  return {dir, o};
+}
+function projectResponder(callback?: (body: any) => void): NonNullable<EngineOptions["contextSelector"]> {
+  return {mode: "select", key: async () => "fixture-key", fetch: async (_url, init) => {
+    const body = JSON.parse(init!.body as string); callback?.(body);
+    return Response.json({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(body.questions).map(k => [k, {type: "noul", noul: 0.9}])), usage: {input_tokens: 100, output_tokens: 10}});
+  }};
+}
+
+test("project review precedes the first native turn and a resumed unchanged view is not reinserted", async () => {
+  const {dir, o} = await projectReviewFixture();
+  let apiCalls = 0, natives = 0, last: Progress | undefined;
+  o.contextSelector = projectResponder(() => {apiCalls++;});
+  o.report = async p => {last = structuredClone(p);};
+  o.turn = async opts => {
+    assert.equal(apiCalls, 1, "project Jev call happened before any native execution");
+    natives++;
+    if (natives === 1) {assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/); assert.match(opts.prompt, /Draft only/);}
+    else {assert.match(opts.prompt, /Project context is unchanged/); assert.doesNotMatch(opts.prompt, /invoice fixture uses the pipe delimiter/);}
+    await opts.onSession("project-master"); return complete;
+  };
+  try {
+    await executeRun(o);
+    const receiptFile = path.join(o.stateDir, "runs", o.run.id + ".project-context.master.json");
+    const receipt = JSON.parse(await readFile(receiptFile, "utf8"));
+    assert.equal(receipt.strategy, "select");
+    assert.equal(receipt.cached, false);
+    assert.equal((await stat(receiptFile)).mode & 0o077, 0);
+    await executeRun({...o, run: {...o.run, generation: 2, progress: last!}});
+    const cached = JSON.parse(await readFile(receiptFile, "utf8"));
+    assert.equal(cached.cached, true); assert.equal(cached.reusedInSession, true);
+    assert.equal(natives, 2); assert.equal(apiCalls, 1);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
+
+test("feedback during child project review prevents the stale dispatch while retaining its workspace", async () => {
+  const {dir, o} = await projectReviewFixture();
+  const messages = structuredClone(o.run.messages);
+  let masters = 0, helpers = 0, changed = false;
+  o.latestMessages = () => messages;
+  o.contextSelector = projectResponder(body => {
+    if (body.state.task?.startsWith("read:") && !changed) {
+      changed = true; messages.push({id: randomUUID(), role: "user", at: Date.now(), text: "CORRECTION: stop the inspection and report only."});
+    }
+  });
+  o.turn = async opts => {
+    await opts.onSession(opts.sessionId ?? randomUUID());
+    if (opts.agent === "claude") {helpers++; return result;}
+    masters++;
+    if (masters === 1) return dispatch();
+    assert.match(opts.prompt, /CORRECTION/); assert.match(opts.prompt, /No helper turn started/);
+    return complete;
+  };
+  try {
+    await executeRun(o);
+    const journal = JSON.parse(await readFile(path.join(o.stateDir, "runs", o.run.id + ".json"), "utf8"));
+    assert.equal(helpers, 0); assert.equal(masters, 2);
+    assert.equal(journal.progress.children.length, 1);
+    assert.equal(journal.progress.children[0].cwd, dir);
+    assert.equal(journal.progress.children[0].state, "cancelled");
+    assert.equal(journal.progress.children[0].result, null);
+    assert.equal(journal.checkpoint, undefined);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
+
+test("an update during child review resumes its prepared workspace once without repeating the coordinator", async () => {
+  const {dir, o} = await projectReviewFixture(), drain = new AbortController();
+  let masters = 0, helpers = 0, prepares = 0;
+  const workspaces: string[] = [];
+  o.drain = drain.signal;
+  o.prepare = async (_project, task) => {prepares++; workspaces.push(task.workspace); return {cwd: dir, branch: "main", sessionId: null};};
+  o.contextSelector = projectResponder(body => {if (body.state.task?.startsWith("read:")) drain.abort("drain");});
+  o.turn = async opts => {
+    await opts.onSession(opts.sessionId ?? randomUUID());
+    if (opts.agent === "claude") {helpers++; assert.match(opts.prompt, /pipe delimiter/); return result;}
+    masters++; return masters === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    const file = path.join(o.stateDir, "runs", o.run.id + ".json");
+    const paused = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(paused.phase, "ready"); assert.equal(paused.checkpoint.kind, "master");
+    assert.equal(paused.checkpoint.value.task.workspace, paused.progress.children[0].id);
+    assert.equal(helpers, 0); assert.equal(masters, 1);
+    o.drain = new AbortController().signal;
+    await executeRun(o);
+    assert.equal(prepares, 2); assert.deepEqual(workspaces, ["new", paused.progress.children[0].id]);
+    assert.equal(helpers, 1); assert.equal(masters, 2);
+    assert.equal(JSON.parse(await readFile(file, "utf8")).progress.state, "completed");
+  } finally {await rm(dir, {recursive: true, force: true});}
+});
+
+test("cancelling during child review starts no native helper and leaves no replay checkpoint", async () => {
+  const {dir, o} = await projectReviewFixture(), control = new AbortController();
+  let helpers = 0;
+  o.signal = control.signal;
+  o.contextSelector = projectResponder(body => {if (body.state.task?.startsWith("read:")) control.abort("cancelled");});
+  o.turn = async opts => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "claude") {helpers++; return result;}
+    return dispatch();
+  };
+  try {
+    await executeRun(o);
+    const journal = JSON.parse(await readFile(path.join(o.stateDir, "runs", o.run.id + ".json"), "utf8"));
+    assert.equal(helpers, 0); assert.equal(journal.phase, "finished");
+    assert.equal(journal.progress.state, "cancelled"); assert.equal(journal.checkpoint, undefined);
+    assert.equal(journal.progress.children[0].state, "cancelled");
+    assert.equal(journal.progress.children[0].result, null);
+  } finally {await rm(dir, {recursive: true, force: true});}
+});

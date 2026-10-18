@@ -108,6 +108,137 @@ export function contextVersion(messages: RunMessage[], children: Child[]) {
     .digest("hex");
 }
 
+// Both conversation handovers and project reviews use the same bounded,
+// priced transport and strict answer coverage. Retrieval and policy stay in code.
+export async function judgeContext(o: {
+  version: string;
+  body: string;
+  count: number;
+  signal: AbortSignal;
+  selector: Selector;
+  cached?: unknown;
+  trigger: "coordinator-rotation" | "project-turn";
+}): Promise<
+  | { record: SelectionRecord; cached: boolean; reason: null }
+  | { record: undefined; cached: false; reason: string }
+> {
+  const failed = (reason: string) => ({
+    record: undefined,
+    cached: false as const,
+    reason,
+  });
+  if (o.selector.mode === "off") return failed("disabled");
+  if (Buffer.byteLength(o.body) > REQUEST_BYTES)
+    return failed("request_too_large");
+  let record: SelectionRecord;
+  const cached = selectionRecordSchema.safeParse(o.cached);
+  if (
+    cached.success &&
+    cached.data.version === o.version &&
+    Array.from({ length: o.count }).every(
+      (_, i) => cached.data.probabilities[`keep_${i}`] !== undefined,
+    ) &&
+    Object.keys(cached.data.probabilities).length === o.count
+  )
+    record = cached.data;
+  else {
+    const started = performance.now();
+    let key: string;
+    try {
+      key = await o.selector.key();
+    } catch {
+      o.signal.throwIfAborted();
+      return failed("key_unavailable");
+    }
+    if (!key.trim()) return failed("key_unavailable");
+    try {
+      const gateway = o.selector.gateway;
+      const endpoint = gateway
+        ? `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`
+        : "https://api.typesafe.ai/v1/systemone";
+      const response = await (o.selector.fetch ?? fetch)(endpoint, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          ...(gateway
+            ? {
+                "cf-aig-collect-log": "true",
+                "cf-aig-collect-log-payload": "false",
+                "cf-aig-skip-cache": "true",
+                "cf-aig-max-attempts": "1",
+                "cf-aig-no-wholesale": "true",
+                "cf-aig-custom-cost": JSON.stringify({
+                  per_token_in: JEV_INPUT_COST_PER_TOKEN,
+                  per_token_out: 0,
+                }),
+                "cf-aig-metadata": JSON.stringify({
+                  process: "context-selection",
+                  trigger: o.trigger,
+                  worker: "projects-runner",
+                  model: JEV_MODEL,
+                }),
+              }
+            : {}),
+        },
+        body: o.body,
+        signal: AbortSignal.any([o.signal, AbortSignal.timeout(8000)]),
+      });
+      if (!response.ok)
+        return failed(`http_${response.status === 429 ? "limited" : "error"}`);
+      const parsed = z
+        .object({
+          model: z.literal(JEV_MODEL),
+          answers: z.record(
+            z.string(),
+            z.object({
+              type: z.literal("noul"),
+              noul: z.number().min(0).max(1),
+            }),
+          ),
+          usage: z.object({
+            input_tokens: z.number().int().nonnegative(),
+            output_tokens: z.number().int().nonnegative(),
+          }),
+        })
+        .parse(await response.json());
+      if (
+        Object.keys(parsed.answers).length !== o.count ||
+        !Array.from({ length: o.count }).every(
+          (_, i) => parsed.answers[`keep_${i}`],
+        )
+      )
+        return failed("invalid_response");
+      record = {
+        version: o.version,
+        policy: POLICY,
+        model: JEV_MODEL,
+        probabilities: Object.fromEntries(
+          Object.entries(parsed.answers).map(([k, v]) => [k, v.noul]),
+        ),
+        inputTokens: parsed.usage.input_tokens,
+        outputTokens: parsed.usage.output_tokens,
+        durationMs: performance.now() - started,
+        transport: gateway ? "gateway" : "direct",
+      };
+    } catch (error) {
+      o.signal.throwIfAborted();
+      return failed(
+        error instanceof z.ZodError || error instanceof SyntaxError
+          ? "invalid_response"
+          : "service_failed",
+      );
+    }
+  }
+  o.signal.throwIfAborted();
+  return {
+    record,
+    cached: record === (cached.success ? cached.data : null),
+    reason: null,
+  };
+}
+
 export async function selectContext(o: {
   messages: RunMessage[];
   children: Child[];
@@ -217,109 +348,17 @@ export async function selectContext(o: {
     },
     questions,
   });
-  if (Buffer.byteLength(body) > REQUEST_BYTES)
-    return fallback("request_too_large");
-  let record: SelectionRecord;
-  const cached = selectionRecordSchema.safeParse(o.cached);
-  if (
-    cached.success &&
-    cached.data.version === version &&
-    candidates.every(
-      (_, i) => cached.data.probabilities[`keep_${i}`] !== undefined,
-    ) &&
-    Object.keys(cached.data.probabilities).length === candidates.length
-  )
-    record = cached.data;
-  else {
-    const started = performance.now();
-    let key: string;
-    try {
-      key = await o.selector.key();
-    } catch {
-      o.signal.throwIfAborted();
-      return fallback("key_unavailable");
-    }
-    if (!key.trim()) return fallback("key_unavailable");
-    try {
-      const gateway = o.selector.gateway;
-      const endpoint = gateway
-        ? `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`
-        : "https://api.typesafe.ai/v1/systemone";
-      const response = await (o.selector.fetch ?? fetch)(endpoint, {
-        method: "POST",
-        redirect: "error",
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "Content-Type": "application/json",
-          ...(gateway
-            ? {
-                "cf-aig-collect-log": "true",
-                "cf-aig-collect-log-payload": "false",
-                "cf-aig-skip-cache": "true",
-                "cf-aig-max-attempts": "1",
-                "cf-aig-no-wholesale": "true",
-                "cf-aig-custom-cost": JSON.stringify({
-                  per_token_in: JEV_INPUT_COST_PER_TOKEN,
-                  per_token_out: 0,
-                }),
-                "cf-aig-metadata": JSON.stringify({
-                  process: "context-selection",
-                  trigger: "coordinator-rotation",
-                  worker: "projects-runner",
-                  model: JEV_MODEL,
-                }),
-              }
-            : {}),
-        },
-        body,
-        signal: AbortSignal.any([o.signal, AbortSignal.timeout(8000)]),
-      });
-      if (!response.ok)
-        return fallback(
-          `http_${response.status === 429 ? "limited" : "error"}`,
-        );
-      const parsed = z
-        .object({
-          model: z.literal(JEV_MODEL),
-          answers: z.record(
-            z.string(),
-            z.object({
-              type: z.literal("noul"),
-              noul: z.number().min(0).max(1),
-            }),
-          ),
-          usage: z.object({
-            input_tokens: z.number().int().nonnegative(),
-            output_tokens: z.number().int().nonnegative(),
-          }),
-        })
-        .parse(await response.json());
-      if (
-        Object.keys(parsed.answers).length !== candidates.length ||
-        !candidates.every((_, i) => parsed.answers[`keep_${i}`])
-      )
-        return fallback("invalid_response");
-      record = {
-        version,
-        policy: POLICY,
-        model: JEV_MODEL,
-        probabilities: Object.fromEntries(
-          Object.entries(parsed.answers).map(([k, v]) => [k, v.noul]),
-        ),
-        inputTokens: parsed.usage.input_tokens,
-        outputTokens: parsed.usage.output_tokens,
-        durationMs: performance.now() - started,
-        transport: gateway ? "gateway" : "direct",
-      };
-    } catch (error) {
-      o.signal.throwIfAborted();
-      return fallback(
-        error instanceof z.ZodError || error instanceof SyntaxError
-          ? "invalid_response"
-          : "service_failed",
-      );
-    }
-  }
+  const judgment = await judgeContext({
+    version,
+    body,
+    count: candidates.length,
+    signal: o.signal,
+    selector: o.selector,
+    cached: o.cached,
+    trigger: "coordinator-rotation",
+  });
+  if (!judgment.record) return fallback(judgment.reason);
+  const { record } = judgment;
   o.signal.throwIfAborted();
   // Uncertainty stays. Only an empirically checked, very low relevance
   // probability can exclude optional detail; no threshold grants authority.
@@ -344,7 +383,7 @@ export async function selectContext(o: {
   const selected = {
     ...base,
     record,
-    cached: record === (cached.success ? cached.data : null),
+    cached: judgment.cached,
     reason: "selected",
     strategy: o.selector.mode,
     selected: kept.length,

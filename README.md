@@ -176,8 +176,10 @@ existing files and are read when relevant. This applies the task-scoped
 handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
 without discarding saved work, approval boundaries or recovery journals.
 
-Optional Jev context selection runs locally in the coordinator's executor,
-only when a fresh coordinator is about to start. Set `context.mode` in the
+Optional Jev context selection runs locally in the conversation's executor.
+Conversation-history selection runs when a fresh coordinator is about to start;
+project-context review is checked before each coordinator, helper and recovery
+turn. Set `context.mode` in the
 machine config to `select`, `shadow` (evaluate without changing the prompt),
 or `off` (the default). The executor reads `JEV_API_KEY` from that machine's
 Doppler config through its existing read-only service token; no key enters
@@ -188,7 +190,8 @@ For AI Gateway cost reporting, set `context.gateway` to an object with the
 deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.
 In that account, configure the custom provider with slug `typesafe` and base
 URL `https://api.typesafe.ai`. Requests use its native `/v1/systemone` path,
-tagged as process `context-selection`, trigger `coordinator-rotation` and worker
+tagged as process `context-selection`, trigger `coordinator-rotation` for
+conversation handovers or `project-turn` for project reviews, and worker
 `projects-runner`. The pinned model's input-token rate is supplied as custom
 pricing; output tokens are free. Payload logging, gateway caching and retries
 are disabled for these requests; usage/cost metadata remains available. The
@@ -196,7 +199,9 @@ existing provider key stays in executor memory. If the gateway fails, context
 falls back to the deterministic view without retrying the provider directly.
 With no gateway configured, requests use the direct TypeSafe endpoint.
 
-`runner/context.ts` owns both the deterministic view and the selector. Code
+`runner/context.ts` owns the deterministic conversation view and shared Jev
+transport. `runner/project-context.ts` owns bounded repository retrieval and
+project relevance selection. Code
 retains exact original/recent user instructions, their preceding proposal
 exchanges when they fit, the latest position and every child's execution and
 evidence index. Jev judges only optional older agent replies and completed
@@ -205,6 +210,35 @@ children keep their full reports. A probability never grants permission or
 proves delivery. Omitted instructions/proposals still require reading the
 exact source before acting; the selector never deletes a source or alters
 native session history.
+
+A selected project's first turn has project evidence even with no conversation
+history. Before a coordinator turn the runner reviews the selected project (or
+the most recent child's project); a conversation choosing its first project
+still routes from the registry. Before a helper starts, review uses its actual
+prepared workspace. Recovery inspection remains read-only.
+
+The project shortlist includes the canonical plan, README, up to twelve task
+ranked text source files, and the linked work issue's current-position excerpt
+when available. File retrieval uses request terms and paths before Jev judges
+exact excerpts. Repository instructions are retained separately and never
+semantic removal candidates. The review records full-file hashes, character
+offsets and missing/partial coverage; it is a bounded relevance selection, not
+a code review or proof of completion. Agents still read applicable instructions
+and the complete relevant plan. Hidden/ignored credential files, secret-named
+paths, recognizable credential content, links outside the project and binary content are not supplied. Oversized
+or unavailable sources remain explicit gaps.
+
+Before each turn, task, instruction, model/policy, workspace, HEAD, inventory,
+dirty state, considered file contents and work-issue hashes validate the private
+cached judgment. A changed input causes a new gateway review. An unchanged view
+already supplied to the same native session is referenced without reinserting
+its text; fresh native sessions receive the view. Project receipts live beside
+the private run journal; cache records live under its state directory's
+`project-context/`. They never enter portfolio snapshots or telemetry. Feedback
+or changed sources arriving during review discard the stale selection/action;
+a prepared workspace survives an update without replaying work. Service or
+source failures retain deterministic evidence and retrieval pointers.
+Cancellation during review starts no native turn.
 
 Each handover keeps a private full source index and selection receipt beside
 the conversation's context file. They record a source-version hash, exact model,
