@@ -351,10 +351,6 @@ export class Conversation extends DurableObject<Env> {
       throw Error(
         "Wait for its machine to confirm it stopped before sending a follow-up.",
       );
-    if (run.messages.filter((m) => m.role === "user").length >= 20)
-      throw Error(
-        "Start a new conversation; this one has reached its turn limit.",
-      );
     // Done is a visibility choice. A new message brings the conversation back
     // to the current list rather than steering work nobody can see.
     const reopened = !!run.archivedAt;

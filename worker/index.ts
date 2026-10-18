@@ -876,6 +876,12 @@ export async function handle(
           { status: 503 },
         );
       const input = messageInputSchema.parse(await readJson(request, MESSAGE_REQUEST_BYTES));
+      // A lost-response retry must still return its saved receipt at the rate limit.
+      const existing = await store.getRun(id);
+      if (existing?.messages.some(message => message.id === input.requestId))
+        return Response.json({ run: existing });
+      if (!(await store.rate(`feedback:${caller}`, 120, 3600_000)))
+        return Response.json({ error: "Too many follow-ups. Try again later." }, { status: 429 });
       if (input.screenshots?.length && !(await runtimeStatus(store, env, id)).ready)
         return updatingScreenshots();
       return Response.json({ run: await trace("conversation.feedback", { runId: id }, () => store.messageRun(id, input)) });

@@ -176,11 +176,23 @@ type Journal = {
   delivery?: z.infer<typeof deliverySchema>;
   workRecord?: z.infer<typeof workRecordSchema>;
 };
-// User messages retain the actual authority and corrections. Earlier agent
-// replies are not a second source of facts; keep only the latest as a claim.
+// Keep the original goal and a bounded suffix of exact user instructions.
+// Omitted instructions remain in the private transcript, never summarized into
+// new authority. The coordinator must consult them before acting.
+export const HANDOVER_CHAR_LIMIT = 32_000;
+export const MASTER_INPUT_CHAR_LIMIT = 128_000;
 export function contextConversation(messages: RunMessage[]) {
+  const users = messages.filter((message) => message.role === "user");
+  const selected = users.length ? [users[0]] : [];
+  let chars = selected[0]?.text.length ?? 0;
+  for (let i = users.length - 1; i > 0; i--) {
+    if (selected.length > 1 && chars + users[i].text.length > HANDOVER_CHAR_LIMIT) break;
+    selected.splice(1, 0, users[i]);
+    chars += users[i].text.length;
+  }
   return {
-    userInstructions: messages.filter((message) => message.role === "user"),
+    userInstructions: selected,
+    omittedUserInstructions: users.length - selected.length,
     latestReportedPosition:
       messages.findLast((message) => message.role === "master") ?? null,
   };
@@ -647,6 +659,7 @@ export async function executeRun(o: EngineOptions) {
       const fresh = (o.latestMessages?.() ?? []).filter(
         (m) =>
           m.role === "user" &&
+          m.delivery !== "reviewed" && m.delivery !== "steered" &&
           !steer.exclude.includes(m.id) &&
           !j.progress.reviewedMessageIds?.includes(m.id) &&
           !j.progress.steeredMessageIds?.includes(m.id),
@@ -987,7 +1000,7 @@ export async function executeRun(o: EngineOptions) {
   // Exact exchanges stay available locally when an approval or correction
   // refers to an omitted reply. They are never copied to portfolio snapshots.
   const contextFile = path.join(o.stateDir, "runs", `${o.run.id}.context.json`);
-  let coordinator: { sessionId: string; seen: string[]; brief: string } | null =
+  let coordinator: { sessionId: string; seen: string[]; brief: string; inputChars: number; through: number } | null =
     null;
   try {
     coordinator = z
@@ -995,6 +1008,8 @@ export async function executeRun(o: EngineOptions) {
         sessionId: z.string(),
         seen: z.array(z.string()).max(400),
         brief: z.string(),
+        inputChars: z.number().nonnegative().default(0),
+        through: z.number().int().nonnegative().default(0),
       })
       .parse(JSON.parse(await readFile(coordinatorFile, "utf8")));
   } catch {
@@ -1006,6 +1021,7 @@ export async function executeRun(o: EngineOptions) {
   const resetCoordinator = () => {
     j.progress.masterSessionId = null;
     coordinator = null;
+    if (j.progress.masterUsage) j.progress.masterUsage.context = 0;
   };
   const workContext =
     o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue);
@@ -1043,13 +1059,15 @@ export async function executeRun(o: EngineOptions) {
     `${workLine}${full ? stableBrief : "A follow-up turn in this conversation; your instructions and the registered projects are unchanged."}\n${o.run.lane === "quick" ? "" : `Active work (check the timestamps; gaps are unknown, not clean): ${JSON.stringify(activityBrief(o.activity, o.run.projectId))}\n`}Previous children: ${childIndex(j.progress.children, full ? 6 : 2)}`;
   // A coordinator whose session grew large hands over to a fresh one.
   const rotate = () => {
-    if (
-      !j.progress.masterSessionId ||
-      (j.progress.masterUsage?.context ?? 0) <= MASTER_CONTEXT_LIMIT
-    )
+    if (!j.progress.masterSessionId) {
+      resetCoordinator();
       return "";
-    j.progress.masterSessionId = null;
-    coordinator = null;
+    }
+    if (
+      (j.progress.masterUsage?.context ?? 0) <= MASTER_CONTEXT_LIMIT &&
+      (coordinator?.inputChars ?? 0) < MASTER_INPUT_CHAR_LIMIT
+    ) return "";
+    resetCoordinator();
     return `${brief(true)}\n\nYou are a new coordinator for this conversation: the previous coordinator's session grew large, so Projects started a fresh one. The conversation and the children above are your history.\n\n`;
   };
   let nextPrompt = j.progress.masterSessionId
@@ -1313,12 +1331,18 @@ export async function executeRun(o: EngineOptions) {
       } else {
         // Choose the native session before selecting its visual context. A
         // fresh coordinator has not seen images reviewed by an earlier one.
+        const rotation = rotate();
         const handover =
-          rotate() ||
+          rotation ||
           (!j.progress.masterSessionId
             ? `${brief(true)}\n\nYou are a fresh coordinator. Re-establish the current task from the user instructions and verify reported facts against the supplied evidence.\n\n`
             : "");
-        const known = resumed() ? new Set(coordinator!.seen) : null;
+        // Messages are append-only. Keep a prefix cursor plus any feedback
+        // heard during the native turn, rather than a lifetime array of IDs.
+        const known = resumed() ? new Set([
+          ...messages.slice(0, coordinator!.through).map(m => m.id),
+          ...coordinator!.seen,
+        ]) : null;
         // Image transport has no native side effects. Fail before recording a
         // native turn, so a fetch outage cannot become an ambiguous execution.
         const images = await screenshots(
@@ -1330,7 +1354,9 @@ export async function executeRun(o: EngineOptions) {
         await persist();
         await publish(
           "running",
-          step === 0
+          rotation
+            ? "Continuing with earlier context."
+            : step === 0
             ? "Master is reviewing the request."
             : "Master is reviewing the returned result.",
         );
@@ -1339,13 +1365,14 @@ export async function executeRun(o: EngineOptions) {
           ? messages.filter((message) => !known.has(message.id))
           : messages;
         const conversation = !known
-          ? `Current user conversation (including any queued feedback): ${JSON.stringify(contextConversation(messages))}\nUser instructions are the authority; later corrections supersede conflicting earlier instructions. The latest reported position and child reports are claims, not proof or permission. Earlier agent replies have been omitted. The exact conversation is available read-only at ${contextFile}; read the relevant exchange before interpreting an approval or correction whose scope depends on an omitted reply. Never infer the scope of a short approval from a handoff.`
+          ? `Current user conversation (including any queued feedback): ${JSON.stringify(contextConversation(messages))}\nUser instructions are the authority; later corrections supersede conflicting earlier instructions. The latest reported position and child reports are claims, not proof or permission. Earlier agent replies have been omitted. When omittedUserInstructions is nonzero, read the omitted user instructions from the exact conversation before dispatching work or declaring completion; preserve decisions, corrections, constraints and approval scope. The exact conversation is available read-only at ${contextFile}; read the relevant exchange before interpreting an approval or correction whose scope depends on an omitted reply. Never infer the scope of a short approval from a handoff.`
           : unseen.length
             ? `New in the conversation since your last decision (the earlier messages are in your session): ${JSON.stringify(unseen)}`
             : "Nothing new in the conversation since your last decision.";
         const shown = messages.map((message) => message.id);
         await savePrivate(contextFile, messages);
         const progressLine = `This turn so far: ${Math.round((performance.now() - begun) / 60_000)} minutes, ${dispatched} helper turns.${tokenLine(j.progress) ? ` ${tokenLine(j.progress)}.` : ""}`;
+        const prompt = `${nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`;
         try {
           const raw = await runTurn(
             {
@@ -1353,7 +1380,7 @@ export async function executeRun(o: EngineOptions) {
               cwd: o.masterCwd,
               screenshots: images,
               browser,
-              prompt: `${nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`,
+              prompt,
               sessionId: j.progress.masterSessionId ?? undefined,
               schema: outputSchema(masterDecisionSchema),
               readOnly: true,
@@ -1381,8 +1408,11 @@ export async function executeRun(o: EngineOptions) {
           if (j.progress.masterSessionId) {
             coordinator = {
               sessionId: j.progress.masterSessionId,
-              seen: [...new Set([...shown, ...heard])].slice(-400),
+              seen: [...new Set(heard)].slice(-400),
+              through: shown.length,
               brief: briefHash,
+              inputChars: (coordinator?.inputChars ?? 0) + prompt.length +
+                (o.latestMessages?.() ?? messages).filter((m) => heard.includes(m.id)).reduce((n, m) => n + m.text.length, 0),
             };
             await savePrivate(coordinatorFile, coordinator).catch(() => {});
           }
@@ -1452,7 +1482,14 @@ export async function executeRun(o: EngineOptions) {
       j.pid = null;
       delete j.checkpoint;
       await persist();
-      j.progress.reviewedMessageIds = reviewedIds;
+      // Each receipt stays bounded; message delivery is durable on the Worker.
+      // A large backlog is acknowledged in batches before publishing completion.
+      const pendingReceipts = reviewedIds.filter(id =>
+        messages.find(m => m.id === id)?.delivery !== "reviewed");
+      for (let i = 0; i < pendingReceipts.length; i += 40) {
+        j.progress.reviewedMessageIds = pendingReceipts.slice(i, i + 40);
+        await publish("running", j.progress.summary);
+      }
       event("master_decision", { actor: "master", action: decision.action });
       await refreshMessages();
       if (

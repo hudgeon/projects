@@ -229,8 +229,15 @@ delivery.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
   prompts, so it never waits behind long work.
 - **Bounds**: ten active standard and thirty active quick conversations, 30 and
-  60 starts an hour, 20 user turns and 24 children per conversation, 12 master
-  decisions a turn.
+  60 starts an hour, 120 follow-ups per owner per hour, 24 children per conversation, 12 master
+  decisions a turn. User messages have no lifetime count limit. At a safe native
+  turn boundary the coordinator rotates when reported context exceeds 250,000
+  tokens or recorded prompt input reaches 128,000 characters (including when
+  native usage is unavailable). The chat, machine claim, children and worktrees
+  remain the same. Fresh coordinators receive the original goal, recent exact
+  instructions and latest reported position; omitted instructions and approval
+  exchanges must be read from the owner-only full local transcript before work
+  continues. Context rotation resets session context, not cumulative usage.
 
 Permissions: a Codex change child uses a named permission profile for its
 worktree and Git directories, with network access and no interactive

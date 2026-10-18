@@ -29,6 +29,8 @@ import {
   outputSchema,
   HANDBACK_LIMIT,
   MASTER_CONTEXT_LIMIT,
+  MASTER_INPUT_CHAR_LIMIT,
+  HANDOVER_CHAR_LIMIT,
   type EngineOptions,
 } from "../runner/engine";
 import { continuesSession, git, liveChanges, prepareWorkspace, privateOrigin, pruneSaved, saveWorkspace, savedRef, savedRuns, SESSION_CONTEXT_LIMIT, UnsavedWorkspace, workspaceEvidence } from "../runner/workspaces";
@@ -3176,4 +3178,69 @@ test("every Codex coordinator and helper reads speed at the turn boundary", asyn
     assert.deepEqual(events.map((e:{codexFast:boolean})=>e.codexFast),[true,true,false]);
     assert.ok(events.every((e:{model:string;tokenUsageObserved:boolean})=>e.model==="model-a"&&e.tokenUsageObserved));
   } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test("long conversation handovers bound prompt history and retain exact authority on disk", () => {
+  const messages: RunMessage[] = Array.from({length: 80}, (_, i) => ({id: randomUUID(), role: "user", text: `${i}: ${"instruction ".repeat(700)}`, at: i}));
+  const handoff = contextConversation(messages);
+  assert.equal(handoff.userInstructions[0], messages[0]);
+  assert.equal(handoff.userInstructions.at(-1), messages.at(-1));
+  assert.ok(handoff.omittedUserInstructions > 0);
+  assert.ok(handoff.userInstructions.reduce((n, m) => n + m.text.length, 0) <= HANDOVER_CHAR_LIMIT);
+});
+
+test("prompt budget rotates across follow-ups without usage reports or replaying children", async () => {
+  const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [], reports: Progress[] = [];
+  const master = randomUUID();
+  let masters = 0;
+  o.report = async p => { reports.push(structuredClone(p)); };
+  o.turn = async opts => {
+    calls.push(opts);
+    await opts.onSession(opts.sessionId ?? (masters ? randomUUID() : master));
+    if (opts.agent === "claude") return result;
+    if (!masters) opts.onUsage?.({fresh: 100, cached: 10, output: 5, context: 0});
+    return ++masters === 1 ? dispatch() : complete;
+  };
+  try {
+    await executeRun(o);
+    const file = path.join(dir, "runs", `${o.run.id}.coordinator.json`);
+    const coordinator = JSON.parse(await readFile(file, "utf8"));
+    await savePrivate(file, {...coordinator, inputChars: MASTER_INPUT_CHAR_LIMIT});
+    const before = reports.at(-1)!;
+    const followUp: RunMessage = {id: randomUUID(), role: "user", text: "Continue within the existing draft-only approval.", at: Date.now()};
+    await executeRun({...o, run: {...o.run, generation: 2, progress: before, messages: [...o.run.messages, followUp]}});
+    const next = calls.filter(c => c.agent === "codex").at(-1)!;
+    assert.equal(next.sessionId, undefined);
+    assert.match(next.prompt, /Continue within the existing draft-only approval/);
+    assert.match(next.prompt, /Observed fixture HEAD/);
+    assert.equal(calls.filter(c => c.agent === "claude").length, 1);
+    assert.ok(reports.some(p => p.summary === "Continuing with earlier context."));
+    assert.equal(reports.at(-1)!.children[0].sessionId, before.children[0].sessionId);
+    assert.equal(reports.at(-1)!.masterUsage!.fresh, 100, "cumulative usage survives rotation");
+    assert.ok(JSON.parse(await readFile(file, "utf8")).inputChars < MASTER_INPUT_CHAR_LIMIT);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("more than forty user messages keep bounded durable receipts and resume without old prompt replay", async () => {
+  const dir = await fixture(), o = engineOptions(dir), reports: Progress[] = [], calls: NativeOptions[] = [];
+  o.run.messages = Array.from({length: 65}, (_, i) => ({id: randomUUID(), role: "user", text: `Request ${i}`, at: i}));
+  o.report = async p => { reports.push(structuredClone(p)); };
+  o.turn = async opts => { calls.push(opts); await opts.onSession(opts.sessionId ?? randomUUID()); return complete; };
+  try {
+    await executeRun(o);
+    assert.ok(reports.every(p => (p.reviewedMessageIds?.length ?? 0) <= 40));
+    const acknowledged = new Set(reports.flatMap(p => p.reviewedMessageIds ?? []));
+    assert.equal(acknowledged.size, 65);
+    assert.equal(reports.at(-1)!.state, "completed");
+    // The persisted coordinator must remember beyond its old 400-ID window.
+    const file = path.join(dir, "runs", `${o.run.id}.coordinator.json`);
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    const extras: RunMessage[] = Array.from({length: 450}, (_, i) => ({id: randomUUID(), role: "master", text: `Reply ${i}`, at: i}));
+    await savePrivate(file, {...saved, seen: [], through: o.run.messages.length + extras.length});
+    assert.ok(saved.seen.length <= 400);
+    const fresh: RunMessage = {id: randomUUID(), role: "user", text: "LATEST REQUEST", at: Date.now()};
+    await executeRun({...o, run: {...o.run, generation: 2, progress: reports.at(-1)!, messages: [...o.run.messages.map(m => ({...m, delivery: "reviewed" as const})), ...extras, fresh]}});
+    assert.match(calls.at(-1)!.prompt, /LATEST REQUEST/);
+    assert.doesNotMatch(calls.at(-1)!.prompt, /Request 0|Reply 0/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });

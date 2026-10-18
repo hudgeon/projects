@@ -1735,20 +1735,39 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
     };
     const run = { id: input.requestId };
     await db.createRun(input);
+    // Long chats retain their identity and claim; retries never add messages.
+    const historical: string[] = [];
+    for (let i = 0; i < 45; i++) {
+      const message = {requestId: randomUUID(), text: `Earlier instruction ${i}`};
+      historical.push(message.requestId);
+      await db.messageRun(run.id, message);
+      await db.messageRun(run.id, message);
+    }
+    assert.equal((await db.getRun(run.id))!.messages.length, 46);
     const queued = { requestId: randomUUID(), text: "Check the README too" };
     await db.messageRun(run.id, queued);
     assert.equal((await db.claimRun(owner, [], undefined, "studio"))?.generation, 1);
+    const feedbackSalt = token(), cookie = token(), email = "owner@example.com";
+    await db.issue(email, feedbackSalt, digest(`${feedbackSalt}:123456`));
+    await db.verify(email, "123456", digest(cookie));
+    const repeat = (requestId = input.requestId) => mf.dispatchFetch(`https://example.com/api/runs/${run.id}/message`, {
+      method: "POST", headers: {Origin: "https://example.com", Cookie: `__Host-projects=${cookie}`, "Content-Type": "application/json"},
+      body: JSON.stringify({requestId, text: input.text}),
+    });
+    assert.equal((await repeat()).status, 200, "an accepted request retry stays idempotent");
     const feedback = { requestId: randomUUID(), text: "Explain the result" };
     await db.messageRun(run.id, feedback);
     await db.messageRun(run.id, feedback);
-    assert.equal((await db.getRun(run.id))?.messages.length, 3);
+    assert.equal((await db.getRun(run.id))?.messages.length, 48);
     assert.equal((await db.getRun(run.id))?.generation, 1);
     assert.equal(
       (await db.heartbeatRun(owner, run.id, 1, "studio"))?.messages.at(-1)?.delivery,
       "queued",
     );
+    // A bounded receipt can acknowledge a large backlog in batches.
+    assert.equal(await db.reportRun(owner, run.id, 1, {seq: 1, state: "running", summary: "Reviewing", masterSessionId: null, children: [], reviewedMessageIds: historical.slice(0, 40)}, "studio"), true);
     const receipt: Progress = {
-      seq: 1,
+      seq: 2,
       state: "running",
       summary: "Reviewing feedback",
       masterSessionId: randomUUID(),
@@ -1757,6 +1776,7 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
         input.requestId,
         queued.requestId,
         feedback.requestId,
+        ...historical.slice(40),
       ],
     };
     assert.equal(await db.reportRun(other, run.id, 1, receipt, "studio"), false);
@@ -1769,7 +1789,7 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
     await db.messageRun(run.id, late);
     const final = {
       ...receipt,
-      seq: 2,
+      seq: 3,
       state: "completed" as const,
       summary: "Completed the original request",
     };
@@ -1833,6 +1853,9 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
     );
     assert.equal(rejected.status, 409);
     assert.match(await rejected.text(), /current turn to stop/);
+    for (let i = 0; i < 120; i++) await db.rate(`feedback:${email}`, 120, 3600_000);
+    assert.equal((await repeat(randomUUID())).status, 429, "feedback throughput is bounded independently of chat length");
+    assert.equal((await repeat()).status, 200, "lost-response retries bypass throttling without executing again");
     await db.reportRun(owner, cancelled.id, 1, {
       ...final,
       reviewedMessageIds: [],
