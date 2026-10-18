@@ -342,7 +342,11 @@ async function executeClaim(o: {
       latestMessages: () => messages,
       report,
       codexFast: async () => { await heartbeat(); return codexFast; },
-      contextSelector: {mode: config.context.mode, key: () => machineSecret(config, "JEV_API_KEY")},
+      contextSelector: {
+        mode: config.context.mode,
+        gateway: config.context.gateway,
+        key: () => machineSecret(config, "JEV_API_KEY"),
+      },
       browser,
       screenshot: async (image) => {
         const result = await post("/api/runner/screenshot", {

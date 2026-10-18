@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 import {
   childContext,
   contextConversation,
+  contextConfigSchema,
   contextVersion,
   JEV_MODEL,
+  JEV_INPUT_COST_PER_TOKEN,
   selectContext,
 } from "../runner/context";
 import type { Child, RunMessage } from "../src/run-model";
@@ -60,6 +62,102 @@ const responder =
     };
     return Response.json(change ? change(body) : body);
   };
+
+test("gateway selection reports priced usage without logging or caching conversation payloads", async () => {
+  const gateway = { accountId: "a".repeat(32), gatewayId: "example-gateway" };
+  const parsed = contextConfigSchema.parse({ mode: "select", gateway });
+  let calls = 0;
+  const view = await selectContext({
+    ...fixture(),
+    selector: {
+      mode: parsed.mode,
+      gateway: parsed.gateway,
+      key: async () => "test-key",
+      fetch: async (url, init) => {
+        calls++;
+        assert.equal(
+          url,
+          `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`,
+        );
+        assert.equal(init?.redirect, "error");
+        const headers = new Headers(init?.headers);
+        assert.equal(headers.get("authorization"), "Bearer test-key");
+        assert.equal(headers.get("cf-aig-collect-log"), "true");
+        assert.equal(headers.get("cf-aig-collect-log-payload"), "false");
+        assert.equal(headers.get("cf-aig-skip-cache"), "true");
+        assert.equal(headers.get("cf-aig-max-attempts"), "1");
+        assert.equal(headers.get("cf-aig-no-wholesale"), "true");
+        assert.deepEqual(JSON.parse(headers.get("cf-aig-custom-cost")!), {
+          per_token_in: JEV_INPUT_COST_PER_TOKEN,
+          per_token_out: 0,
+        });
+        assert.equal(JEV_INPUT_COST_PER_TOKEN, 0.000000042);
+        assert.deepEqual(JSON.parse(headers.get("cf-aig-metadata")!), {
+          process: "context-selection",
+          trigger: "coordinator-rotation",
+          worker: "projects-runner",
+          model: JEV_MODEL,
+        });
+        return responder(Array(7).fill(0.5))(url, init);
+      },
+    },
+  });
+  assert.equal(view.strategy, "select");
+  assert.equal(view.record?.transport, "gateway");
+  assert.equal(view.record?.inputTokens, 100);
+  assert.equal(calls, 1);
+});
+
+test("a failed gateway retains baseline context without an unreported direct retry", async () => {
+  const f = fixture();
+  const calls: string[] = [];
+  const view = await selectContext({
+    ...f,
+    selector: {
+      mode: "select",
+      gateway: { accountId: "b".repeat(32), gatewayId: "example-gateway" },
+      key: async () => "test-key",
+      fetch: async (url) => {
+        calls.push(String(url));
+        return new Response(null, { status: 503 });
+      },
+    },
+  });
+  assert.equal(view.strategy, "baseline");
+  assert.equal(view.reason, "http_error");
+  assert.equal(view.children, childContext(f.children, 6));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].startsWith("https://gateway.ai.cloudflare.com/"));
+});
+
+test("gateway configuration accepts identifiers rather than arbitrary upstream URLs", () => {
+  assert.equal(contextConfigSchema.parse({}).mode, "off");
+  assert.equal(
+    contextConfigSchema.parse({
+      gateway: {
+        accountId: "a".repeat(32),
+        gatewayId: "_example-gateway",
+      },
+    }).gateway?.gatewayId,
+    "_example-gateway",
+  );
+  for (const gateway of [
+    { accountId: "https://example.com", gatewayId: "example-gateway" },
+    { accountId: "a".repeat(32), gatewayId: "../other" },
+    { accountId: "a".repeat(32), gatewayId: "trailing-" },
+    { accountId: "a".repeat(32), gatewayId: "two--hyphens" },
+    { accountId: "a".repeat(32), gatewayId: "a".repeat(65) },
+    {
+      accountId: "a".repeat(32),
+      gatewayId: "example-gateway",
+      endpoint: "https://example.com",
+    },
+  ])
+    assert.equal(
+      contextConfigSchema.safeParse({ mode: "select", gateway }).success,
+      false,
+    );
+});
 
 test("semantic selection cannot remove instructions, approval proposals, current or uncertain execution", async () => {
   const f = fixture();

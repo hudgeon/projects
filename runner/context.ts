@@ -7,12 +7,26 @@ import type { Child, RunMessage } from "../src/run-model";
 export const HANDOVER_CHAR_LIMIT = 32_000;
 export const EVIDENCE_CHAR_LIMIT = 24_000;
 export const JEV_MODEL = "jev-1.14.0";
+// https://docs.typesafe.ai/models: Jev 1.14 costs $0.042/M input tokens;
+// output tokens are free. Keep this rate beside the pinned model.
+export const JEV_INPUT_COST_PER_TOKEN = 0.000000042;
 export const OMIT_BELOW = 0.05;
 const REQUEST_BYTES = 28_000; // Also bounds worst-case tokens below 32k.
 const POLICY = 1;
 export const contextConfigSchema = z
   .object({
     mode: z.enum(["off", "shadow", "select"]).default("off"),
+    gateway: z
+      .object({
+        accountId: z.string().regex(/^[a-f0-9]{32}$/),
+        gatewayId: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
@@ -78,12 +92,14 @@ export const selectionRecordSchema = z
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     durationMs: z.number().nonnegative(),
+    transport: z.enum(["direct", "gateway"]).optional(),
   })
   .strict();
 export type SelectionRecord = z.infer<typeof selectionRecordSchema>;
 export type Selector = {
   mode: ContextConfig["mode"];
   key: () => Promise<string>;
+  gateway?: ContextConfig["gateway"];
   fetch?: typeof fetch;
 };
 export function contextVersion(messages: RunMessage[], children: Child[]) {
@@ -225,19 +241,39 @@ export async function selectContext(o: {
     }
     if (!key.trim()) return fallback("key_unavailable");
     try {
-      const response = await (o.selector.fetch ?? fetch)(
-        "https://api.typesafe.ai/v1/systemone",
-        {
-          method: "POST",
-          redirect: "error",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
-          body,
-          signal: AbortSignal.any([o.signal, AbortSignal.timeout(8000)]),
+      const gateway = o.selector.gateway;
+      const endpoint = gateway
+        ? `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`
+        : "https://api.typesafe.ai/v1/systemone";
+      const response = await (o.selector.fetch ?? fetch)(endpoint, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          ...(gateway
+            ? {
+                "cf-aig-collect-log": "true",
+                "cf-aig-collect-log-payload": "false",
+                "cf-aig-skip-cache": "true",
+                "cf-aig-max-attempts": "1",
+                "cf-aig-no-wholesale": "true",
+                "cf-aig-custom-cost": JSON.stringify({
+                  per_token_in: JEV_INPUT_COST_PER_TOKEN,
+                  per_token_out: 0,
+                }),
+                "cf-aig-metadata": JSON.stringify({
+                  process: "context-selection",
+                  trigger: "coordinator-rotation",
+                  worker: "projects-runner",
+                  model: JEV_MODEL,
+                }),
+              }
+            : {}),
         },
-      );
+        body,
+        signal: AbortSignal.any([o.signal, AbortSignal.timeout(8000)]),
+      });
       if (!response.ok)
         return fallback(
           `http_${response.status === 429 ? "limited" : "error"}`,
@@ -273,6 +309,7 @@ export async function selectContext(o: {
         inputTokens: parsed.usage.input_tokens,
         outputTokens: parsed.usage.output_tokens,
         durationMs: performance.now() - started,
+        transport: gateway ? "gateway" : "direct",
       };
     } catch (error) {
       o.signal.throwIfAborted();

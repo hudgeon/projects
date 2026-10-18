@@ -1,11 +1,16 @@
-// Synthetic/public data only. Run with a scoped key in API_KEY or
-// TYPESAFE_API_KEY; no secrets, prompts or service error bodies are printed.
+// Synthetic/public data only. Use a scoped evaluation key, or --machine for
+// its existing scoped key and gateway. No secrets, prompts or errors are printed.
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import { machineSecret } from "../collector/collect";
 import {
   childContext,
   contextConversation,
+  contextConfigSchema,
   JEV_MODEL,
+  JEV_INPUT_COST_PER_TOKEN,
   OMIT_BELOW,
   selectContext,
 } from "../runner/context";
@@ -61,11 +66,22 @@ const cases = [
       "The old unrelated recipe list sorted ingredients by their color.",
   },
 ];
-const key = process.env.API_KEY ?? process.env.TYPESAFE_API_KEY;
+const machine = process.argv.includes("--machine")
+  ? JSON.parse(
+      await readFile(
+        path.join(homedir(), ".local/share/project-overview/machine.json"),
+        "utf8",
+      ),
+    )
+  : undefined;
+const context = contextConfigSchema.parse(machine?.context ?? {});
+const key = machine
+  ? await machineSecret(machine, "JEV_API_KEY")
+  : (process.env.API_KEY ?? process.env.TYPESAFE_API_KEY);
 delete process.env.API_KEY;
 delete process.env.TYPESAFE_API_KEY;
 if (!process.argv.includes("--live") || !key)
-  throw Error("Use --live with a scoped evaluation key.");
+  throw Error("Use --live with a scoped evaluation key or --machine.");
 const rows = [];
 for (const c of cases) {
   const messages: RunMessage[] = [
@@ -99,7 +115,11 @@ for (const c of cases) {
     messages,
     children,
     signal: AbortSignal.timeout(15_000),
-    selector: { mode: "select", key: async () => key },
+    selector: {
+      mode: "select",
+      gateway: context.gateway,
+      key: async () => key,
+    },
   });
   const selected = JSON.parse(view.children);
   const full = (selected.retained ?? selected.latest) as Child[];
@@ -125,7 +145,7 @@ for (const c of cases) {
     // Published Jev 1.14 price, checked 2026-10-18: $0.042/M input tokens;
     // output is free. This estimates billed cost, not an invoice readback.
     estimatedCostUsd: view.record
-      ? (view.record.inputTokens * 0.042) / 1_000_000
+      ? view.record.inputTokens * JEV_INPUT_COST_PER_TOKEN
       : null,
   });
 }

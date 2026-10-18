@@ -184,6 +184,18 @@ Doppler config through its existing read-only service token; no key enters
 the Worker, collector, agent environment or repository. Enabling a new
 consumer requires the deployment owner's credential and data-scope approval.
 
+For AI Gateway cost reporting, set `context.gateway` to an object with the
+deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.
+In that account, configure the custom provider with slug `typesafe` and base
+URL `https://api.typesafe.ai`. Requests use its native `/v1/systemone` path,
+tagged as process `context-selection`, trigger `coordinator-rotation` and worker
+`projects-runner`. The pinned model's input-token rate is supplied as custom
+pricing; output tokens are free. Payload logging, gateway caching and retries
+are disabled for these requests; usage/cost metadata remains available. The
+existing provider key stays in executor memory. If the gateway fails, context
+falls back to the deterministic view without retrying the provider directly.
+With no gateway configured, requests use the direct TypeSafe endpoint.
+
 `runner/context.ts` owns both the deterministic view and the selector. Code
 retains exact original/recent user instructions, their preceding proposal
 exchanges when they fit, the latest position and every child's execution and
@@ -196,7 +208,7 @@ native session history.
 
 Each handover keeps a private full source index and selection receipt beside
 the conversation's context file. They record a source-version hash, exact model,
-raw probabilities, usage and latency; changed evidence invalidates cached
+raw probabilities, usage, latency and transport; changed evidence invalidates cached
 judgments. The model is pinned to `jev-1.14.0`; optional detail is omitted only
 at relevance probability at most 0.05, validated on the synthetic evaluation.
 An oversized request is never silently abridged. Missing credentials, invalid
@@ -205,8 +217,9 @@ handover and preserve retrieval. Cancellation still stops the turn.
 
 To repeat the synthetic evaluation, inject the approved evaluation key as
 `API_KEY` or `TYPESAFE_API_KEY` and run
-`npm run context:evaluate -- --live`. It writes `.wip/jev-context-evaluation.json`
-with retained-evidence coverage, character counts, actual API input/output
+`npm run context:evaluate -- --live`. Add `--machine` to use the machine's
+existing key and configured gateway. The command writes
+`.wip/jev-context-evaluation.json` with retained-evidence coverage, character counts, actual API input/output
 tokens and latency, and estimated cost at the documented model rate. These
 measurements do not establish production savings or native-agent accuracy;
 those need ordinary-use measurement. No customer history is used by this script.
