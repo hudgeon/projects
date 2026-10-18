@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { reviewProjectContext } from "../runner/project-context";
 import { QUESTION_BYTES, REQUEST_BYTES } from "../runner/context";
 import { fixture, selector } from "./project-fixtures";
@@ -120,6 +121,61 @@ test("files a brief names lead the shortlist; only its opening steers retrieval"
       "words past the brief's opening do not steer retrieval",
     );
     assert.ok(paths.length >= 20);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("YAML records are candidates; YAML holding an unquoted secret or in a hidden folder never reaches Jev", async () => {
+  const { cwd, options } = await fixture();
+  const value = randomUUID().replaceAll("-", "");
+  await mkdir(path.join(cwd, "policies"));
+  await writeFile(
+    path.join(cwd, "policies/answers.yml"),
+    [
+      "topics:",
+      "  - key: invoice-delimiter",
+      "    question: Which delimiter does the invoice importer keep?",
+      "    answer: The importer keeps the pipe delimiter on every invoice line.",
+      "  - key: invoice-archive",
+      "    answer: Imported invoice files are archived after a week.",
+      "",
+    ].join("\n"),
+  );
+  await writeFile(
+    path.join(cwd, "policies/importer.yml"),
+    `importer:\n  invoice_api_token: ${value}\n`,
+  );
+  await mkdir(path.join(cwd, ".github/workflows"), { recursive: true });
+  await writeFile(
+    path.join(cwd, ".github/workflows/invoices.yml"),
+    "name: Invoice importer delimiter check\n",
+  );
+  let sections: string[] = [];
+  const mock = selector((body) => {
+    assert.ok(!JSON.stringify(body).includes(value));
+    sections = body.state.candidates
+      .filter((c: { path: string }) => c.path.endsWith(".yml"))
+      .map((c: { path: string; section: string }) => `${c.path}: ${c.section}`);
+  });
+  try {
+    const view = await reviewProjectContext({
+      ...options,
+      selector: mock.value,
+    });
+    assert.deepEqual(sections.sort(), [
+      "policies/answers.yml: topics > key: invoice-archive",
+      "policies/answers.yml: topics > key: invoice-delimiter",
+    ]);
+    assert.ok(!view.prompt.includes(value));
+    assert.ok(
+      view.receipt.sources.some(
+        (s) =>
+          s.path === "policies/importer.yml" &&
+          s.status === "credential_like_content",
+      ),
+    );
+    assert.ok(!view.receipt.sources.some((s) => s.path.startsWith(".github")));
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

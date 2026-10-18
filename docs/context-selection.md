@@ -59,10 +59,15 @@ the most recent child's project); a conversation choosing its first project
 still routes from the registry. Before a helper starts, review uses its actual
 prepared workspace. Recovery inspection remains read-only.
 
-Project review splits every eligible text source into natural units: markdown
-sections at headings, code's top-level statements (imports dropped), and the
-linked work issue's body sections and five newest comments. Small neighbours
-merge and long units split at paragraphs, up to 1,200 characters each. BM25
+Project review splits every eligible text source (markdown, code, YAML and
+`package.json`) into natural units: markdown sections at headings, YAML
+records (list items and nested blocks at column 0 or one level beneath a
+top-level key, each with the comments directly above it and labelled by its
+key; other top-level lines start a unit after a blank line, as in code),
+code's top-level statements (imports dropped), and the linked work issue's
+body sections and five newest comments. Small neighbours merge and long units split at
+paragraphs, then lines, up to 1,200 characters each; a YAML value is cut only
+where its line is longer than that. BM25
 ranks the units by the brief's opening 1,000 characters (a brief states its
 subject first; delivery wording follows) and the user's instructions. The work
 issue, the plan and files the brief names lead with up to four units each, and
@@ -76,10 +81,16 @@ failures supply the retrieval order within the same budget. The review records
 full-file hashes, character offsets, retrieval scores and missing/partial
 coverage; it is a bounded relevance selection, not a code review or proof of
 completion. Agents still read applicable instructions and the complete relevant
-plan. People, legal, HR and personnel folders and documents, hidden/ignored
-credential files, secret-named paths, recognizable credential content, links
-outside the project and binary content are not supplied. Oversized or
-unavailable sources remain explicit gaps.
+plan. People, legal, HR and personnel folders, documents and YAML files,
+hidden folders (including `.github`) and ignored files, secret-named paths,
+generated lockfiles, recognizable credential content, links outside the
+project and binary content are not supplied. In YAML, recognizable credentials
+also include unquoted password, secret, token and API, access or private key
+values of 12 or more characters on the key's line or the next
+(interpolations and environment variable names are references), and
+Kubernetes Secret manifests; code is not checked this way because its unquoted
+values are expressions. A credential-like file is excluded in full. Oversized
+or unavailable sources remain explicit gaps.
 
 The 0.5 cutoff was validated on 15 real project turns from two machines,
 replayed at their recorded commits and labelled by hand (October 2026). At

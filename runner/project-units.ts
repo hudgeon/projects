@@ -100,9 +100,12 @@ export function rank(pool: Unit[], words: Map<string, number>) {
   });
 }
 
-// Natural units: markdown sections at headings outside fences, and code's
-// top-level statements, which start at column 0 after a blank or closing
-// line. Small neighbours merge; long units split at paragraphs, then lines.
+// Natural units: markdown sections at headings outside fences; YAML records
+// (list items and nested blocks at column 0 or one level beneath a top-level
+// key, each with the comments directly above it); and code's top-level
+// statements, which start at column 0 after a blank or closing line, as other
+// top-level YAML lines do. Small neighbours merge; long units split at
+// paragraphs, then lines.
 export function units(
   name: string,
   text: string,
@@ -111,11 +114,19 @@ export function units(
   markdown = /\.mdx?$/i.test(name),
   label = "",
 ): Unit[] {
+  const yaml = !markdown && /\.ya?ml$/i.test(name);
   const starts = [{ at: 0, section: label }];
   const headings: string[] = [];
+  // YAML tracks the open top-level key, the indentation of its records (-1
+  // until its first child, Infinity when it holds none) and where the
+  // comments directly above the current line began.
   let at = 0,
     fence = "",
-    previous = "";
+    previous = "",
+    top = "",
+    level = Infinity,
+    comment = -1,
+    depth = 0;
   for (const line of text.split(/(?<=\n)/)) {
     const content = line.trimEnd();
     const marker = markdown
@@ -133,6 +144,39 @@ export function units(
       const section = [label, ...headings].filter(Boolean).join(" > ");
       if (at) starts.push({ at, section });
       else starts[0].section = section;
+    } else if (yaml) {
+      const body = content.trimStart(),
+        indent = content.length - body.length,
+        item = /^-(?:\s|$)/.test(body),
+        entry = item ? null : /^(.+?):(?:\s+(.*))?$/.exec(body),
+        // A key followed only by an anchor, tag or comment opens a block.
+        opens = !!entry && /^(?:[&!]\S*)?\s*(?:#.*)?$/.test(entry[2] ?? "");
+      if (!body || body.startsWith("#")) {
+        if (!body) comment = -1;
+        else if (comment < 0) [comment, depth] = [at, indent];
+        else depth = Math.max(depth, indent);
+        if (body && !indent && at && !previous.trim())
+          starts.push({ at, section: "" });
+      } else {
+        if (!indent && !item)
+          [top, level] = opens ? [entry![1], -1] : ["", Infinity];
+        else if (!indent) level = Infinity;
+        else if (level < 0) level = item || entry ? indent : Infinity;
+        if ((item || opens) && (!indent || indent === level)) {
+          // Named by its key, or a list item by its first `key: value`.
+          const title = item
+            ? /^-\s+([\w.-]+:\s+[^\s|>&!*#].*)/.exec(body)?.[1]
+            : entry![1];
+          const section = [indent || item ? top : "", title?.slice(0, 80)]
+            .filter(Boolean)
+            .join(" > ");
+          const begin = comment >= 0 && depth <= indent ? comment : at;
+          if (starts.at(-1)!.at === begin) starts.at(-1)!.section = section;
+          else starts.push({ at: begin, section });
+        } else if (!indent && at && !previous.trim())
+          starts.push({ at, section: "" });
+        comment = -1;
+      }
     } else if (
       !markdown &&
       at &&
@@ -151,6 +195,7 @@ export function units(
     if (
       !body.trim() ||
       (!markdown &&
+        !yaml &&
         /^\s*(?:import|from)\b/.test(body) &&
         body
           .split("\n")
@@ -179,11 +224,12 @@ export function units(
         const window = text.slice(s, s + UNIT_CHARS),
           paragraph = window.lastIndexOf("\n\n"),
           line = window.lastIndexOf("\n");
+        // A YAML value is cut only where its line exceeds a unit.
         e =
           s +
           (paragraph >= UNIT_CHARS / 3
             ? paragraph + 2
-            : line >= UNIT_CHARS / 3
+            : line >= (yaml ? 0 : UNIT_CHARS / 3)
               ? line + 1
               : UNIT_CHARS);
       }

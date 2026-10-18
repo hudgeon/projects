@@ -14,9 +14,27 @@ export const RECENT_COMMENTS = 5;
 const exec = promisify(execFile);
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+// YAML also holds secrets unquoted (`token: abc…`, `- DB_PASSWORD=abc…`): one
+// word of 12 or more characters on the key's line or the next. Code's
+// unquoted values are expressions, so only YAML is read this way.
+// Interpolations and environment variable names, such as `secret:
+// STRIPE_KEY`, are references. A Kubernetes Secret's data may sit under any
+// key.
+const yamlSecret = (text: string) =>
+  /^kind:[ \t]*["']?Secret["']?[ \t]*(?:#.*)?$/m.test(text) ||
+  [
+    ...text.matchAll(
+      /^[ \t]*(?:-[ \t]+)?["']?[\w.-]*(?:passw(?:or)?d|secret|token|(?:api|access|secret|private)[_-]?key)["']?[ \t]*(?:=|:(?:[ \t]*[|>][-+\d]*)?)[ \t]*(?:\r?\n[ \t]+)?(?:&\S+[ \t]+)?([^\s"'#]\S{11,})[ \t]*(?:#.*)?$/gim,
+    ),
+  ].some(
+    ([, value]) =>
+      !/^(?:\$\{|\$\w+$|process\.env\.|[A-Z][A-Z\d]*(?:_[A-Z\d]+)+$)/.test(
+        value,
+      ),
+  );
 // Best-effort exclusion of recognizable credentials supplements path/ignore
 // rules. Never redact a value and present the remaining file as complete.
-export const credentialLike = (text: string) =>
+export const credentialLike = (text: string, name = "") =>
   /\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{16,}|dp\.st\.[A-Za-z0-9_-]{20,})\b/.test(
     text,
   ) ||
@@ -31,7 +49,8 @@ export const credentialLike = (text: string) =>
     ...text.matchAll(
       /["']?(?:api[_-]?key|client[_-]?secret|password|access[_-]?token|auth[_-]?token)["']?\s*[:=]\s*["']([^"'\r\n]{12,})["']/gi,
     ),
-  ].some(([, value]) => !/^(?:\$\{|process\.env\.)/.test(value));
+  ].some(([, value]) => !/^(?:\$\{|process\.env\.)/.test(value)) ||
+  (/\.ya?ml$/i.test(name) && yamlSecret(text));
 export type Source = {
   path: string;
   hash: string | null;
@@ -111,7 +130,7 @@ export async function readSource(
     );
     if (text.includes("\0"))
       return { source: { ...source, status: "not_text" } };
-    if (credentialLike(text))
+    if (credentialLike(text, name))
       return { source: { ...source, status: "credential_like_content" } };
     return {
       source: {
@@ -138,12 +157,13 @@ export async function readSource(
 }
 
 // People, legal, HR and personnel records are never project evidence: their
-// folders and documents stay out. Code named for such features remains.
+// folders, documents and YAML data stay out. Code named for such features
+// remains.
 const personal = (name: string) =>
   /(?:^|\/)(?:people|personnel|hr|human[-_]resources|legal|payroll)\//i.test(
     name,
   ) ||
-  (/\.mdx?$/i.test(name) &&
+  (/\.(?:mdx?|ya?ml)$/i.test(name) &&
     /(?:^|[/._-])(?:people|persons?|personnel|staff|employees?|employment|hr|human[-_]resources|payroll|legal|performance[-_]reviews?)(?=[/._-]|$)/i.test(
       name,
     ));
@@ -157,7 +177,9 @@ export const eligible = (name: string) =>
     ) &&
   !/(?:^|\/)(?:secrets?|credentials?|tokens?)(?:[./_-]|$)/i.test(name) &&
   !personal(name) &&
-  (/\.(?:md|mdx|ts|tsx|js|jsx|mjs|cjs|py|sql|go|rs|rb|java|kt|css)$/i.test(
+  // Generated lockfiles carry no project knowledge.
+  !/[.-]lock\.ya?ml$/i.test(name) &&
+  (/\.(?:md|mdx|ts|tsx|js|jsx|mjs|cjs|py|sql|go|rs|rb|java|kt|css|ya?ml)$/i.test(
     name,
   ) ||
     name === "package.json");
