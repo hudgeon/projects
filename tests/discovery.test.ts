@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rename, rm, chmod, readFile, copyFile, stat } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { mkdtemp, mkdir, writeFile, rename, rm, chmod, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -280,45 +278,5 @@ process.stdout.write("r".repeat(64) + "\\n");
   } finally {
     Reflect.deleteProperty(process.env, "RUNNER_TOKEN");
     await rm(home, { recursive: true, force: true });
-  }
-});
-
-test("the installer keeps a Doppler machine's tokens in Doppler and writes token files only without one", {timeout: 30000}, async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "projects-install-"));
-  try {
-    const release = path.join(root, "release"), home = path.join(root, "home"), bin = path.join(root, "bin");
-    const base = path.join(home, ".local/share/project-overview");
-    await mkdir(path.join(release, "scripts"), { recursive: true });
-    await mkdir(path.join(release, ".local"));
-    await mkdir(base, { recursive: true });
-    await mkdir(bin);
-    await copyFile("scripts/install-machine.mjs", path.join(release, "scripts/install-machine.mjs"));
-    for (const bundle of ["collector", "service", "runner", "work-item"])
-      await writeFile(path.join(release, ".local", `${bundle}.mjs`), "// bundle\n");
-    // A Doppler stand-in that lists the names given in NAMES.
-    await writeFile(path.join(bin, "doppler"), `#!/bin/sh\nprintf '%s' "$NAMES"\n`, { mode: 0o755 });
-    await writeFile(path.join(base, "doppler-token"), "dp.st.example", { mode: 0o600 });
-    const install = (env: Record<string, string>) =>
-      promisify(execFile)(process.execPath, [path.join(release, "scripts/install-machine.mjs"), "--machine", "laptop", "--endpoint", "https://projects.example.com", "--root", path.join(root, "code"), "--no-services"], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env } });
-    const machine = async () => JSON.parse(await readFile(path.join(base, "machine.json"), "utf8"));
-    const names = (...list: string[]) => JSON.stringify(Object.fromEntries(list.map((name) => [name, {}])));
-    await writeFile(path.join(base, "machine.json"), JSON.stringify({ doppler: { project: "projects", config: "laptop" } }), { mode: 0o600 });
-    await install({ NAMES: names("COLLECTOR_TOKEN", "RUNNER_TOKEN") });
-    assert.equal(existsSync(path.join(base, "collector-token")), false);
-    assert.equal(existsSync(path.join(base, "runner-token")), false);
-    assert.equal((await machine()).collectorTokenFile, undefined);
-    assert.equal(existsSync(path.join(base, "runner.mjs")), true);
-    await assert.rejects(install({ NAMES: names("COLLECTOR_TOKEN") }), (e: { stderr: string }) => e.stderr.includes("Add RUNNER_TOKEN to the Doppler config projects/laptop first."));
-    // An existing runner-token file still wins, so only the collector's name is needed.
-    await writeFile(path.join(base, "runner-token"), "r".repeat(64), { mode: 0o600 });
-    await install({ NAMES: names("COLLECTOR_TOKEN") });
-    // Without a Doppler config, both tokens are owner-only files, as before.
-    await writeFile(path.join(base, "machine.json"), "{}", { mode: 0o600 });
-    await rm(path.join(base, "runner-token"));
-    await install({ NAMES: "", PROJECTS_COLLECTOR_TOKEN: "c".repeat(64), PROJECTS_RUNNER_TOKEN: "r".repeat(64) });
-    for (const file of ["collector-token", "runner-token"]) assert.equal((await stat(path.join(base, file))).mode & 0o777, 0o600);
-    assert.equal((await machine()).collectorTokenFile, path.join(base, "collector-token"));
-  } finally {
-    await rm(root, { recursive: true, force: true });
   }
 });

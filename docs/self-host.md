@@ -112,6 +112,9 @@ and tokens are kept. Options:
   `work` are your work items. Without it, work items and Mark done are off.
 - `--inbox you@example.com` (optional): a Gmail account read through `gws`.
   Email replies also expect a `compose-email` skill in the work repository.
+- `--collector-label`, `--runner-label` (optional): launchd labels for the two
+  services, when they should differ from the defaults. They are kept in
+  `machine.json`, so later runs restart the same services.
 - `--hooks`: also link Claude and Codex sessions to work items.
 - `--new-tokens`: replace the stored tokens after **Replace tokens** on the
   site.

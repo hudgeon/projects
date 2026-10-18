@@ -1,11 +1,11 @@
 // Connects this machine to a Projects site: writes its config and tokens, installs
 // the collector and runner bundles, and starts both as background services.
 // Run it again after each release; an existing config and tokens are kept
-// unless new values are given. A machine whose machine.json names a Doppler
-// config keeps its tokens there, as COLLECTOR_TOKEN and RUNNER_TOKEN, and gets
-// no token files.
+// unless new values are given, and so are the services' launchd labels. A
+// machine whose machine.json names a Doppler config keeps its tokens there, as
+// COLLECTOR_TOKEN and RUNNER_TOKEN, and gets no token files.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -48,6 +48,10 @@ set("root", expand(flag("root")));
 set("agents", flag("agents")?.split(",").map((a) => a.trim()));
 set("workRepo", flag("work-repo"));
 set("inboxAccount", flag("inbox"));
+// Labels given once are kept, so a later run restarts the same launchd jobs
+// rather than starting a second collector and runner beside them.
+set("collectorLabel", flag("collector-label"));
+set("runnerLabel", flag("runner-label"));
 config.home = home;
 if (!config.doppler) config.collectorTokenFile ??= path.join(base, "collector-token");
 config.projects ??= {};
@@ -57,6 +61,8 @@ if (!/^https:\/\/|^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(config.endpoint ?
   fail("Give --endpoint: your Projects site, such as https://projects.example.com.");
 if (!config.root || !path.isAbsolute(config.root))
   fail("Give --root: the folder that holds your repositories.");
+if ([config.collectorLabel, config.runnerLabel].some((label) => label !== undefined && !/^\w[\w.-]*$/.test(label)))
+  fail("Give --collector-label and --runner-label as launchd labels, such as com.example.projects-runner.");
 const owned = (target, content) => {
   const temporary = `${target}.${process.pid}.tmp`;
   writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
@@ -171,9 +177,9 @@ ${extra}
 `;
 const services = [
   {
-    label: flag("collector-label") ?? "local.projects.collector",
+    label: config.collectorLabel ?? "local.projects.collector",
     content: plist(
-      flag("collector-label") ?? "local.projects.collector",
+      config.collectorLabel ?? "local.projects.collector",
       [node, path.join(base, "service.mjs")],
       "  <key>StartInterval</key><integer>120</integer>\n  <key>RunAtLoad</key><true/>",
       "collector",
@@ -181,9 +187,9 @@ const services = [
     runner: false,
   },
   {
-    label: flag("runner-label") ?? "local.projects.runner",
+    label: config.runnerLabel ?? "local.projects.runner",
     content: plist(
-      flag("runner-label") ?? "local.projects.runner",
+      config.runnerLabel ?? "local.projects.runner",
       [node, path.join(base, "runner.mjs"), file],
       "  <key>KeepAlive</key><true/>\n  <key>RunAtLoad</key><true/>\n  <key>ThrottleInterval</key><integer>30</integer>\n  <key>ExitTimeOut</key><integer>10</integer>",
       "runner",
