@@ -13,13 +13,20 @@ export const otp = () => String(randomInt(0, 1000000)).padStart(6, "0");
 export function equal(a: string, b: string) {
   return timingSafeEqual(Buffer.from(digest(a)), Buffer.from(digest(b)));
 }
-export function allowed(email: string, env: { ALLOWED_EMAILS: string }) {
+// Every allowed address is a person who may sign in (worker/people.ts).
+export function allowedEmails(env: { ALLOWED_EMAILS: string }) {
   return (env.ALLOWED_EMAILS ?? "")
     .split(",")
     .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(email);
+    .filter(Boolean);
 }
+export function allowed(email: string, env: { ALLOWED_EMAILS: string }) {
+  return allowedEmails(env).includes(email);
+}
+// The deployment owner, whose conversations from before people had profiles
+// these are.
+export const deploymentOwner = (env: { OWNER_EMAIL?: string }) =>
+  (env.OWNER_EMAIL ?? "").trim().toLowerCase();
 export const SESSION_COOKIE = "__Host-projects";
 export function cookie(request: Request) {
   return (
@@ -93,10 +100,15 @@ export function signsIn(
 }
 // A browser's sign-in acts as the owner, except for what outlives the browser
 // or reaches beyond it: connecting, changing or removing machines, how agents
-// run, watching or driving browsers, email, and notifications.
+// run, the owner's name, watching or driving browsers, email, and
+// notifications.
 export function browserMay(pathname: string, method: string) {
   const read = method === "GET" || method === "HEAD";
-  if (/^\/api\/machines(?:\/|$)/.test(pathname) || pathname === "/api/execution-settings")
+  if (
+    /^\/api\/machines(?:\/|$)/.test(pathname) ||
+    pathname === "/api/execution-settings" ||
+    pathname === "/api/me"
+  )
     return read;
   return !(
     /^\/api\/runs\/[^/]+\/browser\/view$/.test(pathname) ||

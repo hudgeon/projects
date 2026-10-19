@@ -17,6 +17,7 @@ export const makeRun = (): Run => ({
   projectId: "acme/test",
   agent: "auto",
   workIssue: 1112,
+  owner: "owner@example.com",
   generation: 1,
   state: "running",
   createdAt: Date.now(),

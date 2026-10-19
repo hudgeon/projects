@@ -24,7 +24,7 @@ test("legacy conversations migrate exactly once into isolated objects, preservin
     external: ["cloudflare:workers", "node:*"],
     outfile: script,
   });
-  const config = await options(script, dir);
+  const config = await options(script, dir, { OWNER_EMAIL: "owner@example.com" });
   let mf = await start(config);
   const db = async () => {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
@@ -32,6 +32,7 @@ test("legacy conversations migrate exactly once into isolated objects, preservin
   };
   const owner = randomUUID(),
     id = randomUUID();
+  // A row from before conversations recorded who started them.
   const old: Run = {
     id,
     projectId: null,
@@ -64,7 +65,7 @@ test("legacy conversations migrate exactly once into isolated objects, preservin
       children: [],
       masterSessionId: randomUUID(),
     },
-  };
+  } as Omit<Run, "owner"> as Run;
   try {
     await (await db()).listRuns();
     const source = await mf.unsafeGetDurableObjectStorage("test", "Portfolio", {
@@ -81,6 +82,8 @@ test("legacy conversations migrate exactly once into isolated objects, preservin
     mf = await start(config);
     let store = await db();
     assert.equal((await store.getRun(id))?.id, old.id);
+    assert.equal((await store.getRun(id))?.owner, "owner@example.com", "a conversation from before people had profiles is the deployment owner's");
+    assert.equal((await store.listRuns())[0]?.owner, "owner@example.com");
     const destination = await mf.unsafeGetDurableObjectStorage(
       "test",
       "Conversation",
@@ -119,7 +122,7 @@ test("legacy conversations migrate exactly once into isolated objects, preservin
       projectId: null,
       agent: "auto",
       workIssue: null,
-    });
+    }, "owner@example.com");
     const isolated = ns.get(
       ns.idFromName(JSON.stringify(["test", other.id])),
     ) as unknown as Conversation;
@@ -215,7 +218,7 @@ test("conversation archives preserve active claims, receipts and history, with p
     await db.issue("owner@example.com", salt, digest(`${salt}:123456`));
     await db.verify("owner@example.com", "123456", digest(value));
     const browser = {Cookie: `__Host-projects=${value}`, Origin: origin};
-    const run: Run = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Inspect and keep history", projectId: null, agent: "auto", workIssue: null})));
+    const run: Run = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Inspect and keep history", projectId: null, agent: "auto", workIssue: null}, "owner@example.com")));
     const owner = randomUUID();
     const claimed: Run = JSON.parse(JSON.stringify(await db.claimRun(owner, [], undefined, "studio")));
     const child = {id: randomUUID(), projectId: "acme/chosen", agent: "codex" as const, mode: "read" as const, cwd: "/fixture", branch: "main", sessionId: randomUUID(), state: "running" as const, result: null, evidence: []};
@@ -256,7 +259,7 @@ test("conversation archives preserve active claims, receipts and history, with p
     assert.equal(restored.archivedAt, null);
     assert.equal(restored.generation, claimed.generation);
     for (let i = 0; i < 51; i++) {
-      const newer = await db.createRun({requestId: randomUUID(), text: `Other conversation ${i}`, projectId: "acme/other", agent: "auto", workIssue: null});
+      const newer = await db.createRun({requestId: randomUUID(), text: `Other conversation ${i}`, projectId: "acme/other", agent: "auto", workIssue: null}, "owner@example.com");
       await db.cancelRun(newer.id);
     }
     assert.equal((await db.listRuns()).length, 50);

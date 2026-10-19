@@ -24,7 +24,7 @@ test("the Laptop starts conversations only while the Studio is away, and each st
     return (await response.json() as {run: Run | null}).run;
   };
   const store = async () => { const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"); return ns.get(ns.idFromName("test")) as unknown as Portfolio; };
-  const create = async (text: string) => JSON.parse(JSON.stringify(await (await store()).createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null}))) as Run;
+  const create = async (text: string) => JSON.parse(JSON.stringify(await (await store()).createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null}, "owner@example.com"))) as Run;
   const finish = async (bearer: string, runnerId: string, run: Run) => {
     const progress = {seq: 1, state: "completed" as const, summary: "Done", masterSessionId: randomUUID(), children: [], reviewedMessageIds: [run.messages[0].id]};
     const response = await post("/api/runner/report", {runnerId, id: run.id, generation: run.generation, progress}, {Authorization: `Bearer ${bearer}`});
@@ -92,7 +92,7 @@ test("the owner continues a conversation on another machine only while its machi
     await db.issue("owner@example.com", salt, digest(`${salt}:123456`));
     await db.verify("owner@example.com", "123456", digest(cookie));
     const signed = {Cookie: `__Host-projects=${cookie}`, Origin: origin};
-    const working = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Ship the change", projectId: null, agent: "auto", workIssue: null}))) as Run;
+    const working = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Ship the change", projectId: null, agent: "auto", workIssue: null}, "owner@example.com"))) as Run;
     assert.equal((await claim(studio, miniId))!.host, "studio");
     assert.equal((await post(`/api/runs/${working.id}/move`, {}, signed)).status, 409, "the Studio is present");
     assert.equal((await post(`/api/runs/${working.id}/move`, {}, {Cookie: signed.Cookie})).status, 403, "same-origin only");
@@ -107,7 +107,7 @@ test("the owner continues a conversation on another machine only while its machi
     // A Studio that comes back finds its abandoned step fenced off.
     assert.equal((await post("/api/runner/heartbeat", {runnerId: miniId, id: working.id, generation: 1}, {Authorization: `Bearer ${studio}`})).status, 409);
     // A finished conversation: the follow-up goes to the Laptop instead of waiting.
-    const done = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Draft the summary", projectId: null, agent: "auto", workIssue: null}))) as Run;
+    const done = JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: "Draft the summary", projectId: null, agent: "auto", workIssue: null}, "owner@example.com"))) as Run;
     assert.equal((await claim(studio, miniId))!.id, done.id);
     const receipt = {seq: 1, state: "completed" as const, summary: "Drafted", masterSessionId: randomUUID(), children: [], reviewedMessageIds: [done.messages[0].id]};
     assert.equal((await post("/api/runner/report", {runnerId: miniId, id: done.id, generation: 1, progress: receipt}, {Authorization: `Bearer ${studio}`})).status, 200);

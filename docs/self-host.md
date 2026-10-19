@@ -58,7 +58,10 @@ Set `EMAIL_FROM` to an address on that domain, such as `projects@notify.example.
 
 Create a project named `project-overview` with a `prod` config holding:
 
-- `ALLOWED_EMAILS`: comma-separated addresses that may sign in.
+- `ALLOWED_EMAILS`: comma-separated addresses that may sign in. Each is a
+  person with a profile: named from the address until they set a name in
+  Settings, shown on the conversations they start, and visible to everyone
+  who signs in.
 - `VAPID_PRIVATE_KEY`, for push notifications:
   `node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign']).then(k=>crypto.subtle.exportKey('jwk',k.privateKey)).then(({kty,crv,x,y,d})=>console.log(JSON.stringify({kty,crv,x,y,d})))"`
 - `CLOUDFLARE_API_TOKEN` (Workers deploy rights) and `CLOUDFLARE_ACCOUNT_ID`.
@@ -156,7 +159,10 @@ away. The services need you logged in after a restart.
 
 Open your site, sign in with an allowlisted address, and start a conversation.
 In the composer choose Claude as the master once; the site remembers it on each
-device, and a machine without Codex runs Claude regardless.
+device, and a machine without Codex runs Claude regardless. Conversations carry
+the name of whoever started them, and Today lists yours until you switch it to
+everyone's; conversations from before profiles existed are the owner's
+(`PROJECTS_OWNER_EMAIL`).
 
 Whoever can sign in can run code on your machines with your logins, so keep
 `ALLOWED_EMAILS` to yourself.

@@ -17,7 +17,9 @@ import { decodeScreenshots, type ScreenshotInput } from "../src/screenshot-model
 import { latestPlan, runTitle, statusLine } from "../src/run-text";
 import type { ConversationRecord } from "./runs";
 import type { Machines } from "./machines";
+import { deploymentOwner } from "./auth";
 
+// The runner owner (a machine's runner ID) that claimed it, not the person.
 type IndexRow = {
   id: string;
   payload: string;
@@ -39,6 +41,7 @@ const summary = (run: Run): RunSummary => ({
   emailThread: run.emailThread ?? null,
   lane: run.lane ?? "standard",
   host: run.host,
+  owner: run.owner,
   title: runTitle(run),
   status: statusLine(run),
   remaining: activeRun(run.state)
@@ -47,11 +50,15 @@ const summary = (run: Run): RunSummary => ({
   needsYou: run.state === "running" && !!latestPlan(run)?.yourMove,
   stuck: run.state === "running" && !!run.progress?.live?.watch?.stuck,
 });
+// Conversations from before people had profiles belong to the deployment owner.
+const withOwner = <T extends { owner: string }>(run: T, owner: string): T =>
+  run.owner ? run : { ...run, owner };
 // The portfolio retains a rebuildable index and runner slots. Each conversation
 // is authoritative for its messages, generation, claim and execution receipts.
 export class Runs {
   private ready: Promise<void> | undefined;
   private selections: Promise<unknown> = Promise.resolve();
+  private readonly deploymentOwner: string;
   constructor(
     private storage: DurableObjectStorage,
     private env: Env,
@@ -59,6 +66,7 @@ export class Runs {
     // Told each time a conversation's indexed summary moves forward.
     private changed?: (previous: RunSummary | null, next: RunSummary) => void,
   ) {
+    this.deploymentOwner = deploymentOwner(env);
     storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS agent_runs(id TEXT PRIMARY KEY,payload TEXT NOT NULL,owner TEXT,updated INTEGER NOT NULL)",
     );
@@ -98,7 +106,8 @@ export class Runs {
         record.run.id,
       )
       .toArray()[0];
-    const next = summary(record.run);
+    const run = withOwner(record.run, this.deploymentOwner);
+    const next = summary(run);
     this.storage.sql.exec(
       `INSERT INTO conversation_index(id,payload,owner,revision,seed) VALUES(?,?,?,?,NULL)
       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,owner=excluded.owner,revision=excluded.revision,seed=NULL
@@ -113,7 +122,7 @@ export class Runs {
         previous ? (JSON.parse(previous.payload) as RunSummary) : null,
         next,
       );
-    return record.run;
+    return run;
   }
   private migrate() {
     return (this.ready ??= (async () => {
@@ -189,7 +198,7 @@ export class Runs {
           EMAIL_RUN_LIMIT,
         )
         .toArray()
-        .map((row) => JSON.parse(row.payload) as RunSummary);
+        .map((row) => withOwner(JSON.parse(row.payload) as RunSummary, this.deploymentOwner));
     return this.storage.sql
       .exec<{ payload: string }>(
         `SELECT payload FROM conversation_index
@@ -203,7 +212,7 @@ export class Runs {
         options.offset ?? 0,
       )
       .toArray()
-      .map((row) => JSON.parse(row.payload) as RunSummary);
+      .map((row) => withOwner(JSON.parse(row.payload) as RunSummary, this.deploymentOwner));
   }
   private async refreshActive() {
     const rows = this.storage.sql
@@ -225,7 +234,7 @@ export class Runs {
     if (count >= (lane === "quick" ? QUICK_ACTIVE_LIMIT : STANDARD_ACTIVE_LIMIT))
       throw Error("Too many conversations are already queued or running.");
   }
-  create(input: RunInput) {
+  create(input: RunInput, owner: string) {
     return this.select(async () => {
       await this.migrate();
       const existing = await this.get(input.requestId);
@@ -242,6 +251,7 @@ export class Runs {
         workIssue: input.workIssue,
         ...(input.emailThread ? { emailThread: input.emailThread } : {}),
         ...(input.lane === "quick" ? { lane: "quick" as const } : {}),
+        owner,
         generation: 1,
         state: "queued",
         createdAt: now,

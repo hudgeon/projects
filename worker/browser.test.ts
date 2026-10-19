@@ -31,7 +31,7 @@ test("conversation browsers isolate claims, preserve WebSockets and clean up pai
     await db.verify("owner@example.com", "123456", digest(cookie));
     const user = {Cookie: `__Host-projects=${cookie}`, Origin: origin};
     const post = (route: string, body: unknown, headers: Record<string, string> = {Authorization: `Bearer ${runner}`}) => mf.dispatchFetch(origin + route, {method: "POST", headers: {"Content-Type": "application/json", ...headers}, body: JSON.stringify(body)});
-    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null});
+    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     const runId = run.id;
     const owner = randomUUID(), claim = {runnerId: owner, id: runId, generation: 1};
     let conversation = await getConversation(runId);
@@ -89,7 +89,7 @@ test("conversation browsers isolate claims, preserve WebSockets and clean up pai
     await conversation.triggerAlarm();
     assert.equal((await conversation.inspectProvider()).closed, 1, "a failed close remains retryable after the claim ends");
     assert.equal((await conversation.browserStatus()).state, "idle");
-    const second = await db.createRun({requestId: randomUUID(), text: "Another browser", projectId: null, agent: "auto", workIssue: null});
+    const second = await db.createRun({requestId: randomUUID(), text: "Another browser", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     const secondOwner = randomUUID(); await db.claimRun(secondOwner, [], undefined, "studio");
     const secondConversation = await getConversation(second.id);
     await secondConversation.failProvider("failAcquire");

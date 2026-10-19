@@ -53,7 +53,7 @@ test("Worker spans retain safe request diagnostics and receipts log lifecycle ti
       projectId: null,
       agent: "auto",
       workIssue: null,
-    });
+    }, "owner@example.com");
     const post = (route: string, body: unknown) =>
       mf.dispatchFetch("https://example.com" + route, {
         method: "POST",

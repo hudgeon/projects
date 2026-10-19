@@ -7,6 +7,8 @@ import { pushEndpoint, sendPush, vapidPublicKey } from "./push";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
+import { People, peopleRoutes } from "./people";
+import { Sessions } from "./sessions";
 import { Documents } from "./documents";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
@@ -18,13 +20,11 @@ import { z } from "zod";
 import {
   authorize,
   login,
-  digest,
-  equal,
   readJson,
   sameOrigin,
-  SESSION_SECONDS,
   type Caller,
   allowed,
+  allowedEmails,
   browserMay,
   signsIn,
 } from "./auth";
@@ -57,10 +57,14 @@ export class Portfolio extends DurableObject<Env> {
   private machines: Machines;
   private documents: Documents;
   private signIns: BrowserSignIns;
+  private sessions: Sessions;
+  private profiles: People;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
     this.documents = new Documents(ctx.storage);
+    this.sessions = new Sessions(ctx.storage);
+    this.profiles = new People(ctx.storage);
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
@@ -79,15 +83,6 @@ export class Portfolio extends DurableObject<Env> {
     );
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS archive_entries (key TEXT PRIMARY KEY, payload TEXT NOT NULL)",
-    );
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS codes (email TEXT PRIMARY KEY, salt TEXT NOT NULL, hash TEXT NOT NULL, expires INTEGER NOT NULL, sent INTEGER NOT NULL, attempts INTEGER NOT NULL)",
-    );
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires INTEGER NOT NULL)",
-    );
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL)",
     );
     // Closes were keyed by an older work ID before work items became issues.
     this.ctx.storage.sql.exec("DROP TABLE IF EXISTS closes");
@@ -148,7 +143,7 @@ export class Portfolio extends DurableObject<Env> {
   listRuns(options: RunListOptions = {}) { return this.runs.list(options); }
   runtimeVersions(id?: string) { return this.runs.runtimeVersions(id); }
   getRun(id: string) { return this.runs.get(id); }
-  createRun(input: RunInput) { return this.runs.create(input); }
+  createRun(input: RunInput, owner: string) { return this.runs.create(input, owner); }
   messageRun(id: string, input: MessageInput) { return this.runs.message(id, input); }
   screenshot(id: string, screenshotId: string, owner?: string, generation?: number) { return this.runs.screenshot(id, screenshotId, owner, generation); }
   cancelRun(id: string) { return this.runs.cancel(id); }
@@ -195,82 +190,38 @@ export class Portfolio extends DurableObject<Env> {
     return {...await this.executionSettings(), metrics: codexComparison(samples)};
   }
   rate(key: string, max: number, window: number) {
-    const now = Date.now();
-    this.ctx.storage.sql.exec("DELETE FROM limits WHERE expires <= ?", now);
-    const row = this.ctx.storage.sql
-      .exec<{ count: number }>(
-        "INSERT INTO limits(key,count,expires) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count",
-        key,
-        now + window,
-      )
-      .one();
-    return row.count <= max;
+    return this.sessions.rate(key, max, window);
   }
   issue(email: string, salt: string, hash: string) {
-    const now = Date.now();
-    return (
-      this.ctx.storage.sql
-        .exec(
-          "INSERT INTO codes(email,salt,hash,expires,sent,attempts) VALUES(?,?,?,?,?,0) ON CONFLICT(email) DO UPDATE SET salt=excluded.salt,hash=excluded.hash,expires=excluded.expires,sent=excluded.sent,attempts=0 WHERE codes.sent <= ? RETURNING email",
-          email,
-          salt,
-          hash,
-          now + 600_000,
-          now,
-          now - 60_000,
-        )
-        .toArray().length === 1
-    );
+    return this.sessions.issue(email, salt, hash);
   }
   cancelCode(email: string, salt: string) {
-    this.ctx.storage.sql.exec(
-      "DELETE FROM codes WHERE email=? AND salt=?",
-      email,
-      salt,
-    );
+    this.sessions.cancel(email, salt);
   }
+  // A sign-in gives every allowed address its profile, this one's included.
   verify(email: string, code: string, hash: string) {
-    return this.ctx.storage.transactionSync(() => {
-      const now = Date.now();
-      const row = this.ctx.storage.sql
-        .exec<{
-          salt: string;
-          hash: string;
-          attempts: number;
-          expires: number;
-        }>("SELECT * FROM codes WHERE email=?", email)
-        .toArray()[0];
-      if (!row || row.expires <= now || row.attempts >= 5) return false;
-      this.ctx.storage.sql.exec(
-        "UPDATE codes SET attempts=attempts+1 WHERE email=?",
-        email,
-      );
-      if (!equal(row.hash, digest(`${row.salt}:${code}`))) return false;
-      this.ctx.storage.sql.exec("DELETE FROM codes WHERE email=?", email);
-      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE expires<=?", now);
-      this.ctx.storage.sql.exec(
-        "INSERT INTO sessions(hash,email,expires) VALUES(?,?,?)",
-        hash,
-        email,
-        now + SESSION_SECONDS * 1000,
-      );
-      return true;
-    });
+    const signedIn = this.sessions.verify(email, code, hash);
+    if (signedIn) this.profiles.sync(allowedEmails(this.env));
+    return signedIn;
   }
   // The owner's own sign-in, or a conversation browser's, with its machine.
   session(hash: string): { email: string; machine: string | null } | null {
-    const email = this.ctx.storage.sql
-      .exec<{ email: string }>(
-        "SELECT email FROM sessions WHERE hash=? AND expires>?",
-        hash,
-        Date.now(),
-      )
-      .toArray()[0]?.email;
+    const email = this.sessions.find(hash);
     return email ? { email, machine: null } : this.signIns.find(hash);
   }
   revoke(hash: string) {
-    this.ctx.storage.sql.exec("DELETE FROM sessions WHERE hash=?", hash);
+    this.sessions.revoke(hash);
     this.signIns.revoke(hash);
+  }
+  // Who a signed-in address is, as everyone sees them (worker/people.ts).
+  person(email: string) {
+    return this.profiles.get(email);
+  }
+  renamePerson(email: string, name: string) {
+    return this.profiles.rename(email, name);
+  }
+  people() {
+    return this.profiles.list();
   }
   async publish(snapshot: Snapshot) {
     this.ctx.storage.sql.exec(
@@ -647,6 +598,9 @@ export async function handle(
       return Response.json({ error: "Invalid runner request" }, { status: 400 });
     }
   }
+  // Only a signed-in person reaches these; machine tokens stop above.
+  const people = await peopleRoutes(request, store, caller as string);
+  if (people) return people;
   if (url.pathname === "/api/execution-settings") {
     if (request.method === "GET") return Response.json(await store.executionSettingsView());
     if (request.method !== "POST") return new Response("Method not allowed", {status: 405});
@@ -784,7 +738,7 @@ export async function handle(
     )
       return Response.json({ error: "Unknown work issue." }, { status: 400 });
     try {
-      const run = await trace("conversation.create", { runId: input.requestId }, () => store.createRun(input));
+      const run = await trace("conversation.create", { runId: input.requestId }, () => store.createRun(input, caller as string));
       // Another sign-in may have saved this request ID since the check above.
       return browser && run.emailThread
         ? Response.json({ error: "Invalid conversation" }, { status: 409 })

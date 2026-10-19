@@ -21,7 +21,7 @@ test("conversation lists lead with a short title, the current step and the email
     const thread = "1a1324eccd4e4489";
     const input: RunInput = {requestId: randomUUID(), text: "Reply to Rob about “Re: November plan”\n\nSay Thursday works.\n\nEmail: [Re: November plan](https://mail.google.com/mail/u/#all/1a1324eccd4e4489) from Rob.", projectId: null, agent: "auto", workIssue: 942, emailThread: thread};
     assert.equal(runInputSchema.safeParse({...input, emailThread: "not-a-thread"}).success, false);
-    const run: Run = JSON.parse(JSON.stringify(await db.createRun(input)));
+    const run: Run = JSON.parse(JSON.stringify(await db.createRun(input, "owner@example.com")));
     let [listed] = await db.listRuns();
     assert.deepEqual(
       {title: listed.title, status: listed.status, emailThread: listed.emailThread, workIssue: listed.workIssue, remaining: listed.remaining},
@@ -53,7 +53,7 @@ test("conversation lists lead with a short title, the current step and the email
     assert.deepEqual([listed.state, listed.title, listed.status, listed.remaining], ["completed", "Reply to Rob about training", "Drafted the reply to Rob.", null]);
     assert.equal((await db.getRun(run.id))!.emailThread, thread);
     // The inbox joins every email conversation, including Done ones, in one read.
-    await db.createRun({requestId: randomUUID(), text: "Not from email", projectId: null, agent: "auto", workIssue: null});
+    await db.createRun({requestId: randomUUID(), text: "Not from email", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     await db.archiveRun(run.id, true);
     assert.deepEqual((await db.listRuns()).map((r) => r.emailThread ?? null), [null]);
     const email = await db.listRuns({email: true});

@@ -20,7 +20,7 @@ test("feedback given to the agent at work is marked so and still reviewed by the
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
     const db = ns.get(ns.idFromName("test")) as unknown as Portfolio;
     const input: RunInput = { requestId: randomUUID(), text: "Change the button", projectId: null, agent: "auto", workIssue: null };
-    await db.createRun(input);
+    await db.createRun(input, "owner@example.com");
     await db.claimRun(owner, [], undefined, "studio");
     const steer = { requestId: randomUUID(), text: "Use the blue button" };
     await db.messageRun(input.requestId, steer);
@@ -70,7 +70,7 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
       workIssue: null,
     };
     const run = { id: input.requestId };
-    await db.createRun(input);
+    await db.createRun(input, "owner@example.com");
     // Long chats retain their identity and claim; retries never add messages.
     const historical: string[] = [];
     for (let i = 0; i < 45; i++) {
@@ -159,7 +159,7 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
         ?.delivery,
       "reviewed",
     );
-    const cancelled = await db.createRun({ ...input, requestId: randomUUID() });
+    const cancelled = await db.createRun({ ...input, requestId: randomUUID() }, "owner@example.com");
     await db.claimRun(owner, [], undefined, "studio");
     await db.messageRun(cancelled.id, {
       requestId: randomUUID(),
@@ -198,7 +198,7 @@ test("active feedback is durable, idempotent and cannot be lost at completion or
     }, "studio");
     assert.equal((await db.getRun(cancelled.id))?.state, "cancelled");
     assert.equal(await db.claimRun(owner, [], undefined, "studio"), null);
-    const legacy = await db.createRun({ ...input, requestId: randomUUID() });
+    const legacy = await db.createRun({ ...input, requestId: randomUUID() }, "owner@example.com");
     await db.claimRun(owner, [], undefined, "studio");
     await db.messageRun(legacy.id, {
       requestId: randomUUID(),

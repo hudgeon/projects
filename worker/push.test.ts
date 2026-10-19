@@ -56,7 +56,7 @@ test("a signed-in device is woken, without content, when a conversation becomes 
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(pushes.length, 1, "opening Projects again sends no second test");
     const finish = async (text: string) => {
-      await db.createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null});
+      await db.createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
       const owner = randomUUID();
       const run = (await db.claimRun(owner, [], undefined, "studio"))!;
       const report = (progress: Progress) => mf.dispatchFetch(origin + "/api/runner/report", {

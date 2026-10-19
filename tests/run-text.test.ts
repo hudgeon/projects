@@ -36,6 +36,7 @@ function run(overrides: Partial<Run> = {}): Run {
     projectId: null,
     agent: "auto",
     workIssue: null,
+    owner: "owner@example.com",
     generation: 1,
     state: "completed",
     createdAt: 1,

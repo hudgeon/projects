@@ -36,7 +36,7 @@ test("a machine the deployment signs in gets each conversation browser signed in
   // Claims a new conversation on a machine and opens its browser, as a runner does.
   const open = async (bearer: string, runnerId = randomUUID()) => {
     const db = await getStore();
-    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null});
+    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     assert.ok((await (await post("/api/runner/claim", {runnerId, activeRunIds: []}, {Authorization: `Bearer ${bearer}`})).json() as {run: Run | null}).run);
     const grant = await (await post("/api/runner/browser", {runnerId, id: run.id, generation: 1}, {Authorization: `Bearer ${bearer}`})).json() as {capability: string};
     const connection = await mf.dispatchFetch(`${origin}/api/browser/${run.id}/cdp`, {headers: {Upgrade: "websocket", Authorization: `Bearer ${grant.capability}`}});
@@ -72,7 +72,7 @@ test("a machine the deployment signs in gets each conversation browser signed in
     mailed.work.issues = [issue(7, {body: "## Current position\nStatus: open.", emailLinks: emailLinks(linked)})];
     await (await getStore()).publish(snapshotSchema.parse(mailed));
     await (await getStore()).requestInboxAction("bbbbbbbbbb01", "archive");
-    const fromEmail = await (await getStore()).createRun({requestId: randomUUID(), text: "Email: [Contract](https://mail.google.com/mail/u/0/#inbox/bbbbbbbbbb01)", projectId: null, agent: "auto", workIssue: null, emailThread: "bbbbbbbbbb01"});
+    const fromEmail = await (await getStore()).createRun({requestId: randomUUID(), text: "Email: [Contract](https://mail.google.com/mail/u/0/#inbox/bbbbbbbbbb01)", projectId: null, agent: "auto", workIssue: null, emailThread: "bbbbbbbbbb01"}, "owner@example.com");
     await (await getStore()).cancelRun(fromEmail.id);
     assert.ok((await (await getStore()).listRuns({})).some((run) => run.id === fromEmail.id));
     const seen = await (await mf.dispatchFetch(origin + "/api/overview", {headers: as(cookie.value)})).json() as PortfolioView;
@@ -122,7 +122,7 @@ test("a machine the deployment signs in gets each conversation browser signed in
     await (await getStore()).cancelRun(first.id); await conversation.triggerAlarm();
     assert.equal(await overview(renewed.value), 401);
     // A refused cookie leaves the browser usable and signed out.
-    const refusedRun = await (await getStore()).createRun({requestId: randomUUID(), text: "Refused", projectId: null, agent: "auto", workIssue: null});
+    const refusedRun = await (await getStore()).createRun({requestId: randomUUID(), text: "Refused", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     const refusedConversation = await getConversation(refusedRun.id);
     await refusedConversation.failProvider("failSignIn");
     const refusedOwner = randomUUID();
@@ -172,7 +172,7 @@ test("a conversation browser signs in only as an allowed owner", async () => {
   const mf = await start(await options(script, dir, {RUNNER_TOKEN: runner, ALLOWED_EMAILS: "owner@example.com", OWNER_EMAIL: "former@example.com", SITE_URL: origin, BROWSER_SIGN_IN: "studio"}));
   try {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"), db = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null});
+    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
     const runnerId = randomUUID(), bearer = {Authorization: `Bearer ${runner}`, "Content-Type": "application/json"};
     await mf.dispatchFetch(origin + "/api/runner/claim", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, activeRunIds: []})});
     const grant = await (await mf.dispatchFetch(origin + "/api/runner/browser", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, id: run.id, generation: 1})})).json() as {capability: string};

@@ -26,7 +26,7 @@ test("one Studio recovers concurrent conversation claims without sharing resume 
   try {
     let db = await store();
     const runs: Run[] = [];
-    for (let i = 0; i < 3; i++) runs.push(JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: `Independent conversation ${i}`, projectId: null, agent: "auto", workIssue: null}))));
+    for (let i = 0; i < 3; i++) runs.push(JSON.parse(JSON.stringify(await db.createRun({requestId: randomUUID(), text: `Independent conversation ${i}`, projectId: null, agent: "auto", workIssue: null}, "owner@example.com"))));
     const active: string[] = [];
     for (let i = 0; i < 3; i++) {
       const next = (await claim(active))!;
@@ -267,7 +267,7 @@ test("conversations isolate credentials and persist idempotent ownership, cancel
       ).status,
       200,
     );
-    const queued = await db.createRun({ ...input, requestId: randomUUID() });
+    const queued = await db.createRun({ ...input, requestId: randomUUID() }, "owner@example.com");
     await db.cancelRun(queued.id);
     assert.equal((await claim()).run, null); // queued cancellation never reaches a native process
   } finally {
@@ -298,14 +298,14 @@ test("active conversation cap includes old runs outside the history page", async
       agent: "auto" as const,
       workIssue: null,
     });
-    const old = await db.createRun(input());
+    const old = await db.createRun(input(), "owner@example.com");
     for (let n = 0; n < 55; n++) {
-      const r = await db.createRun(input());
+      const r = await db.createRun(input(), "owner@example.com");
       await db.cancelRun(r.id);
     }
-    for (let n = 0; n < 9; n++) await db.createRun(input());
+    for (let n = 0; n < 9; n++) await db.createRun(input(), "owner@example.com");
     assert.ok((await db.listRuns()).some((r) => r.id === old.id));
-    await assert.rejects(async () => db.createRun(input()));
+    await assert.rejects(async () => db.createRun(input(), "owner@example.com"));
     const cancelled = (await db.listRuns()).find(
       (r) => r.state === "cancelled",
     )!;
@@ -346,7 +346,7 @@ test("a conversation alarm detects disconnection without replacing its claim and
         projectId: null,
         agent: "auto",
         workIssue: null,
-      });
+      }, "owner@example.com");
     await store.claimRun(owner, [], undefined, "studio");
     const name = JSON.stringify(["test", run.id]);
     const storage = await mf.unsafeGetDurableObjectStorage(
@@ -398,7 +398,7 @@ test("quick work is claimed only into a free quick slot and has its own capacity
   try {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
     const db = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-    const create = (text: string, lane?: "quick") => db.createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null, ...(lane ? {lane} : {})});
+    const create = (text: string, lane?: "quick") => db.createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null, ...(lane ? {lane} : {})}, "owner@example.com");
     const big = await create("Refactor the importer");
     const reply = await create("Reply to Rob", "quick");
     const runner = randomUUID();

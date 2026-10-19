@@ -34,7 +34,7 @@ test("Codex speed is owner-only, durable, shared with runners and metrics are de
       const claim=await (await post("/api/runner/claim",{runnerId:randomUUID(),activeRunIds:[]},{Authorization:`Bearer ${credential}`})).json() as {settings:{codexFast:boolean}};
       assert.equal(claim.settings.codexFast,true);
     }
-    const run=await db.createRun({requestId:randomUUID(),text:"Inspect",projectId:null,agent:"auto",workIssue:null});
+    const run=await db.createRun({requestId:randomUUID(),text:"Inspect",projectId:null,agent:"auto",workIssue:null}, "owner@example.com");
     const runId=run.id;
     const owner=randomUUID(); await db.claimRun(owner,[],undefined,"studio");
     const event={id:randomUUID(),at:Date.now(),event:"native_finished" as const,actor:"master" as const,agent:"codex" as const,codexFast:true,model:"model-a",effort:"high",mode:"read" as const,resumed:false,attempts:1,tokenUsageObserved:true,durationMs:1000,freshTokens:200,cachedTokens:0,outputTokens:100,outcome:"completed" as const};

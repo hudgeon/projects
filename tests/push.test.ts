@@ -73,6 +73,7 @@ test("a notice fires once when an existing conversation becomes the user's move"
     updatedAt: 2,
     heartbeatAt: 2,
     workIssue: null,
+    owner: "owner@example.com",
     title: "Reply to Rob about training",
     status: "Drafted the reply to Rob.",
     ...over,

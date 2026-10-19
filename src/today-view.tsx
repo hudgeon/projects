@@ -3,6 +3,8 @@ import type { Snapshot } from "./model";
 import type { Close } from "./work-model";
 import type { ArchiveEntry } from "./archive-model";
 import { awaitsYou, type RunSummary } from "./run-model";
+import { yours } from "./people-model";
+import { usePeople } from "./people-view";
 import {
   Composer,
   ConversationPage,
@@ -17,19 +19,26 @@ import { conversationSearch, workSearch, type Navigation } from "./navigation";
 
 // One place to work: start things, see what needs you and what is running,
 // and keep the bigger work in view. On a phone a selected conversation takes
-// the whole screen; on a desktop it opens beside the list.
+// the whole screen; on a desktop it opens beside the list. The list is the
+// signed-in person's conversations until they ask for everyone's.
 export function TodayView({
   snapshots,
   archives,
   closes,
   navigation,
   now,
+  me,
+  everyone,
+  onEveryone,
 }: {
   snapshots: Snapshot[];
   archives: ArchiveEntry[];
   closes: Close[];
   navigation: Navigation;
   now: number;
+  me?: string;
+  everyone: boolean;
+  onEveryone: (everyone: boolean) => void;
 }) {
   const navigate = useNavigate({ from: "/" });
   const done = !!navigation.archived;
@@ -37,7 +46,13 @@ export function TodayView({
   // Bigger work counts every current conversation, whatever the filter.
   const current = useRuns();
   const all = current.data?.pages.flatMap((page) => page.runs) ?? [];
-  const runs = list.data?.pages.flatMap((page) => page.runs) ?? [];
+  const runs = yours(
+    list.data?.pages.flatMap((page) => page.runs) ?? [],
+    me,
+    everyone,
+  );
+  // The switch appears once more than one person has a profile.
+  const people = usePeople().data?.people ?? [];
   const names = projectNames(snapshots, archives);
   const selected = navigation.run;
   const rank = (run: RunSummary) =>
@@ -115,6 +130,26 @@ export function TodayView({
             }
           />
         )}
+        {people.length > 1 && (
+          <div className="filters scope" role="group" aria-label="Whose conversations">
+            <button
+              type="button"
+              className={everyone ? "" : "selected"}
+              aria-pressed={!everyone}
+              onClick={() => onEveryone(false)}
+            >
+              Yours
+            </button>
+            <button
+              type="button"
+              className={everyone ? "selected" : ""}
+              aria-pressed={everyone}
+              onClick={() => onEveryone(true)}
+            >
+              Everyone
+            </button>
+          </div>
+        )}
         {list.error && (
           <p role="alert" className="error">
             {errorText(list.error)}
@@ -126,7 +161,11 @@ export function TodayView({
           section("Done", runs, "Nothing marked Done yet.")
         ) : (
           <>
-            {section("Your move", yourMove, "Nothing waiting on you.")}
+            {section(
+              "Your move",
+              yourMove,
+              everyone ? "Nothing waiting on anyone." : "Nothing waiting on you.",
+            )}
             {section("Working", working)}
           </>
         )}

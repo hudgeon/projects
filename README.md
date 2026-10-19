@@ -21,7 +21,7 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
 - **Inbox** (optional) lists email waiting on you. Linked work opens directly
   in Today; unlinked email can be linked to existing work or start a standalone
   activity. Previewing, linking or starting work never marks a message reviewed.
-- **Settings** holds Codex speed, timing comparisons, machines and repository diagnostics: add a machine, set
+- **Settings** holds your name, Codex speed, timing comparisons, machines and repository diagnostics: add a machine, set
   their order, replace tokens or remove one. Existing repository bookmarks work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
 
@@ -368,9 +368,8 @@ archiving its source email is a separate explicit action. **Archive** and
 one-click only, to a public HTTPS host checked on the connection's own DNS
 lookup, and otherwise starts a conversation.
 
-The retired daily brief is no longer displayed, published or emailed. Legacy
-publication requests return Gone without sending mail. Existing historical
-records are retained. Today remains the conversation workspace.
+The retired daily brief returns Gone without sending mail; its historical
+records are retained.
 
 ## Notifications
 
@@ -407,6 +406,9 @@ Screen.
   hashes are stored. Sessions last seven days, logout revokes them, cookies are
   Secure, HttpOnly, SameSite=Strict and host-only, and every browser write must
   be same-origin.
+- **People**: every allowed address is a person with a profile, named from the
+  address until set in Settings. A conversation belongs to whoever started it
+  (older ones to the deployment owner); everyone sees everyone's.
 - **Machines** authenticate with their own tokens, stored as hashes; collector
   and runner tokens reach only their own routes and never read the overview.
 - **Pages** are untrusted HTML: served only to the signed-in owner, framed only
@@ -475,9 +477,7 @@ CI runs the checks on every pull request. A release is a reviewed, merged pull
 request and a manual **Deploy** workflow run on `main`, which:
 
 1. fills `wrangler.jsonc` (which holds placeholders) with the deployment's
-   identity from repository variables (`PROJECTS_HOST`, `PROJECTS_PORTFOLIO`,
-   `PROJECTS_OWNER_EMAIL`, `PROJECTS_EMAIL_FROM` and optionally
-   `PROJECTS_TIME_ZONE`, `PROJECTS_BROWSER_HOSTS` and `PROJECTS_BROWSER_SIGN_IN`);
+   identity from the `PROJECTS_*` repository variables (docs/self-host.md);
 2. checks the merged pull request, CI and, when
    `.github/release-policy.json` requires it, a passing `security-review`
    status from the bot named by `SECURITY_REVIEW_BOT_ID`;

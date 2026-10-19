@@ -127,7 +127,7 @@ test("Done on an activity never queues a mailbox archive, including after the ne
     const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
     const at = Date.now();
     await store.publish(snapshotSchema.parse(inboxSnapshot(at)));
-    const activity = await store.createRun({requestId: randomUUID(), text: "Investigate source", projectId: null, agent: "auto", workIssue: 7, emailThread: "bbbbbbbbbb01"});
+    const activity = await store.createRun({requestId: randomUUID(), text: "Investigate source", projectId: null, agent: "auto", workIssue: 7, emailThread: "bbbbbbbbbb01"}, "owner@example.com");
     await store.archiveRun(activity.id, true);
     assert.deepEqual(await store.pendingInboxActions(), []);
     await store.publish(snapshotSchema.parse(inboxSnapshot(at + 1000)));

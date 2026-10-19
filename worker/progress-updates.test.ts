@@ -62,7 +62,7 @@ test("five-minute summaries survive alarms, duplicate receipts, restart and disc
       projectId: null,
       agent: "auto",
       workIssue: null,
-    });
+    }, "owner@example.com");
     assert.equal((await portfolio.getRun(runId))?.nextUpdateAt, undefined);
     const claim = await portfolio.claimRun(owner, [], undefined, "studio");
     assert.ok(claim?.nextUpdateAt && claim.nextUpdateAt > Date.now() + 290_000);

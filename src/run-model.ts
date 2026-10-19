@@ -425,6 +425,10 @@ export type Run = {
   workIssue: number | null;
   emailThread?: string | null;
   lane?: Lane;
+  // The person who started it, by email. Conversations from before people had
+  // profiles belong to the deployment owner, which the portfolio fills in when
+  // it reads them.
+  owner: string;
   generation: number;
   state: RunState;
   createdAt: number;
@@ -459,6 +463,7 @@ export type RunSummary = Pick<
   | "emailThread"
   | "lane"
   | "host"
+  | "owner"
 > & {
   title: string;
   projectIds?: string[];

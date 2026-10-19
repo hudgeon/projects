@@ -27,6 +27,7 @@ import {
 import { conversationSearch, workSearch } from "./navigation";
 import { clip } from "./run-text";
 import { api, privateQueryPolicy } from "./overview-query";
+import { useOwnerLabel } from "./people-view";
 import type { Run, RunSummary } from "./run-model";
 import type { ArchiveEntry } from "./archive-model";
 
@@ -197,6 +198,7 @@ function MailRow({
   const client = useQueryClient();
   const { thread, linked, conversation, state, action } = item;
   const [label, tone] = conversation ? runStates[conversation.state] : ["", ""];
+  const ownerLabel = useOwnerLabel();
   // No one-click link: archive now and let a quick conversation leave the list.
   const askToUnsubscribe = useMutation({
     mutationFn: async () => {
@@ -294,6 +296,7 @@ function MailRow({
           />
           <strong>{conversation.archivedAt ? "Done" : label}</strong>
           {conversation.status ? ` · ${conversation.status}` : ""}
+          {` · ${ownerLabel(conversation.owner)}`}
         </Link>
       )}
       {action?.state === "failed" && (
