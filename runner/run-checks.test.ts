@@ -29,10 +29,12 @@ test("before a dispatch, Jev judges each finished report against the brief, seei
   try {
     const checks = runChecks({selector, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal});
     const done = helper("Merged the refresh fix and installed it on both machines."), running = {...helper("x"), state: "running" as const, result: null};
-    checks.dispatch("Check the refresh fix is merged and installed on both machines", [done, running]);
+    const next = {...running, id: randomUUID()};
+    checks.dispatch("Check the refresh fix is merged and installed on both machines", next, [done, running, next]);
     await waitFor(async () => (await receipts(dir)).length === 1, 5000);
     const [receipt] = await receipts(dir);
     assert.equal(receipt.kind, "repeat");
+    assert.equal(receipt.child, next.id, "the receipt names the dispatched helper");
     assert.deepEqual(receipt.judged, {[done.id]: 0.8});
     assert.deepEqual(Object.keys(bodies[0].state), ["brief", "reports"]);
     assert.deepEqual(bodies[0].state.reports, [{id: done.id, state: "completed", summary: done.result!.summary, checks: ["Tests passed"]}]);
@@ -54,13 +56,17 @@ test("at a progress note, Jev rates that helper's recent notes on four signs; no
     await waitFor(async () => (await receipts(dir)).length === 1, 5000);
     const [receipt] = await receipts(dir);
     assert.deepEqual(receipt.judged, {progressing: 0.3, repeating: 0.3, waiting: 0.3, blocked: 0.3});
+    assert.equal(receipt.child, a);
     assert.deepEqual(bodies[0].state.notes.map((n: {done: string[]}) => n.done), [["Read the code"], []], "only this helper's notes, oldest first");
     assert.equal(Object.keys(bodies[0].questions).length, 4);
 
     const calls: unknown[] = [];
     const off = runChecks({selector: {...ok, mode: "off", fetch: async () => { calls.push(1); return Response.json({}); }}, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal});
-    off.progress(a, notes); off.dispatch("Brief", [helper("Done")]);
-    runChecks({selector: ok, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal}).dispatch("Brief", [{...helper("x"), result: null}]);
+    off.progress(a, notes); off.dispatch("Brief", helper("Next"), [helper("Done")]);
+    const on = runChecks({selector: ok, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal});
+    const resumed = helper("Its own earlier report");
+    on.dispatch("Brief", helper("Next"), [{...helper("x"), result: null}]);
+    on.dispatch("Continue", resumed, [resumed]);
     await new Promise((r) => setTimeout(r, 100));
     assert.equal(calls.length, 0);
     assert.equal((await receipts(dir)).length, 1);

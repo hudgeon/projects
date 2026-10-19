@@ -109,3 +109,16 @@ export const UNAVAILABLE: ReadonlySet<string> = new Set([
   "policy_refused",
   "native_unavailable",
 ]);
+export const MASTER_INPUT_CHAR_LIMIT = 128_000;
+// A coordinator session whose latest request passed this many tokens hands
+// over to a fresh one with the full brief.
+export const MASTER_CONTEXT_LIMIT = 250_000;
+// Failures the runner gives back to the master in one turn before it stops
+// and tells the owner.
+export const HANDBACK_LIMIT = 3;
+// What the owner reads when a turn stops on a failure, with what to do next.
+export function stoppedText(message: string) {
+  return /send a follow-up|your move/i.test(message)
+    ? message
+    : `${message}\n\n**Your move:** Send a follow-up to continue. The coordinator checks what was finished before redoing anything.`;
+}

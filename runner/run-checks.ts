@@ -45,6 +45,50 @@ const progressQuestions = [
   ),
 ];
 export const PROGRESS_SIGNS = ["progressing", "repeating", "waiting", "blocked"];
+// What Jev reads for each kind of check, as its receipt records it.
+export type CheckInputs =
+  | { brief: string; reports: { id: string; state: string; summary: string; checks: string[] }[] }
+  | { notes: { at: string; done: string[]; remaining: string[]; yourMove: string | null }[] };
+const repeatQuestion = (i: number) =>
+  noul(
+    `Does the finished helper report in \`reports[${i}]\` already answer everything the new task in \`brief\` asks for, so that doing the brief would repeat work that report shows was done?`,
+    "The report already covers every part of the brief; doing it again repeats finished work.",
+    "The brief asks for something the report does not show as done, such as a new check, change, fix or later evidence.",
+  );
+// Jev's judgment of a check's inputs with the current questions: one
+// probability per report, or per progress sign. The runner records it; the
+// quality loop replays stored inputs through it.
+export async function judgeCheck(o: {
+  inputs: CheckInputs;
+  selector: Selector;
+  signal: AbortSignal;
+  trigger: "dispatch-check" | "progress-check" | "check-replay";
+}) {
+  const [questions, labels] =
+    "reports" in o.inputs
+      ? [o.inputs.reports.map((_, i) => repeatQuestion(i)), o.inputs.reports.map((r) => r.id)]
+      : [progressQuestions, PROGRESS_SIGNS];
+  const result = await judgeContext({
+    version: createHash("sha256").update(JSON.stringify(o.inputs)).digest("hex"),
+    state: o.inputs,
+    questions: Object.fromEntries(questions.map((q, i) => [`keep_${i}`, q])),
+    count: questions.length,
+    signal: o.signal,
+    selector: o.selector,
+    trigger: o.trigger,
+  });
+  const record = result.record;
+  return record
+    ? {
+        judged: Object.fromEntries(labels.map((label, i) => [label, record.probabilities[`keep_${i}`]])),
+        model: record.model,
+        inputTokens: record.inputTokens,
+        durationMs: Math.round(record.durationMs),
+        transport: record.transport,
+        selectionId: record.selectionId,
+      }
+    : { reason: result.reason, failure: result.failure };
+}
 export function runChecks(o: {
   selector?: Selector;
   stateDir: string;
@@ -54,84 +98,45 @@ export function runChecks(o: {
 }) {
   const on = !!o.selector && o.selector.mode !== "off";
   const dir = path.join(o.stateDir, "run-checks");
-  const judge = async (
-    kind: "repeat" | "progress",
-    trigger: "dispatch-check" | "progress-check",
-    state: unknown,
-    questions: unknown[],
-    labels: string[],
-  ) => {
+  // The receipt names the helper judged or dispatched, so a labeller can
+  // find what it did next in the conversation's journal.
+  const judge = async (kind: "repeat" | "progress", child: string, inputs: CheckInputs) => {
     const at = Date.now();
-    const result = await judgeContext({
-      version: createHash("sha256").update(JSON.stringify(state)).digest("hex"),
-      state,
-      questions: Object.fromEntries(questions.map((q, i) => [`keep_${i}`, q])),
-      count: questions.length,
-      signal: o.signal,
-      selector: o.selector!,
-      trigger,
-    });
-    const record = result.record;
+    const trigger = kind === "repeat" ? "dispatch-check" : "progress-check";
+    const judgment = await judgeCheck({ inputs, selector: o.selector!, signal: o.signal, trigger });
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await writeFile(
       path.join(dir, `${new Date(at).toISOString().replace(/[:.]/g, "-")}-${kind}-${randomUUID()}.json`),
-      JSON.stringify({
-        kind,
-        at,
-        runId: o.runId,
-        inputs: state,
-        ...(record
-          ? {
-              judged: Object.fromEntries(labels.map((label, i) => [label, record.probabilities[`keep_${i}`]])),
-              model: record.model,
-              inputTokens: record.inputTokens,
-              durationMs: Math.round(record.durationMs),
-              transport: record.transport,
-              selectionId: record.selectionId,
-            }
-          : { reason: result.reason, failure: result.failure }),
-      }),
+      JSON.stringify({ kind, at, runId: o.runId, child, inputs, ...judgment }),
       { mode: 0o600 },
     );
     const receipts = (await readdir(dir)).filter((f) => f.endsWith(".json")).sort();
     for (const old of receipts.slice(0, Math.max(0, receipts.length - (o.keep ?? CHECK_RECEIPTS))))
       await rm(path.join(dir, old), { force: true });
-    if (record)
-      telemetry("runner", "jev_check_judged", { runId: o.runId, contextTrigger: trigger, durationMs: Math.round(record.durationMs) });
-    else if (result.failure)
-      telemetry("runner", "jev_selection_failed", { runId: o.runId, contextTrigger: trigger, contextFailure: result.failure }, "warn");
+    if ("judged" in judgment)
+      telemetry("runner", "jev_check_judged", { runId: o.runId, contextTrigger: trigger, durationMs: judgment.durationMs });
+    else if (judgment.failure)
+      telemetry("runner", "jev_selection_failed", { runId: o.runId, contextTrigger: trigger, contextFailure: judgment.failure }, "warn");
   };
   // A judgment never delays or changes the conversation.
   const quietly = (work: () => Promise<void>) => {
     if (on) void work().catch(() => {});
   };
   return {
-    // Before a helper starts on a brief: does a finished helper's report already answer it?
-    dispatch(brief: string, children: Child[]) {
-      const done = children.filter((c) => c.result).slice(-REPORTS);
+    // Before a helper starts on a brief: does another finished helper's report already answer it?
+    dispatch(brief: string, child: Child, children: Child[]) {
+      const done = children.filter((c) => c !== child && c.result).slice(-REPORTS);
       if (!done.length) return;
       quietly(() =>
-        judge(
-          "repeat",
-          "dispatch-check",
-          {
-            brief: clip(brief, 6000),
-            reports: done.map((c) => ({
-              id: c.id,
-              state: c.state,
-              summary: clip(c.result!.summary, 3000),
-              checks: c.result!.checks.slice(0, 8).map((check) => clip(check, 300)),
-            })),
-          },
-          done.map((_, i) =>
-            noul(
-              `Does the finished helper report in \`reports[${i}]\` already answer everything the new task in \`brief\` asks for, so that doing the brief would repeat work that report shows was done?`,
-              "The report already covers every part of the brief; doing it again repeats finished work.",
-              "The brief asks for something the report does not show as done, such as a new check, change, fix or later evidence.",
-            ),
-          ),
-          done.map((c) => c.id),
-        ),
+        judge("repeat", child.id, {
+          brief: clip(brief, 6000),
+          reports: done.map((c) => ({
+            id: c.id,
+            state: c.state,
+            summary: clip(c.result!.summary, 3000),
+            checks: c.result!.checks.slice(0, 8).map((check) => clip(check, 300)),
+          })),
+        }),
       );
     },
     // At each of a helper's progress notes, its recent notes in order.
@@ -139,20 +144,14 @@ export function runChecks(o: {
       const own = notes.filter((n) => n.childId === childId).slice(-NOTES);
       if (!own.length) return;
       quietly(() =>
-        judge(
-          "progress",
-          "progress-check",
-          {
-            notes: own.map((n) => ({
-              at: new Date(n.at).toISOString(),
-              done: n.done,
-              remaining: n.remaining,
-              yourMove: n.yourMove ?? null,
-            })),
-          },
-          progressQuestions,
-          PROGRESS_SIGNS,
-        ),
+        judge("progress", childId, {
+          notes: own.map((n) => ({
+            at: new Date(n.at).toISOString(),
+            done: n.done,
+            remaining: n.remaining,
+            yourMove: n.yourMove ?? null,
+          })),
+        }),
       );
     },
   };

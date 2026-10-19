@@ -186,6 +186,24 @@ the history. Each machine's labels and gold set stay on that machine. The
 October 2026 validation's `turns.json`, `labels.json` and `replay3.json` in
 that directory are read in place; `score replay3.json` reproduces its numbers.
 
+`checks` scores the shadow run checks of [run-health.md](run-health.md) from
+the receipts in the runner state's `run-checks/`, without calling Jev: for
+whether a dispatch repeats a finished helper's report (each report, and each
+dispatch by its highest report) and for each progress sign, how many checks
+each threshold from 0.30 to 0.95 would flag, its precision and recall against
+the machine's `jev-evaluation/check-labels.json`, Jev's AUC, latency, input
+tokens and estimated cost. `checks replay` judges the labelled checks and the
+20 newest others again with the current questions (`--limit N`, `--all`,
+`--same <file>`), saves them in `checks-replay-*.json` and adds how far each
+probability moved and how many crossed each threshold; `checks score <file>`
+reprints one. `checks unlabelled` lists checks still to label, newest first,
+with what the conversation's journal shows the helper did next and without
+Jev's ratings, and `checks label <id> <report index or sign>=<0|1>...` records
+them (1: the dispatched helper redid work that report showed done, or the sign
+held at the newest note) and copies the receipt into `jev-evaluation/checks/`.
+`--kind repeat` or `progress` narrows any of them. A change to a run check's
+questions carries before/after metrics from `checks replay`, as below.
+
 Any change to retrieval, question wording, the 0.5 cutoff or the pinned model
 ships with before/after metrics from this command in its PR: on each machine
 with labels, replay on main, then replay `--same` reviews on the branch, and

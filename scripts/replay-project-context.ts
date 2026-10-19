@@ -1,7 +1,8 @@
 // Replays stored Jev project reviews on this checkout's code and scores them
-// against this machine's private labels and the files each turn used. Run on
-// a connected machine; see docs/context-selection.md. Prints numbers, review
-// ids and paths; unit text appears only when listing units to label.
+// against this machine's private labels and the files each turn used, and
+// does the same for the shadow run checks (`checks`). Run on a connected
+// machine; see docs/context-selection.md. Prints numbers, ids and paths; unit
+// and check text appear only when listing what to label.
 import { execFile } from "node:child_process";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -16,6 +17,7 @@ import { KEEP_FROM } from "../runner/project-context";
 import { RECENT_COMMENTS } from "../runner/project-sources";
 import { reviewsDir } from "../runner/project-turn";
 import { registry } from "../runner/workspaces";
+import { checkDirs, followUp, formatChecks, judgedNames, parseCheck, replayChecks, scoreChecks, storedChecks, type Check, type CheckLabels } from "./check-metrics";
 import { format, formatUsage, key, score, type Labels, type Result } from "./project-metrics";
 import { evaluationDir, replayReview, storedReviews, type Review } from "./project-replay";
 
@@ -27,19 +29,30 @@ const flag = (name: string) => args.includes(name);
 const values = (name: string) =>
   args.flatMap((arg, i) => (arg === name && args[i + 1] ? [args[i + 1]] : []));
 const value = (name: string) => values(name).at(-1);
-const words = args.filter((arg, i) => !arg.startsWith("--") && !args[i - 1]?.match(/^--(?:review|same|from|limit|width)$/));
-const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label"].includes(words[0]) ? words : ["replay", ...words];
+const words = args.filter((arg, i) => !arg.startsWith("--") && !args[i - 1]?.match(/^--(?:review|same|from|limit|width|kind)$/));
+const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label", "checks"].includes(words[0]) ? words : ["replay", ...words];
 
 const machine = configSchema
   .extend({ stateDir: z.string().optional(), context: contextConfigSchema.default({ mode: "off" }) })
   .parse(JSON.parse(await readFile(path.join(homedir(), ".local/share/project-overview/machine.json"), "utf8")));
 const stateDir = machine.stateDir ?? path.join(machine.home, ".local/share/project-overview/runner");
 const dir = evaluationDir(stateDir);
+const readLabels = (file: string) =>
+  readFile(file, "utf8").then(JSON.parse, (error) => {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  });
 const labelsFile = path.join(dir, "labels.json");
-const labels: Labels = await readFile(labelsFile, "utf8").then(JSON.parse, (error) => {
-  if (error.code === "ENOENT") return {};
-  throw error;
-});
+const labels: Labels = await readLabels(labelsFile);
+const jevKey = keptKey(() => machineSecret(machine, "JEV_API_KEY"));
+// Read once before timing, as a running executor keeps it in memory.
+const readKey = () =>
+  jevKey().catch(() => {
+    throw Error("JEV_API_KEY could not be read from this machine's Doppler config.");
+  });
+const git = (args: string[]) => exec("git", args, { cwd: path.dirname(import.meta.dirname) }).then(({ stdout }) => stdout.trim());
+const code = async () => `${await git(["rev-parse", "--short", "HEAD"])}${(await git(["status", "--porcelain", "--", "runner", "scripts", "src"])) ? " with uncommitted changes" : ""}`;
+const stamp = () => new Date().toISOString().replace(/[-:]|\.\d+/g, "");
 const replaySchema = z.object({ results: z.array(z.any()) }).passthrough();
 const replays = async () =>
   (await readdir(dir).catch(() => [] as string[])).filter((n) => /^replay-[\dTZ]+\.json$/.test(n)).sort();
@@ -51,7 +64,74 @@ async function saved(name = value("--from")) {
 const reviewIds = (results: Result[], prefix?: string) =>
   results.filter((r) => !prefix || r.id.startsWith(prefix));
 
-if (command === "score") {
+if (command === "checks") {
+  // Shadow run checks: scored as the runner recorded them, replayed with the
+  // current questions, listed for labelling without Jev's ratings, labelled.
+  const [action = "score", ...rest] = operands;
+  const checkLabelsFile = path.join(dir, "check-labels.json");
+  const checkLabels: CheckLabels = await readLabels(checkLabelsFile);
+  const ofKind = (c: Check) => !value("--kind") || c.kind === value("--kind");
+  const stored = (await storedChecks(stateDir, dir)).filter(ofKind);
+  const checkReplays = async () => (await readdir(dir).catch(() => [] as string[])).filter((n) => /^checks-replay-[\dTZ]+\.json$/.test(n)).sort();
+  const savedChecks = async (name?: string) => {
+    const file = name ? path.resolve(dir, name) : path.join(dir, (await checkReplays()).at(-1) ?? "none");
+    const replay = z.object({ code: z.string(), model: z.string(), results: z.array(z.any()) }).parse(JSON.parse(await readFile(file, "utf8")));
+    return { file, replay, results: replay.results.map((r) => parseCheck(r, r.id, r.source)).filter(ofKind) };
+  };
+  const unlabelled = (c: Check) => judgedNames(c).some((n) => checkLabels[c.id]?.[n] === undefined);
+  if (action === "score") {
+    const saved = rest[0] ? await savedChecks(rest[0]) : null;
+    const report = scoreChecks(saved?.results ?? stored, checkLabels);
+    console.log(flag("--json") ? JSON.stringify(report, null, 2) : formatChecks(report, saved ? `Replay ${path.basename(saved.file)} on ${machine.host} (code ${saved.replay.code}, ${saved.replay.model})` : `Run checks on ${machine.host}, as recorded`));
+  } else if (action === "replay") {
+    const same = value("--same");
+    const sameIds = same ? new Set((await savedChecks(same)).results.map((c) => c.id)) : null;
+    const others = stored.filter((c) => !checkLabels[c.id]);
+    const chosen = sameIds ? stored.filter((c) => sameIds.has(c.id)) : [...stored.filter((c) => checkLabels[c.id]), ...(flag("--all") ? others : others.slice(-Number(value("--limit") ?? HISTORY)))];
+    if (!chosen.length) throw Error("No stored run checks to replay on this machine.");
+    await readKey();
+    const results = await replayChecks(chosen, { mode: "select", gateway: machine.context.gateway, key: jevKey });
+    const file = path.join(dir, `checks-replay-${stamp()}.json`);
+    const version = await code();
+    await savePrivate(file, { at: new Date().toISOString(), host: machine.host, code: version, model: JEV_MODEL, results });
+    for (const old of (await checkReplays()).slice(0, -REPLAYS)) await unlink(path.join(dir, old)).catch(() => {});
+    console.log(flag("--json") ? JSON.stringify(scoreChecks(results, checkLabels), null, 2) : formatChecks(scoreChecks(results, checkLabels), `Replay ${path.basename(file)} on ${machine.host} (code ${version}, ${JEV_MODEL})`));
+  } else if (action === "unlabelled") {
+    const width = Number(value("--width") ?? 400);
+    const clip = (texts: string[]) => texts.join("; ").slice(0, width).replace(/\n/g, " / ") || "-";
+    console.log("Unlabelled run checks, newest first, without Jev's ratings. Label a repeat check's report 1 if the dispatched helper redid work that report already showed done, else 0; a progress check's sign 1 if it held at the newest note, else 0. Record them with: npm run context:replay -- checks label <id> <report index or sign>=<0|1> ...");
+    for (const c of stored.filter((c) => c.judged && unlabelled(c)).slice(-Number(value("--limit") ?? HISTORY)).reverse()) {
+      const after = await followUp(stateDir, c);
+      console.log(`\n=== ${c.id} (${after?.title ?? "conversation journal gone"})`);
+      if ("reports" in c.inputs) {
+        console.log(`Brief: ${clip([c.inputs.brief])}`);
+        c.inputs.reports.forEach((r, i) => console.log(`[${i}] ${r.state}: ${clip([r.summary])}\n    checks: ${clip(r.checks)}`));
+      } else for (const n of c.inputs.notes) console.log(`- ${n.at} done: ${clip(n.done)} | remaining: ${clip(n.remaining)}${n.yourMove ? ` | your move: ${clip([n.yourMove])}` : ""}`);
+      const helper = after?.helper;
+      console.log(helper ? `Then the helper was ${helper.state}: ${clip([helper.summary ?? "no result"])}\n    checks: ${clip(helper.checks)}` : "Then: the helper is not in the journal.");
+      for (const n of after?.later ?? []) console.log(`  later ${new Date(n.at).toISOString()} done: ${clip(n.done)} | remaining: ${clip(n.remaining)}`);
+    }
+  } else if (action === "label") {
+    const [prefix, ...pairs] = rest;
+    const matches = stored.filter((c) => prefix && c.id.startsWith(prefix));
+    if (matches.length !== 1) throw Error("Name one stored run check by its id or a unique prefix.");
+    const [check] = matches;
+    const names = judgedNames(check);
+    const entry = (checkLabels[check.id] ??= {});
+    for (const pair of pairs) {
+      const [, which = "", label] = /^([\w-]+)=([01])$/.exec(pair) ?? [];
+      const name = /^\d+$/.test(which) ? names[Number(which)] : names.find((n) => n === which);
+      if (!name) throw Error(`Use <report index or sign>=<0|1> for something the check judged: ${pair}`);
+      entry[name] = Number(label);
+    }
+    await savePrivate(checkLabelsFile, checkLabels);
+    // A labelled check joins the gold set, beyond the receipts' retention.
+    const { history, gold } = checkDirs(stateDir, dir);
+    if (!(await readFile(path.join(gold, `${check.id}.json`)).catch(() => null)))
+      await readFile(path.join(history, `${check.id}.json`), "utf8").then((text) => savePrivate(path.join(gold, `${check.id}.json`), JSON.parse(text)), () => {});
+    console.log(`${check.id}: ${names.filter((n) => entry[n] === undefined).length} of ${names.length} judgments still unlabelled.`);
+  } else throw Error("Use checks [score [replay file] | replay | unlabelled | label <id> <report index or sign>=<0|1> ...].");
+} else if (command === "score") {
   for (const name of operands.length ? operands : [undefined]) {
     const { file, replay } = await saved(name);
     const report = score(replay.results, labels);
@@ -124,11 +204,7 @@ if (command === "score") {
         ];
   if (!chosen.length) throw Error("No stored reviews to replay on this machine.");
   const projects = await registry(machine);
-  const jevKey = keptKey(() => machineSecret(machine, "JEV_API_KEY"));
-  // Read once before timing, as a running executor keeps it in memory.
-  await jevKey().catch(() => {
-    throw Error("JEV_API_KEY could not be read from this machine's Doppler config.");
-  });
+  await readKey();
   const issues = new Map<string, Promise<{ title: string; body: string; updatedAt: string; comments: { body: string; createdAt: string }[] }>>();
   const readIssue = async (repo: string, number: number, before: number) => {
     const name = `${repo}#${number}`;
@@ -158,11 +234,10 @@ if (command === "score") {
     const kept = result.considered.filter((u) => u.kept);
     console.error(`${result.id} ${result.reason}: ${kept.length} units, ${kept.reduce((n, u) => n + u.endChar - u.startChar, 0)} chars of ${result.considered.length} shortlisted; judge ${Math.round(result.judgeMs ?? 0)} ms`);
   }
-  const git = (args: string[]) => exec("git", args, { cwd: import.meta.dirname }).then(({ stdout }) => stdout.trim());
-  const code = `${await git(["rev-parse", "--short", "HEAD"])}${(await git(["status", "--porcelain", "--", "runner", "scripts", "src"])) ? " with uncommitted changes" : ""}`;
-  const file = path.join(dir, `replay-${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}.json`);
-  await savePrivate(file, { at: new Date().toISOString(), host: machine.host, code, model: JEV_MODEL, keepFrom: KEEP_FROM, results });
+  const version = await code();
+  const file = path.join(dir, `replay-${stamp()}.json`);
+  await savePrivate(file, { at: new Date().toISOString(), host: machine.host, code: version, model: JEV_MODEL, keepFrom: KEEP_FROM, results });
   for (const old of (await replays()).slice(0, -REPLAYS)) await unlink(path.join(dir, old)).catch(() => {});
   const report = score(results, labels);
-  console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} on ${machine.host} (code ${code}, ${JEV_MODEL}, cutoff ${KEEP_FROM})`));
+  console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} on ${machine.host} (code ${version}, ${JEV_MODEL}, cutoff ${KEEP_FROM})`));
 }

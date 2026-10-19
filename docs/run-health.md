@@ -80,8 +80,10 @@ or evidence lines (owner's approval, 19 October 2026). Requests use context
 selection's key, gateway, request limits and failure diagnostics, tagged
 process `run-checks` with trigger `dispatch-check` or `progress-check`. Each
 judgment is a private receipt in the runner state's `run-checks/` (newest
-1,000) with its inputs, probabilities, tokens and latency, never in snapshots
-or telemetry; logs count `jev_check_judged` and record `jev_selection_failed`
+1,000) with the helper it concerns, its inputs, probabilities, tokens and
+latency, never in snapshots or telemetry; logs count `jev_check_judged` and record `jev_selection_failed`
 with these triggers. Nothing acts on a judgment: the master and the owner see
 no difference until labelled conversations validate a threshold, as the 0.5
-cutoff was validated for project review.
+cutoff was validated for project review. `npm run context:replay -- checks`
+labels and scores them (see the quality loop in
+[context-selection.md](context-selection.md)).

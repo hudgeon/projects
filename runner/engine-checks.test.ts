@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdir, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { executeRun } from "./engine";
@@ -34,5 +34,9 @@ test("a second dispatch is checked against the first helper's report, and a help
     assert.deepEqual(repeat.reports.map((r: {summary: string}) => r.summary), ["Inspected the project."]);
     assert.deepEqual(progress.notes.map((n: {done: string[]}) => n.done), [["Looked again"]]);
     assert.equal(masters, 3, "the checks never changed a decision");
+    const receipts = await Promise.all((await readdir(path.join(dir, "run-checks"))).map(async (f) => JSON.parse(await readFile(path.join(dir, "run-checks", f), "utf8"))));
+    const journal = JSON.parse(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"));
+    const second = journal.progress.children[1].id;
+    assert.deepEqual(receipts.map((r) => [r.kind, r.child]).sort(), [["progress", second], ["repeat", second]], "each receipt names the second helper");
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
