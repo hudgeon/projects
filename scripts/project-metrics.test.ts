@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { atCutoff, format, key, score, usageProxy, type Result, type Unit } from "./project-metrics";
+import { atCutoff, format, formatPositions, key, positions, score, usageProxy, type Result, type Unit } from "./project-metrics";
 
 const unit = (path: string, start: number, length: number, noul: number | null, kept = false, extra: Partial<Unit> = {}): Unit => ({
   path,
@@ -106,4 +106,20 @@ test("usage proxies compare a selection with the project files its turn read or 
   assert.equal(report.usage.replayed.shortlistRecall, 2 / 3);
   assert.equal(report.usage.recorded.precision, 1 / 2);
   assert.equal(report.usage.recorded.unitPrecision, 0);
+});
+
+test("ratings group by retrieval rank band, so a reversed replay shows whether the slot moved them", () => {
+  const units = Array.from({ length: 20 }, (_, i) => unit("doc.md", i * 100, 100, i < 8 ? 0.8 : 0.2));
+  const labels = { r: { units: Object.fromEntries(units.map((u, i) => [key(u), i % 2 ? 2 : 0])) } };
+  const bands = positions([result("r", units)], labels);
+  assert.deepEqual(bands.map((b) => `${b.from}-${b.to}`), ["0-7", "8-15", "16-23", "24-39"]);
+  assert.equal(bands[0].onSubject.n, 4);
+  assert.equal(bands[0].onSubject.mean, 0.8);
+  assert.equal(bands[0].onSubject.kept, 1);
+  assert.equal(bands[1].onSubject.kept, 0);
+  assert.equal(bands[1].offTopic.n, 4);
+  assert.equal(bands[0].auc.strict, 0.5, "same rating for both labels within the band");
+  assert.equal(bands[3].onSubject.n, 0);
+  assert.equal(bands[3].onSubject.mean, null);
+  assert.match(formatPositions(bands, "Replay x (code, sent reversed)"), /^Replay x[^\n]*\n[^\n]*rank \| on-subject n/);
 });

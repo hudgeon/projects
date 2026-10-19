@@ -2,7 +2,7 @@
 // each original turn read or changed. Reports carry numbers, review ids and
 // paths only; unit text stays in the private replay file.
 import { JEV_INPUT_COST_PER_TOKEN } from "../runner/context";
-import { CANDIDATE_CHARS } from "../runner/project-context";
+import { CANDIDATE_CHARS, KEEP_FROM } from "../runner/project-context";
 import { eligible, instructionFile } from "../runner/project-sources";
 import type { Usage } from "../runner/project-turn";
 
@@ -23,6 +23,7 @@ export type Result = {
   reason: string;
   strategy?: string;
   failure?: string;
+  status?: number;
   judgeMs: number | null;
   fetchMs?: number | null;
   totalMs?: number | null;
@@ -106,6 +107,13 @@ function selection(
   };
 }
 
+// How often a positive rating beats a negative one, ties counting half.
+function wins(positive: number[], negative: number[]) {
+  let total = 0;
+  for (const p of positive)
+    for (const n of negative) total += p > n ? 1 : p === n ? 0.5 : 0;
+  return ratio(total, positive.length * negative.length);
+}
 // How often Jev's probability ranks a relevant unit above an irrelevant one.
 function auc(rows: { units: Unit[]; labels: Record<string, number> }[], strict: boolean) {
   const positive: number[] = [],
@@ -116,10 +124,7 @@ function auc(rows: { units: Unit[]; labels: Record<string, number> }[], strict: 
       if (label === undefined || u.noul === null) continue;
       (label >= (strict ? 2 : 1) ? positive : negative).push(u.noul);
     }
-  let wins = 0;
-  for (const p of positive)
-    for (const n of negative) wins += p > n ? 1 : p === n ? 0.5 : 0;
-  return ratio(wins, positive.length * negative.length);
+  return wins(positive, negative);
 }
 
 // Implicit usage: did the turn read or change the files a selection supplied,
@@ -301,4 +306,43 @@ export function format(report: Report, title: string) {
     ),
   );
   return lines.join("\n");
+}
+
+// Jev's ratings by a unit's retrieval rank, its slot in a request sent in
+// retrieval order. Against a replay sent reversed or shuffled, this shows
+// whether the slot moves the rating.
+export const RANK_BANDS: [number, number][] = [[0, 7], [8, 15], [16, 23], [24, 39]];
+export function positions(results: Result[], labels: Labels) {
+  return RANK_BANDS.map(([from, to]) => {
+    const rated = results.flatMap((r) =>
+      r.considered.flatMap((u, i) => {
+        const label = labels[r.id]?.units[key(u)];
+        return i >= from && i <= to && label !== undefined && u.noul !== null ? [{ label, noul: u.noul }] : [];
+      }),
+    );
+    const of = (label: number) => rated.filter((x) => x.label === label).map((x) => x.noul);
+    const [on, adjacent, off] = [of(2), of(1), of(0)];
+    const band = (values: number[]) => ({
+      n: values.length,
+      mean: mean(values),
+      kept: ratio(values.filter((p) => p >= KEEP_FROM).length, values.length),
+    });
+    return {
+      from,
+      to,
+      onSubject: band(on),
+      adjacent: band(adjacent),
+      offTopic: band(off),
+      auc: { strict: wins(on, [...adjacent, ...off]), lenient: wins([...on, ...adjacent], off) },
+    };
+  });
+}
+export function formatPositions(bands: ReturnType<typeof positions>, title: string) {
+  return [
+    title,
+    "rank | on-subject n | mean | kept | adjacent n | mean | off-topic n | mean | kept | AUC strict | lenient",
+    ...bands.map((b) =>
+      [`${b.from}-${b.to}`, b.onSubject.n, num(b.onSubject.mean, 2), pct(b.onSubject.kept), b.adjacent.n, num(b.adjacent.mean, 2), b.offTopic.n, num(b.offTopic.mean, 2), pct(b.offTopic.kept), num(b.auc.strict, 3), num(b.auc.lenient, 3)].join(" | "),
+    ),
+  ].join("\n");
 }

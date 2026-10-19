@@ -36,12 +36,39 @@ test("before a dispatch, Jev judges each finished report against the brief, seei
     assert.equal(receipt.kind, "repeat");
     assert.equal(receipt.child, next.id, "the receipt names the dispatched helper");
     assert.deepEqual(receipt.judged, {[done.id]: 0.8});
+    assert.deepEqual(receipt.parts, {[done.id]: {covers: 0.8, beyond: 0.8}}, "both judgments are kept for policy in code");
+    assert.equal(receipt.omittedReports, undefined);
     assert.deepEqual(Object.keys(bodies[0].state), ["brief", "reports"]);
     assert.deepEqual(bodies[0].state.reports, [{id: done.id, state: "completed", summary: done.result!.summary, checks: ["Tests passed"]}]);
-    assert.equal(Object.keys(bodies[0].questions).length, 1);
+    assert.equal(Object.keys(bodies[0].questions).length, 2, "one report, two questions");
+    assert.match(bodies[0].questions.keep_0.instructions, /already show as done or verified something/);
+    assert.match(bodies[0].questions.keep_1.instructions, /ask for something that the report/);
     assert.doesNotMatch(JSON.stringify(bodies[0]), /private-/, "no paths, sessions or evidence");
     assert.match(urls[0], /custom-typesafe\/v1\/systemone$/);
     assert.deepEqual([metadata[0].process, metadata[0].trigger], ["run-checks", "dispatch-check"]);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a dispatch check with more reports than the request can hold drops the oldest and counts them, instead of failing", async () => {
+  const dir = await fixture(), bodies: any[] = [];
+  const selector: Selector = {mode: "select", key: async () => "fixture-key", fetch: async (_url, init) => {
+    const body = JSON.parse(init!.body as string); bodies.push(body); return reply(body);
+  }};
+  try {
+    const checks = runChecks({selector, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal});
+    const done = Array.from({length: 8}, (_, i) => ({...helper(`Report ${i} ${"finished detail ".repeat(200)}`), result: {outcome: "completed" as const, summary: `Report ${i} ${"finished detail ".repeat(200)}`, checks: Array.from({length: 8}, (_, j) => `Check ${j} ${"evidence ".repeat(30)}`), links: []}}));
+    const next = {...helper("x"), id: randomUUID(), state: "running" as const, result: null};
+    checks.dispatch(`Verify delivery ${"of every part ".repeat(400)}`, next, [...done, next]);
+    await waitFor(async () => (await receipts(dir)).length === 1, 5000);
+    const [receipt] = await receipts(dir);
+    assert.equal(bodies.length, 1, "judged in one request that fits");
+    assert.ok(Buffer.byteLength(JSON.stringify(bodies[0].state)) <= 30_000);
+    const kept = bodies[0].state.reports.map((r: {id: string}) => r.id);
+    assert.ok(kept.length < 8 && kept.length >= 1);
+    assert.deepEqual(kept, done.slice(-kept.length).map((c) => c.id), "the newest reports stay");
+    assert.equal(receipt.omittedReports, 8 - kept.length);
+    assert.equal(receipt.inputs.reports.length, kept.length, "the receipt holds what Jev saw");
+    assert.equal(Object.keys(receipt.judged).length, kept.length);
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 

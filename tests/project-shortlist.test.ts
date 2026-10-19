@@ -9,23 +9,10 @@ import { fixture, selector } from "./project-fixtures";
 
 test("the work issue's body sections and newest comments are candidates", async () => {
   const { cwd, options } = await fixture();
+  // Candidates arrive over the review's batched requests.
+  const sent: { path: string; section?: string }[] = [];
   const mock = selector((body) => {
-    const paths = body.state.candidates.map((c: { path: string }) => c.path);
-    assert.ok(paths.includes("https://github.com/example/work/issues/9"));
-    assert.ok(
-      paths.includes(
-        "https://github.com/example/work/issues/9#comment-2026-01-07T00:00:00Z",
-      ),
-    );
-    assert.ok(
-      !paths.includes(
-        "https://github.com/example/work/issues/9#comment-2026-01-02T00:00:00Z",
-      ),
-    );
-    const latest = body.state.candidates.find((c: { path: string }) =>
-      c.path.endsWith("01-07T00:00:00Z"),
-    );
-    assert.equal(latest.section, "Comment 2026-01-07T00:00:00Z > Status");
+    sent.push(...body.state.candidates);
   });
   try {
     await reviewProjectContext({
@@ -42,7 +29,21 @@ test("the work issue's body sections and newest comments are candidates", async 
         })),
       }),
     });
-    assert.equal(mock.calls, 1);
+    const paths = sent.map((c) => c.path);
+    assert.ok(paths.includes("https://github.com/example/work/issues/9"));
+    assert.ok(
+      paths.includes(
+        "https://github.com/example/work/issues/9#comment-2026-01-07T00:00:00Z",
+      ),
+    );
+    assert.ok(
+      !paths.includes(
+        "https://github.com/example/work/issues/9#comment-2026-01-02T00:00:00Z",
+      ),
+    );
+    const latest = sent.find((c) => c.path.endsWith("01-07T00:00:00Z"));
+    assert.equal(latest!.section, "Comment 2026-01-07T00:00:00Z > Status");
+    assert.ok(mock.calls >= 1);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -62,7 +63,7 @@ test("a large project sends 20 to 40 candidates within the documented request li
     );
   let candidates = 0;
   const mock = selector((body) => {
-    candidates = body.state.candidates.length;
+    candidates += body.state.candidates.length;
     const largest = Math.max(
       ...Object.values(body.questions).map((q) =>
         Buffer.byteLength(JSON.stringify(q)),
@@ -80,6 +81,8 @@ test("a large project sends 20 to 40 candidates within the documented request li
     });
     assert.ok(candidates >= 20 && candidates <= 40, String(candidates));
     assert.equal(view.receipt.considered.length, candidates);
+    assert.equal(mock.calls, 1, "one request holds the whole shortlist");
+    assert.equal(view.record!.batches, 1);
     assert.ok(view.receipt.selectedChars <= 6_000);
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -102,9 +105,9 @@ test("files a brief names lead the shortlist; only its opening steers retrieval"
       path.join(cwd, `docs/importer-${i}.md`),
       `## Importer note ${i}\n${"The invoice importer reads each invoice line. ".repeat(20)}\n`,
     );
-  let paths: string[] = [];
+  const paths: string[] = [];
   const mock = selector((body) => {
-    paths = body.state.candidates.map((c: { path: string }) => c.path);
+    paths.push(...body.state.candidates.map((c: { path: string }) => c.path));
   });
   try {
     await reviewProjectContext({

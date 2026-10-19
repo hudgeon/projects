@@ -5,7 +5,7 @@ import { waitLabels, type Child, type ProgressNote, type WaitLabel } from "../sr
 import { clip } from "../src/run-text";
 import { telemetry } from "../src/telemetry";
 import { commandForJev } from "./command-text";
-import { judgeContext, type Selector } from "./context";
+import { fitsRequest, judgeContext, type Selector } from "./context";
 
 // Judgments of a conversation's own course, by the machine's Jev selector:
 // before each dispatch, whether a finished helper's report already answers the
@@ -81,12 +81,31 @@ export type CheckInputs =
   | { brief: string; reports: { id: string; state: string; summary: string; checks: string[] }[] }
   | { notes: { at: string; done: string[]; remaining: string[]; yourMove: string | null }[] }
   | { command: string };
-const repeatQuestion = (i: number) =>
+// Two judgments per report, combined in code: whether the report already
+// shows part of the brief done (the dispatch overlaps finished work), and
+// whether the brief asks for anything beyond it. One question about
+// "everything" was read literally and never fired.
+const repeatQuestions = (i: number) => [
   noul(
-    `Does the finished helper report in \`reports[${i}]\` already answer everything the new task in \`brief\` asks for, so that doing the brief would repeat work that report shows was done?`,
-    "The report already covers every part of the brief; doing it again repeats finished work.",
-    "The brief asks for something the report does not show as done, such as a new check, change, fix or later evidence.",
-  );
+    `Does the finished helper report in \`reports[${i}]\` already show as done or verified something that the new task in \`brief\` asks the helper to do or check?`,
+    "Part or all of what the brief asks for is shown done or verified in the report.",
+    "Nothing the brief asks for is shown done in the report.",
+  ),
+  noul(
+    `Does the new task in \`brief\` ask for something that the report in \`reports[${i}]\` does not show as done, such as a new check, change, fix or later evidence?`,
+    "The brief asks for something beyond what the report shows done.",
+    "Everything the brief asks for is shown done in the report.",
+  ),
+];
+// Reports are dropped oldest first until the request fits the model's
+// limits; the receipt counts them.
+function packed(inputs: CheckInputs) {
+  if (!("reports" in inputs)) return { inputs, omittedReports: 0 };
+  let reports = inputs.reports;
+  while (reports.length > 1 && !fitsRequest({ ...inputs, reports }, Object.fromEntries(reports.flatMap((_, i) => repeatQuestions(i)).map((q, i) => [`keep_${i}`, q]))))
+    reports = reports.slice(1);
+  return { inputs: { ...inputs, reports }, omittedReports: inputs.reports.length - reports.length };
+}
 // Jev's judgment of a check's inputs with the current questions: one
 // probability per report, or per progress sign. The runner records it; the
 // quality loop replays stored inputs through it.
@@ -96,15 +115,16 @@ export async function judgeCheck(o: {
   signal: AbortSignal;
   trigger: "dispatch-check" | "progress-check" | "wait-check" | "check-replay";
 }) {
+  const { inputs, omittedReports } = packed(o.inputs);
   const [questions, labels] =
-    "reports" in o.inputs
-      ? [o.inputs.reports.map((_, i) => repeatQuestion(i)), o.inputs.reports.map((r) => r.id)]
-      : "command" in o.inputs
+    "reports" in inputs
+      ? [inputs.reports.flatMap((_, i) => repeatQuestions(i)), inputs.reports.map((r) => r.id)]
+      : "command" in inputs
         ? [waitQuestions, WAIT_SIGNS]
         : [progressQuestions, PROGRESS_SIGNS];
   const result = await judgeContext({
-    version: createHash("sha256").update(JSON.stringify(o.inputs)).digest("hex"),
-    state: o.inputs,
+    version: createHash("sha256").update(JSON.stringify(inputs)).digest("hex"),
+    state: inputs,
     questions: Object.fromEntries(questions.map((q, i) => [`keep_${i}`, q])),
     count: questions.length,
     signal: o.signal,
@@ -112,16 +132,21 @@ export async function judgeCheck(o: {
     trigger: o.trigger,
   });
   const record = result.record;
-  return record
-    ? {
-        judged: Object.fromEntries(labels.map((label, i) => [label, record.probabilities[`keep_${i}`]])),
-        model: record.model,
-        inputTokens: record.inputTokens,
-        durationMs: Math.round(record.durationMs),
-        transport: record.transport,
-        selectionId: record.selectionId,
-      }
-    : { reason: result.reason, failure: result.failure };
+  const sent = { inputs, ...(omittedReports ? { omittedReports } : {}) };
+  if (!record) return { ...sent, reason: result.reason, failure: result.failure };
+  const p = (i: number) => record.probabilities[`keep_${i}`];
+  return {
+    ...sent,
+    // A report's judged value is whether the dispatch overlaps its finished
+    // work; parts keep both questions for policy in code.
+    judged: Object.fromEntries(labels.map((label, i) => [label, "reports" in inputs ? p(2 * i) : p(i)])),
+    ...("reports" in inputs ? { parts: Object.fromEntries(labels.map((label, i) => [label, { covers: p(2 * i), beyond: p(2 * i + 1) }])) } : {}),
+    model: record.model,
+    inputTokens: record.inputTokens,
+    durationMs: Math.round(record.durationMs),
+    transport: record.transport,
+    selectionId: record.selectionId,
+  };
 }
 export function runChecks(o: {
   selector?: Selector;
@@ -141,7 +166,7 @@ export function runChecks(o: {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await writeFile(
       path.join(dir, `${new Date(at).toISOString().replace(/[:.]/g, "-")}-${kind}-${randomUUID()}.json`),
-      JSON.stringify({ kind, at, runId: o.runId, child, inputs, ...judgment }),
+      JSON.stringify({ kind, at, runId: o.runId, child, ...judgment }),
       { mode: 0o600 },
     );
     const receipts = (await readdir(dir)).filter((f) => f.endsWith(".json")).sort();

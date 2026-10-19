@@ -7,7 +7,7 @@ import { JEV_MODEL, type Selector } from "../runner/context";
 import { followUp, formatChecks, parseCheck, replayChecks, scoreChecks, storedChecks, type Check } from "./check-metrics";
 
 const repeat = (id: string, judged: Record<string, number>, extra: Partial<Check> = {}): Check => ({
-  ...parseCheck({ kind: "repeat", at: 1_000, runId: "run", inputs: { brief: "Check the fix is live", reports: Object.keys(judged).map((report) => ({ id: report, state: "completed", summary: `Report ${report}`, checks: [] })) }, judged, inputTokens: 300, durationMs: 400 }, id, "history"),
+  ...parseCheck({ kind: "repeat", at: 1_000, runId: "run", inputs: { brief: "Check the fix is live", reports: Object.keys(judged).map((report) => ({ id: report, state: "completed", summary: `Report ${report}`, checks: [] })) }, judged, parts: Object.fromEntries(Object.entries(judged).map(([report, covers]) => [report, { covers, beyond: 0.3 }])), inputTokens: 300, durationMs: 400 }, id, "history"),
   ...extra,
 });
 const progress = (id: string, judged: Record<string, number>, extra: Partial<Check> = {}): Check => ({
@@ -41,6 +41,8 @@ test("thresholds act on every judged check, and precision and recall count the l
   assert.equal(reports.auc, 1, "every report that held outranks every one that did not");
   const dispatches = report.questions["repeat, each dispatch (its highest report)"];
   assert.deepEqual([dispatches.judged, dispatches.labelled, dispatches.held], [4, 3, 2], "d keeps an unlabelled report, so its dispatch is unknown");
+  const full = report.questions["repeat, fully covered (covers and not beyond; unlabelled)"];
+  assert.deepEqual([full.judged, full.labelled, full.thresholds.find((t) => t.threshold === 0.6)!.flagged], [6, 0, 3], "min(covers, 1 - beyond): 0.9, 0.6 and 0.95 clear 0.6 against beyond 0.3");
   assert.deepEqual([report.questions.repeating.held, report.questions.waiting.labelled, report.questions.blocked.labelled], [1, 1, 1]);
   assert.deepEqual(report.labelled, { repeat: 4, progress: 2 });
   assert.deepEqual(report.notJudged, { service_failed: 1 });
@@ -84,7 +86,7 @@ test("a replay asks the current questions as a check replay and keeps the record
     },
   };
   const results = await replayChecks([repeat("a", { r1: 0.55, r2: 0.2 }), progress("p", { progressing: 0.5, repeating: 0.5, waiting: 0.5, blocked: 0.5 })], selector);
-  assert.deepEqual(sent.map((s) => Object.keys(s.body.questions).length), [2, 4]);
+  assert.deepEqual(sent.map((s) => Object.keys(s.body.questions).length), [4, 4], "two questions per report");
   assert.deepEqual(sent.map((s) => [s.metadata.process, s.metadata.trigger]), [["run-checks", "check-replay"], ["run-checks", "check-replay"]]);
   assert.deepEqual(results[0].recorded, { r1: 0.55, r2: 0.2 });
   assert.deepEqual(results[0].judged, { r1: 0.45, r2: 0.45 });

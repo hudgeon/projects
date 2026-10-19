@@ -20,6 +20,10 @@ const checkSchema = z.object({
   child: z.string().optional(),
   inputs: z.union([z.object({ brief: z.string(), reports: z.array(reportSchema) }), z.object({ notes: z.array(noteSchema) })]),
   judged: z.record(z.string(), z.number()).optional(),
+  // A repeat check's two judgments per report: the report shows part of the
+  // brief done (judged), and the brief asks for something beyond it.
+  parts: z.record(z.string(), z.object({ covers: z.number(), beyond: z.number() })).optional(),
+  omittedReports: z.number().int().optional(),
   // A replay keeps the receipt's own probabilities beside its new ones.
   recorded: z.record(z.string(), z.number()).optional(),
   inputTokens: z.number().optional(),
@@ -67,9 +71,9 @@ export async function replayChecks(checks: Check[], selector: Selector) {
     const judgment = await judgeCheck({ inputs: check.inputs, selector, signal: AbortSignal.timeout(60_000), trigger: "check-replay" });
     const replayed =
       "judged" in judgment
-        ? { judged: judgment.judged, inputTokens: judgment.inputTokens, durationMs: judgment.durationMs, reason: undefined }
-        : { judged: undefined, inputTokens: undefined, durationMs: undefined, reason: judgment.reason };
-    results.push({ ...check, recorded: check.judged, ...replayed });
+        ? { judged: judgment.judged, parts: judgment.parts, inputTokens: judgment.inputTokens, durationMs: judgment.durationMs, reason: undefined }
+        : { judged: undefined, parts: undefined, inputTokens: undefined, durationMs: undefined, reason: judgment.reason };
+    results.push({ ...check, inputs: judgment.inputs as Check["inputs"], omittedReports: judgment.omittedReports, recorded: check.judged, ...replayed });
   }
   return results;
 }
@@ -143,7 +147,7 @@ function question(items: Item[]) {
 
 export function scoreChecks(checks: Check[], labels: CheckLabels) {
   const judged = checks.filter((c) => c.judged);
-  const questions: Record<string, Item[]> = { "repeat, each report": [], "repeat, each dispatch (its highest report)": [], ...Object.fromEntries(PROGRESS_SIGNS.map((s) => [s, []])) };
+  const questions: Record<string, Item[]> = { "repeat, each report": [], "repeat, each dispatch (its highest report)": [], "repeat, fully covered (covers and not beyond; unlabelled)": [], ...Object.fromEntries(PROGRESS_SIGNS.map((s) => [s, []])) };
   for (const c of judged) {
     const known = labels[c.id] ?? {};
     const item = (name: string): Item => ({ p: c.judged![name], label: known[name], was: c.recorded?.[name] });
@@ -153,6 +157,8 @@ export function scoreChecks(checks: Check[], labels: CheckLabels) {
     }
     const reports = judgedNames(c).filter((name) => c.judged![name] !== undefined).map(item);
     questions["repeat, each report"].push(...reports);
+    // A pure repeat: the report covers the brief and nothing lies beyond it.
+    for (const part of Object.values(c.parts ?? {})) questions["repeat, fully covered (covers and not beyond; unlabelled)"].push({ p: Math.min(part.covers, 1 - part.beyond) });
     if (!reports.length) continue;
     const top = (values: (number | undefined)[]) => (values.some((v) => v === undefined) ? undefined : Math.max(...(values as number[])));
     questions["repeat, each dispatch (its highest report)"].push({

@@ -44,8 +44,9 @@ propagates without a misleading failure log or a fallback native turn.
 
 `runner/context.ts` owns the deterministic conversation view and shared Jev
 transport. `runner/project-context.ts` owns project review and its wiring into
-turns, `runner/project-sources.ts` which files may be read and how, and
-`runner/project-units.ts` natural units and their ranking.
+turns, `runner/project-judge.ts` the review's request shape (question, send
+order, batches), `runner/project-sources.ts` which files may be read and how,
+and `runner/project-units.ts` natural units and their ranking.
 
 For handovers, code retains exact original/recent user instructions, their preceding proposal
 exchanges when they fit, the latest position and every child's execution and
@@ -74,11 +75,23 @@ where its line is longer than that. BM25
 ranks the units by the brief's opening 1,000 characters (a brief states its
 subject first; delivery wording follows) and the user's instructions. The work
 issue, the plan and files the brief names lead with up to four units each, and
-no source supplies more than eight. Code packs 20–40 candidates into one Jev
-request, one Noul question per unit over shared state: the task, the original
-and newest instructions up to 8,000 characters with the task, and the
-candidates. Repository instructions are retained separately, outside the
-request, and are never removal candidates. Code supplies the units Jev rates
+no source supplies more than eight. Code packs the 20–40 candidates into one
+Jev request (`runner/project-judge.ts` owns the request shape), one Noul
+question per unit over shared state: the task, the original and newest
+instructions up to 8,000 characters with the task, and the candidates.
+Jev's ratings depend on that shape: on the 14 labelled reviews, on-subject
+units ranked 16th or later were never rated 0.5 in retrieval order, the same
+units sent first always were, and a shuffled order cut Jev's AUC from 0.88
+to 0.76. Judging the shortlist in parallel batches of 2 to 16 removed that
+dependence (AUC 0.91) but admitted more off-topic units at 0.5, so the units
+supplied within the budget were less precise (strict precision 73–76%
+against 83–84%) at the same recall; interleaving the retrieval tiers across
+batches did not help either (20 October 2026). The single request stays,
+its position effect understood as a preference for retrieval rank, and a
+replay re-tests the shape with `--batch N` and `--order` as the gold set
+grows, especially with blind labels and code-heavy turns. A review judged in
+batches fails as a whole if any batch fails. Repository instructions are
+retained separately, outside the request, and are never removal candidates. Code supplies the units Jev rates
 at or above 0.5, best first, within the 6,000-character budget; shadow mode and
 failures supply the retrieval order within the same budget. The review records
 full-file hashes, character offsets, retrieval scores and missing/partial
@@ -179,8 +192,16 @@ and prints:
 `score [file]` reprints a saved replay's report (`--json` gives counts to
 combine machines); `usage` reports the selections turns actually received
 against their usage across all stored reviews, without calling Jev.
+`--order reversed`, `--order shuffled` or `--order interleaved` sends each
+shortlist in another order (a shuffle is the same for a review every time;
+the receipt, scores and labels stay in retrieval order), `--batch N` judges
+N candidates per request instead of all, and `position [file...]` prints a saved
+replay's ratings by retrieval rank band (on-subject, adjacent and off-topic
+units: count, mean, share at or above 0.5, AUC), so a replay in retrieval
+order compared with one sent reversed shows whether a candidate's slot in
+the request moves its rating.
 `unlabelled [id]` prints the newest replay's unlabelled units with the
-review's task, and `label <id> <index>=<0|1|2>...` records labels and copies
+review's task and without Jev's ratings, so labels are not anchored, and `label <id> <index>=<0|1|2>...` records labels and copies
 the review's receipt into `jev-evaluation/reviews/`, so the gold set outlives
 the history. Each machine's labels and gold set stay on that machine. The
 October 2026 validation's `turns.json`, `labels.json` and `replay3.json` in
@@ -188,8 +209,10 @@ that directory are read in place; `score replay3.json` reproduces its numbers.
 
 `checks` scores the shadow run checks of [run-health.md](run-health.md) from
 the receipts in the runner state's `run-checks/`, without calling Jev: for
-whether a dispatch repeats a finished helper's report (each report, and each
-dispatch by its highest report) and for each progress sign, how many checks
+whether a dispatch overlaps a finished helper's report (each report, each
+dispatch by its highest report, and, unlabelled, each report fully covered:
+the overlap rating against the rating that the brief asks for more) and for
+each progress sign, how many checks
 each threshold from 0.30 to 0.95 would flag, its precision and recall against
 the machine's `jev-evaluation/check-labels.json`, Jev's AUC, latency, input
 tokens and estimated cost. `checks replay` judges the labelled checks and the
@@ -204,8 +227,9 @@ held at the newest note) and copies the receipt into `jev-evaluation/checks/`.
 `--kind repeat` or `progress` narrows any of them. A change to a run check's
 questions carries before/after metrics from `checks replay`, as below.
 
-Any change to retrieval, question wording, the 0.5 cutoff or the pinned model
-ships with before/after metrics from this command in its PR: on each machine
+Any change to retrieval, question wording, the request shape (order or
+batch size), the 0.5 cutoff or the pinned model ships with before/after
+metrics from this command in its PR: on each machine
 with labels, replay on main, then replay `--same` reviews on the branch, and
 report both. Jev's probabilities vary between identical requests: two replays
 of the same 14 reviews (19 October) differed by 0.02 on average and at most

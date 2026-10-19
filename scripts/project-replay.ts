@@ -7,6 +7,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { Selector } from "../runner/context";
 import { reviewProjectContext } from "../runner/project-context";
+import type { SendOrder } from "../runner/project-judge";
 import type { Issue } from "../runner/project-sources";
 import { reviewsDir, type Usage } from "../runner/project-turn";
 import { git } from "../runner/workspaces";
@@ -152,6 +153,10 @@ export async function replayReview(
     selector: Selector;
     // The work issue as it stood at the review: comments after it are left out.
     readIssue?: (repo: string, number: number, before: number) => Promise<Issue>;
+    // Send the shortlist in another order or batch size, to measure how the
+    // request shape moves ratings.
+    order?: SendOrder;
+    batch?: number;
     signal: AbortSignal;
   },
 ): Promise<Result & { at: number; source: Review["source"] }> {
@@ -193,16 +198,19 @@ export async function replayReview(
       signal: o.signal,
       selector: {
         ...o.selector,
+        // Several batches may be sent: the largest request and the longest fetch.
         fetch: (async (url, init) => {
-          requestBytes = Buffer.byteLength(String(init?.body ?? ""));
+          requestBytes = Math.max(requestBytes ?? 0, Buffer.byteLength(String(init?.body ?? "")));
           const at = performance.now(),
             response = await send(url, init),
             body = await response.arrayBuffer();
-          fetchMs = performance.now() - at;
+          fetchMs = Math.max(fetchMs ?? 0, performance.now() - at);
           return new Response(body, { status: response.status, headers: response.headers });
         }) as typeof fetch,
       },
       trigger: "project-replay",
+      order: o.order,
+      batch: o.batch,
     });
     const totalMs = performance.now() - started;
     const texts = new Map<string, string | null>();
@@ -242,7 +250,7 @@ export async function replayReview(
       ...base,
       reason: receipt.reason,
       strategy: receipt.strategy,
-      ...(receipt.failure ? { failure: receipt.failure.kind } : {}),
+      ...(receipt.failure ? { failure: receipt.failure.kind, ...(receipt.failure.status ? { status: receipt.failure.status } : {}) } : {}),
       judgeMs: record?.durationMs ?? null,
       fetchMs,
       totalMs,

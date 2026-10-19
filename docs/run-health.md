@@ -81,7 +81,16 @@ usual.
 context selection is on (`select` or `shadow`):
 
 - before each dispatch, for each finished helper (up to eight), whether its
-  report already answers everything the new brief asks for;
+  report already shows done or verified something the new brief asks for
+  (the judged value, which the labels mean) and whether the brief asks for
+  anything beyond it (kept beside it; on the 19 October receipts it was high
+  for every report, so the overlap rating is the signal); one question about
+  "everything" was read literally and never fired. On that day's 12 labelled
+  dispatches (4 repeated finished work), the overlap rating separates them
+  with AUC 0.97 and flags all 4 at 0.8 with 4 to 7 false alarms, where the
+  old question flagged none at any threshold. Reports are dropped oldest
+  first until the request fits the model's limits, and the receipt counts
+  them;
 - at each helper progress note, whether that helper's recent notes (up to six)
   show it progressing, repeating steps, waiting on something outside its own
   work, or blocked;

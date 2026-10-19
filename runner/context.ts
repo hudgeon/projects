@@ -103,6 +103,8 @@ export const selectionRecordSchema = z
     durationMs: z.number().nonnegative(),
     transport: z.enum(["direct", "gateway"]).optional(),
     selectionId: z.uuid().optional(),
+    // Requests a project review's shortlist was judged in.
+    batches: z.number().int().positive().optional(),
   })
   .strict();
 export type SelectionRecord = z.infer<typeof selectionRecordSchema>;
@@ -179,7 +181,7 @@ function transportFailure(
 }
 
 // Whether a request fits the model's documented limits, counted in bytes.
-function fitsRequest(
+export function fitsRequest(
   state: unknown,
   questions: Record<string, unknown>,
 ) {

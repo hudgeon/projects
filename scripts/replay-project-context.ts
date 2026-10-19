@@ -13,12 +13,12 @@ import { configSchema, machineSecret } from "../collector/collect";
 import { savePrivate } from "../runner/engine";
 import { contextConfigSchema, JEV_MODEL, keptKey } from "../runner/context";
 import { nativeEnv } from "../runner/native";
-import { KEEP_FROM } from "../runner/project-context";
+import { BATCH, KEEP_FROM } from "../runner/project-context";
 import { RECENT_COMMENTS } from "../runner/project-sources";
 import { reviewsDir } from "../runner/project-turn";
 import { registry } from "../runner/workspaces";
 import { checkDirs, followUp, formatChecks, judgedNames, parseCheck, replayChecks, scoreChecks, storedChecks, type Check, type CheckLabels } from "./check-metrics";
-import { format, formatUsage, key, score, type Labels, type Result } from "./project-metrics";
+import { format, formatPositions, formatUsage, key, positions, score, type Labels, type Result } from "./project-metrics";
 import { evaluationDir, replayReview, storedReviews, type Review } from "./project-replay";
 
 const exec = promisify(execFile);
@@ -29,8 +29,11 @@ const flag = (name: string) => args.includes(name);
 const values = (name: string) =>
   args.flatMap((arg, i) => (arg === name && args[i + 1] ? [args[i + 1]] : []));
 const value = (name: string) => values(name).at(-1);
-const words = args.filter((arg, i) => !arg.startsWith("--") && !args[i - 1]?.match(/^--(?:review|same|from|limit|width|kind)$/));
-const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label", "checks"].includes(words[0]) ? words : ["replay", ...words];
+// Replays may send each shortlist in another order, to measure position effects.
+const order = z.enum(["retrieval", "interleaved", "reversed", "shuffled"]).optional().parse(value("--order"));
+const batch = z.coerce.number().int().positive().optional().parse(value("--batch"));
+const words = args.filter((arg, i) => !arg.startsWith("--") && !args[i - 1]?.match(/^--(?:review|same|from|limit|width|kind|order|batch)$/));
+const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label", "checks", "position"].includes(words[0]) ? words : ["replay", ...words];
 
 const machine = configSchema
   .extend({ stateDir: z.string().optional(), context: contextConfigSchema.default({ mode: "off" }) })
@@ -53,7 +56,7 @@ const readKey = () =>
 const git = (args: string[]) => exec("git", args, { cwd: path.dirname(import.meta.dirname) }).then(({ stdout }) => stdout.trim());
 const code = async () => `${await git(["rev-parse", "--short", "HEAD"])}${(await git(["status", "--porcelain", "--", "runner", "scripts", "src"])) ? " with uncommitted changes" : ""}`;
 const stamp = () => new Date().toISOString().replace(/[-:]|\.\d+/g, "");
-const replaySchema = z.object({ results: z.array(z.any()) }).passthrough();
+const replaySchema = z.object({ results: z.array(z.any()), order: z.string().optional(), batch: z.number().optional() }).passthrough();
 const replays = async () =>
   (await readdir(dir).catch(() => [] as string[])).filter((n) => /^replay-[\dTZ]+\.json$/.test(n)).sort();
 // A saved replay: the named file, else this machine's newest.
@@ -135,7 +138,14 @@ if (command === "checks") {
   for (const name of operands.length ? operands : [undefined]) {
     const { file, replay } = await saved(name);
     const report = score(replay.results, labels);
-    console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} (${replay.code ?? "code unrecorded"}, ${replay.model ?? JEV_MODEL}, cutoff ${replay.keepFrom ?? KEEP_FROM})`));
+    console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} (${replay.code ?? "code unrecorded"}, ${replay.model ?? JEV_MODEL}, cutoff ${replay.keepFrom ?? KEEP_FROM}, ${replay.batch ?? "all"} per request${replay.order ? `, sent ${replay.order}` : ""})`));
+  }
+} else if (command === "position") {
+  // Ratings by retrieval rank: compare a replay sent in retrieval order with
+  // one sent reversed or shuffled.
+  for (const name of operands.length ? operands : [undefined]) {
+    const { file, replay } = await saved(name);
+    console.log(formatPositions(positions(replay.results, labels), `Replay ${path.basename(file)} (${replay.code ?? "code unrecorded"}, ${replay.batch ?? "all"} per request, sent ${replay.order ?? "in retrieval order"})`));
   }
 } else if (command === "usage") {
   // The selections turns actually received, without calling Jev.
@@ -156,7 +166,7 @@ if (command === "checks") {
   const { file, replay } = await saved();
   const reviews = new Map((await storedReviews(stateDir)).map((r) => [r.id, r]));
   const width = Number(value("--width") ?? 400);
-  console.log(`Unlabelled units in ${path.basename(file)}. Label each 2 (on the task's subject), 1 (adjacent: useful context, not the subject) or 0 (off-topic), then record them with: npm run context:replay -- label <id> <index>=<label> ...`);
+  console.log(`Unlabelled units in ${path.basename(file)}, without Jev's ratings so labels are not anchored to them. Label each 2 (on the task's subject), 1 (adjacent: useful context, not the subject) or 0 (off-topic), then record them with: npm run context:replay -- label <id> <index>=<label> ...`);
   for (const result of reviewIds(replay.results, operands[0]) as Result[]) {
     const known = labels[result.id]?.units ?? {};
     const open = result.considered.flatMap((u, i) => (known[key(u)] === undefined ? [[i, u] as const] : []));
@@ -166,7 +176,7 @@ if (command === "checks") {
     if (review)
       console.log(`Task: ${review.task.slice(0, 1_500)}\nInstructions Jev saw: ${JSON.stringify(review.instructions.map((text) => text.slice(0, 300)))}`);
     for (const [i, u] of open)
-      console.log(`--- [${i}] noul=${u.noul?.toFixed(2) ?? "-"}${u.kept ? " supplied" : ""} ${u.path}${u.section ? ` :: ${u.section}` : ""}\n    ${(u.text ?? "").slice(0, width).replace(/\n/g, " / ")}`);
+      console.log(`--- [${i}] ${u.path}${u.section ? ` :: ${u.section}` : ""}\n    ${(u.text ?? "").slice(0, width).replace(/\n/g, " / ")}`);
   }
 } else if (command === "label") {
   const [prefix, ...pairs] = operands;
@@ -227,17 +237,19 @@ if (command === "checks") {
           repository,
           selector: { mode: "select", gateway: machine.context.gateway, key: jevKey },
           readIssue,
+          order,
+          batch,
           signal: AbortSignal.timeout(120_000),
         }).catch((error) => ({ id: review.id, source: review.source, at: review.at, projectId: review.projectId, reason: error instanceof Error && error.name === "TimeoutError" ? "timed_out" : "replay_failed", judgeMs: null, inputTokens: null, considered: [] }))
       : { id: review.id, source: review.source, at: review.at, projectId: review.projectId, reason: "project_missing", judgeMs: null, inputTokens: null, considered: [] };
     results.push(result);
-    const kept = result.considered.filter((u) => u.kept);
-    console.error(`${result.id} ${result.reason}: ${kept.length} units, ${kept.reduce((n, u) => n + u.endChar - u.startChar, 0)} chars of ${result.considered.length} shortlisted; judge ${Math.round(result.judgeMs ?? 0)} ms`);
+    const kept = result.considered.filter((u) => u.kept), { failure, status } = result as Result;
+    console.error(`${result.id} ${result.reason}${failure ? ` (${failure}${status ? ` ${status}` : ""})` : ""}: ${kept.length} units, ${kept.reduce((n, u) => n + u.endChar - u.startChar, 0)} chars of ${result.considered.length} shortlisted; judge ${Math.round(result.judgeMs ?? 0)} ms`);
   }
   const version = await code();
   const file = path.join(dir, `replay-${stamp()}.json`);
-  await savePrivate(file, { at: new Date().toISOString(), host: machine.host, code: version, model: JEV_MODEL, keepFrom: KEEP_FROM, results });
+  await savePrivate(file, { at: new Date().toISOString(), host: machine.host, code: version, model: JEV_MODEL, keepFrom: KEEP_FROM, ...(order ? { order } : {}), batch: batch ?? BATCH, results });
   for (const old of (await replays()).slice(0, -REPLAYS)) await unlink(path.join(dir, old)).catch(() => {});
   const report = score(results, labels);
-  console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} on ${machine.host} (code ${version}, ${JEV_MODEL}, cutoff ${KEEP_FROM})`));
+  console.log(flag("--json") ? JSON.stringify(report, null, 2) : format(report, `Replay ${path.basename(file)} on ${machine.host} (code ${version}, ${JEV_MODEL}, cutoff ${KEEP_FROM}, ${batch ?? BATCH} per request${order ? `, sent ${order}` : ""})`));
 }
