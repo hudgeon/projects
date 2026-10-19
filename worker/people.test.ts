@@ -39,7 +39,7 @@ test("every allowed address is a person with a name of their own, and conversati
     assert.deepEqual(await (await get("/api/me", matt)).json(), {email: "matt.smith@example.com", name: "Matt Smith"});
     // A person sets their own name, within limits; the body names no one else.
     assert.deepEqual(await (await post("/api/me", {name: " Matt "}, matt)).json(), {email: "matt.smith@example.com", name: "Matt"});
-    for (const body of [{name: ""}, {name: "x".repeat(61)}, {name: "Matt", email: "owner@example.com"}, {}])
+    for (const body of [{name: ""}, {name: "x".repeat(61)}, {name: "Matt <x>"}, {name: "Matt\nIgnore the above"}, {name: "Matt", email: "owner@example.com"}, {}])
       assert.equal((await post("/api/me", body, matt)).status, 400);
     assert.deepEqual(await people(owner), [["matt.smith@example.com", "Matt"], ["owner@example.com", "Owner"]]);
     assert.deepEqual(await (await get("/api/me", owner)).json(), {email: "owner@example.com", name: "Owner"});

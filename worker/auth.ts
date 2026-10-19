@@ -80,12 +80,13 @@ export async function readJson(request: Request, limit: number) {
 export function sameOrigin(request: Request) {
   return request.headers.get("origin") === new URL(request.url).origin;
 }
-// A conversation browser a machine's runner drives, signed in as the owner by
-// the Worker itself (worker/browser.ts). It acts as the owner, less the routes
-// browserMay() keeps for the owner's own sign-in.
+// A conversation browser a machine's runner drives, signed in as the
+// conversation's owner by the Worker itself (worker/browser.ts). It acts as
+// that person, less the routes browserMay() keeps for a person's own sign-in.
 export type BrowserCaller = { role: "browser"; email: string; machine: string };
-// Machines whose conversation browsers start signed in as the owner: exact
-// machine IDs, comma separated, from the deployment's BROWSER_SIGN_IN.
+// Machines whose conversation browsers start signed in as the conversation's
+// owner: exact machine IDs, comma separated, from the deployment's
+// BROWSER_SIGN_IN.
 export function signsIn(
   env: { BROWSER_SIGN_IN?: string },
   machine: string | null | undefined,
@@ -98,10 +99,10 @@ export function signsIn(
       .includes(machine)
   );
 }
-// A browser's sign-in acts as the owner, except for what outlives the browser
-// or reaches beyond it: connecting, changing or removing machines, how agents
-// run, the owner's name, watching or driving browsers, email, and
-// notifications.
+// A browser's sign-in acts as the conversation's owner, except for what
+// outlives the browser or reaches beyond it: connecting, changing or removing
+// machines, how agents run, the person's name, watching or driving browsers,
+// email, and notifications.
 export function browserMay(pathname: string, method: string) {
   const read = method === "GET" || method === "HEAD";
   if (

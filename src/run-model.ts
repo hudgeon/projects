@@ -323,6 +323,11 @@ export const runnerClaimSchema = runnerIdentitySchema
     documents: z.boolean().optional(),
   })
   .strict();
+// How a conversation browser on the claiming machine signs in to Projects:
+// as the conversation's owner, by hand, or not at all while the owner's
+// address is not allowed to sign in.
+export const browserSignInSchema = z.enum(["owner", "manual", "not_allowed"]);
+export type BrowserSignIn = z.infer<typeof browserSignInSchema>;
 export const runnerReportSchema = runnerIdentitySchema
   .extend({
     id: uuid,

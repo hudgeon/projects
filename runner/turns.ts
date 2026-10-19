@@ -227,7 +227,8 @@ export async function runTurn(
       codexFast,
       fullAccess: o.fullAccess && !options.readOnly,
       onTiming: fields => { timing = {...timing, ...fields}; },
-      prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? browserInstructions(options.browser.endpoint) : ""}`,
+      person: o.person,
+      prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),
       onProcess: async (p) => {
         pid = p;

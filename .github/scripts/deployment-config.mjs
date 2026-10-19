@@ -19,7 +19,7 @@ const extraHosts = browserHosts
   ? browserHosts.split(",").map((entry) => entry.trim())
   : [];
 // Optional: machine IDs, comma separated, whose conversation browsers start
-// signed in as PROJECTS_OWNER_EMAIL. Unset, every browser signs in by hand.
+// signed in as the conversation's owner. Unset, every browser signs in by hand.
 const signIn = process.env.PROJECTS_BROWSER_SIGN_IN || "";
 const signInMachines = signIn ? signIn.split(",").map((entry) => entry.trim()) : [];
 const exactHost =

@@ -34,6 +34,15 @@ export class People {
     this.storage.sql.exec("UPDATE people SET name=? WHERE email=?", name, email);
     return this.get(email);
   }
+  // Who an address is, without making a row for it: the name the person set,
+  // or one read from the address.
+  find(email: string): Person {
+    return (
+      this.storage.sql
+        .exec<Person>("SELECT email,name FROM people WHERE email=?", email)
+        .toArray()[0] ?? { email, name: defaultName(email) }
+    );
+  }
   list(): Person[] {
     return this.storage.sql
       .exec<Person>("SELECT email,name FROM people ORDER BY created,email")
@@ -61,7 +70,7 @@ export async function peopleRoutes(
   try {
     input = nameInputSchema.parse(await readJson(request, 1024));
   } catch {
-    return Response.json({ error: `Give a name of 1 to ${NAME_LIMIT} characters.` }, { status: 400 });
+    return Response.json({ error: `Give a name of 1 to ${NAME_LIMIT} characters, without < or >.` }, { status: 400 });
   }
   if (!(await store.rate(`me:${caller}`, 30, 3600_000)))
     return Response.json({ error: "Try again later." }, { status: 429 });

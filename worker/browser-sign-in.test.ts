@@ -10,6 +10,7 @@ import { emailLinks } from "../src/work-model";
 import { issue } from "../tests/work-fixtures";
 import { randomUUID } from "node:crypto";
 import type { Run } from "../src/run-model";
+import type { Person } from "../src/people-model";
 import { snapshotSchema, type PortfolioView } from "../src/model";
 import { start, options } from "./miniflare-fixtures";
 import { inboxSnapshot } from "./snapshot-fixtures";
@@ -18,7 +19,7 @@ test("a machine the deployment signs in gets each conversation browser signed in
   const dir = await mkdtemp(path.join(tmpdir(), "projects-browser-sign-in-")), script = path.join(dir, "worker.mjs");
   await build({entryPoints: ["tests/fixtures/browser-worker.js"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
   const runner = "r".repeat(64), laptop = "l".repeat(64), origin = "https://projects.example.com";
-  const values = {RUNNER_TOKEN: runner, LAPTOP_RUNNER_TOKEN: laptop, ALLOWED_EMAILS: "owner@example.com", OWNER_EMAIL: "Owner@Example.com", SITE_URL: origin, BROWSER_SIGN_IN: "studio"};
+  const values = {RUNNER_TOKEN: runner, LAPTOP_RUNNER_TOKEN: laptop, ALLOWED_EMAILS: "owner@example.com, matt.smith@example.com", OWNER_EMAIL: "Owner@Example.com", SITE_URL: origin, BROWSER_SIGN_IN: "studio"};
   let config = await options(script, dir, values);
   let mf = await start(config);
   type SignIn = {session: string; cookies: {name: string; value: string; url: string; path: string; secure: boolean; httpOnly: boolean; sameSite: string; expires: number}[]};
@@ -34,16 +35,17 @@ test("a machine the deployment signs in gets each conversation browser signed in
   const as = (value: string) => ({Cookie: `__Host-projects=${value}`});
   const overview = async (value: string) => (await mf.dispatchFetch(origin + "/api/overview", {headers: as(value)})).status;
   // Claims a new conversation on a machine and opens its browser, as a runner does.
-  const open = async (bearer: string, runnerId = randomUUID()) => {
+  const open = async (bearer: string, runnerId = randomUUID(), owner = "owner@example.com") => {
     const db = await getStore();
-    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
-    assert.ok((await (await post("/api/runner/claim", {runnerId, activeRunIds: []}, {Authorization: `Bearer ${bearer}`})).json() as {run: Run | null}).run);
+    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, owner);
+    const claimed = await (await post("/api/runner/claim", {runnerId, activeRunIds: []}, {Authorization: `Bearer ${bearer}`})).json() as {run: Run | null; browserSignIn?: string};
+    assert.ok(claimed.run);
     const grant = await (await post("/api/runner/browser", {runnerId, id: run.id, generation: 1}, {Authorization: `Bearer ${bearer}`})).json() as {capability: string};
     const connection = await mf.dispatchFetch(`${origin}/api/browser/${run.id}/cdp`, {headers: {Upgrade: "websocket", Authorization: `Bearer ${grant.capability}`}});
     assert.equal(connection.status, 101);
     connection.webSocket!.accept(); connection.webSocket!.close();
     // Values only: RPC results are stubs a restart poisons.
-    return {id: run.id, grant: {capability: grant.capability}, conversation: await getConversation(run.id)};
+    return {id: run.id, grant: {capability: grant.capability}, conversation: await getConversation(run.id), browserSignIn: claimed.browserSignIn};
   };
   const cookieOf = async (conversation: BrowserTest) => (await conversation.inspectProvider()).signIns?.at(-1)?.cookies[0];
   try {
@@ -51,14 +53,20 @@ test("a machine the deployment signs in gets each conversation browser signed in
     // work goes to the first machine in order that has called recently.)
     const other = await open(laptop);
     assert.equal((await other.conversation.inspectProvider()).signIns, null);
+    assert.equal(other.browserSignIn, "manual");
     const before = Date.now();
     const first = await open(runner);
+    assert.equal(first.browserSignIn, "owner", "the claim says the browser starts as the conversation's owner");
     const cookie = (await cookieOf(first.conversation))!;
     assert.deepEqual({...cookie, value: "", expires: 0}, {name: "__Host-projects", value: "", url: origin, path: "/", secure: true, httpOnly: true, sameSite: "Strict", expires: 0}, "a host-only cookie like the site's own");
     assert.match(cookie.value, /^[a-f0-9]{64}$/);
     assert.ok(cookie.expires * 1000 <= before + 30 * 60_000 + 1000, "it ends with the browser");
     assert.doesNotMatch(JSON.stringify([first.grant, await (await getStore()).getRun(first.id)]), new RegExp(cookie.value), "the runner never receives it");
     assert.equal(await overview(cookie.value), 200, "the browser sees Projects as the owner");
+    assert.deepEqual(await (await mf.dispatchFetch(origin + "/api/me", {headers: as(cookie.value)})).json(), {email: "owner@example.com", name: "Owner"});
+    // Another person's conversation gets a browser signed in as them.
+    const matts = await open(runner, randomUUID(), "matt.smith@example.com");
+    assert.deepEqual(await (await mf.dispatchFetch(origin + "/api/me", {headers: as((await cookieOf(matts.conversation))!.value)})).json(), {email: "matt.smith@example.com", name: "Matt Smith"});
     const machines = await (await mf.dispatchFetch(origin + "/api/machines", {headers: as(cookie.value)})).json() as {machines: {id: string; browserSignIn?: boolean}[]};
     assert.deepEqual(machines.machines.map((m) => [m.id, m.browserSignIn]), [["studio", true], ["laptop", false]]);
     // What outlives the browser or reaches beyond it stays with the owner's own sign-in.
@@ -165,21 +173,40 @@ test("a machine the deployment signs in gets each conversation browser signed in
   } finally {await mf.dispose(); await rm(dir, {recursive: true, force: true});}
 });
 
-test("a conversation browser signs in only as an allowed owner", async () => {
+test("a conversation browser signs in only as an owner the allowlist names, and the claim says so", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-browser-owner-")), script = path.join(dir, "worker.mjs");
   await build({entryPoints: ["tests/fixtures/browser-worker.js"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
   const runner = "r".repeat(64), origin = "https://projects.example.com";
-  const mf = await start(await options(script, dir, {RUNNER_TOKEN: runner, ALLOWED_EMAILS: "owner@example.com", OWNER_EMAIL: "former@example.com", SITE_URL: origin, BROWSER_SIGN_IN: "studio"}));
-  try {
-    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"), db = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-    const run = await db.createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, "owner@example.com");
-    const runnerId = randomUUID(), bearer = {Authorization: `Bearer ${runner}`, "Content-Type": "application/json"};
-    await mf.dispatchFetch(origin + "/api/runner/claim", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, activeRunIds: []})});
-    const grant = await (await mf.dispatchFetch(origin + "/api/runner/browser", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, id: run.id, generation: 1})})).json() as {capability: string};
-    const connection = await mf.dispatchFetch(`${origin}/api/browser/${run.id}/cdp`, {headers: {Upgrade: "websocket", Authorization: `Bearer ${grant.capability}`}});
+  const config = await options(script, dir, {RUNNER_TOKEN: runner, ALLOWED_EMAILS: "owner@example.com", OWNER_EMAIL: "former@example.com", SITE_URL: origin, BROWSER_SIGN_IN: "studio"});
+  let mf = await start(config);
+  const bearer = {Authorization: `Bearer ${runner}`, "Content-Type": "application/json"};
+  const store = async () => { const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"); return ns.get(ns.idFromName("test")) as unknown as Portfolio; };
+  // Claims a conversation and opens its browser: the claim's word on sign-in, and the cookie set, if any.
+  const open = async (owner: string, legacy = false) => {
+    // A value, not the RPC result: a restart poisons its stub.
+    const id = (await (await store()).createRun({requestId: randomUUID(), text: "Check the page", projectId: null, agent: "auto", workIssue: null}, owner)).id;
+    if (legacy) {
+      const storage = await mf.unsafeGetDurableObjectStorage("test", "Conversation", {name: JSON.stringify(["test", id])});
+      await storage.exec("UPDATE agent_runs SET payload=json_remove(payload,'$.owner')");
+      await mf.dispose(); mf = await start(config);
+    }
+    const runnerId = randomUUID();
+    const claimed = await (await mf.dispatchFetch(origin + "/api/runner/claim", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, activeRunIds: []})})).json() as {run: Run | null; person: Person | null; browserSignIn: string};
+    assert.equal(claimed.run?.id, id);
+    const grant = await (await mf.dispatchFetch(origin + "/api/runner/browser", {method: "POST", headers: bearer, body: JSON.stringify({runnerId, id, generation: 1})})).json() as {capability: string};
+    const connection = await mf.dispatchFetch(`${origin}/api/browser/${id}/cdp`, {headers: {Upgrade: "websocket", Authorization: `Bearer ${grant.capability}`}});
     assert.equal(connection.status, 101); connection.webSocket!.accept(); connection.webSocket!.close();
     const cns = await mf.getDurableObjectNamespace("CONVERSATIONS");
-    const conversation = cns.get(cns.idFromName(JSON.stringify(["test", run.id]))) as unknown as {inspectProvider(): Promise<{signIns: unknown}>};
-    assert.equal((await conversation.inspectProvider()).signIns, null, "no cookie for an owner the allowlist no longer names");
+    const conversation = cns.get(cns.idFromName(JSON.stringify(["test", id]))) as unknown as {inspectProvider(): Promise<{signIns: {cookies: {value: string}[]}[] | null}>};
+    return {person: claimed.person, browserSignIn: claimed.browserSignIn, cookie: (await conversation.inspectProvider()).signIns?.at(-1)?.cookies[0]?.value ?? null};
+  };
+  try {
+    const gone = await open("gone@example.com");
+    assert.deepEqual([gone.person, gone.browserSignIn, gone.cookie], [{email: "gone@example.com", name: "Gone"}, "not_allowed", null], "an owner the allowlist does not name gets no cookie, and the claim says so");
+    const legacy = await open("owner@example.com", true);
+    assert.deepEqual([legacy.person, legacy.browserSignIn, legacy.cookie], [{email: "former@example.com", name: "Former"}, "not_allowed", null], "nor does the deployment owner of a conversation from before profiles, once no longer allowed");
+    const owners = await open("owner@example.com");
+    assert.deepEqual([owners.person, owners.browserSignIn], [{email: "owner@example.com", name: "Owner"}, "owner"]);
+    assert.equal((await mf.dispatchFetch(origin + "/api/overview", {headers: {Cookie: `__Host-projects=${owners.cookie}`}})).status, 200, "an allowed owner's browser is signed in as them");
   } finally {await mf.dispose(); await rm(dir, {recursive: true, force: true});}
 });

@@ -13,12 +13,14 @@ import {
 } from "../src/screenshot-model";
 import { machineSecret } from "../collector/collect";
 import {
+  browserSignInSchema,
   laneSchema,
   progressSchema,
   type Lane,
   type Progress,
   type RunMessage,
 } from "../src/run-model";
+import { personSchema } from "../src/people-model";
 import { executeRun, savePrivate } from "./engine";
 import { connectorAccess } from "./connectors";
 import { Failure } from "./native";
@@ -50,7 +52,7 @@ type Body = {
   failure?: string;
 };
 // The Worker's runner API. A failure is logged when it starts and at each
-// doubling of attempts, and its recovery once, so an outage cannot flood logs.
+// doubling of attempts, its recovery once, so an outage cannot flood logs.
 function client(endpoint: URL, token: string) {
   const failures = new Map<string, { attempt: number; at: number }>();
   return async function post(route: Route, body: Body) {
@@ -127,7 +129,7 @@ function client(endpoint: URL, token: string) {
 type Post = ReturnType<typeof client>;
 // Tells the owner a conversation needs a look when its execution could not
 // set up or report, keeping the native identity, phase and pending receipt
-// that recovery needs.
+// recovery needs.
 async function needsInspection(
   config: Config,
   post: Post,
@@ -206,7 +208,7 @@ async function executeClaim(o: {
       } catch (error) {
         if (error instanceof Error && /\((401|403|409)\)/.test(error.message))
           control.abort("claim-lost");
-        // Network failure alone does not transfer a claim to another runner.
+        // Network failure alone transfers no claim to another runner.
         throw error;
       }
     })().finally(() => {
@@ -217,8 +219,8 @@ async function executeClaim(o: {
   await heartbeat();
   const timer = setInterval(() => void heartbeat().catch(() => {}), 10000);
   const report = async (progress: Progress) => {
-    // executeRun persists this exact receipt before asking us to send it.
-    // Retrying an ambiguous response is idempotent by generation + seq.
+    // executeRun persists this receipt before asking us to send it; a retry
+    // is idempotent by generation and seq.
     for (;;) {
       try {
         await post("/api/runner/report", {
@@ -241,8 +243,8 @@ async function executeClaim(o: {
   try {
     const projects = await registry(config);
     const browser = async () => {
-      // A transient grant failure delays setup before any native journal
-      // phase changes. It cannot turn unstarted work into an uncertain turn.
+      // A transient grant failure delays setup before any journal phase
+      // changes: unstarted work never becomes an uncertain turn.
       for (;;) {
         control.signal.throwIfAborted();
         try {
@@ -292,6 +294,8 @@ async function executeClaim(o: {
       fullAccess: config.helpers.fullAccess,
       inboxAccount: config.inboxAccount,
       workRepo: config.workRepo,
+      person: personSchema.safeParse(claim.person).data,
+      browserSignIn: browserSignInSchema.safeParse(claim.browserSignIn).data,
       latestMessages: () => messages,
       report,
       codexFast: async () => { await heartbeat(); return codexFast; },
@@ -505,7 +509,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
   }
   const post = client(endpoint, token);
   const once = process.argv.includes("--once");
-  // The executors this runner knows of, by conversation.
+  // This runner's known executors, by conversation.
   const executors = new Map<string, number>();
   const signal = (name: NodeJS.Signals) => {
     for (const pid of executors.values())
@@ -540,10 +544,9 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
     host: config.host,
     release: installedRelease(),
   });
-  // Conversations executing here settle their own copies when a turn ends.
-  // For every other conversation this machine ran, copies that nothing needs,
-  // such as one whose branch landed after the last turn, are removed when the
-  // runner starts and then hourly.
+  // A conversation settles its own copies when a turn ends; for every other
+  // one this machine ran, copies nothing needs (a landed branch, say) go at
+  // start and then hourly.
   let sweeping = false;
   const sweep = async () => {
     if (sweeping) return;
@@ -632,10 +635,9 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       await needsInspection(config, post, runnerId, claim.run);
     }
   };
-  // An HTML edition the owner opened: read it with this machine's GitHub
-  // login and hand it over, or say why not. At most two at once, reserved
-  // before asking; a stopping or updating runner starts none and abandons
-  // any in flight, whose requests expire for the owner to ask again.
+  // An HTML edition the owner opened: read with this machine's GitHub login
+  // and handed over, or why not. At most two at once, reserved before asking;
+  // a stopping or updating runner starts none and abandons any in flight.
   let fetching = 0;
   const stopDocuments = AbortSignal.any([shutdown.signal, draining.signal]);
   const reserve = () => (fetching < 2 && !stopDocuments.aborted ? (fetching++, true) : false);

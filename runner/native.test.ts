@@ -35,10 +35,11 @@ test("native browser credentials travel through environment and read sessions ca
       const binary = await fakeBinary(dir, agent, "success");
       const capture = path.join(dir, "launch.json");
       const source = await readFile(binary, "utf8");
-      await writeFile(binary, source.replace("import readline", `import {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(capture)}, JSON.stringify({args:process.argv.slice(2), endpoint:process.env.PLAYWRIGHT_MCP_CDP_ENDPOINT, header:process.env.PLAYWRIGHT_MCP_CDP_HEADERS}));\nimport readline`));
-      await nativeTurn({agent, cwd: dir, prompt: "Inspect", schema: {type: "object"}, readOnly, browser, signal: AbortSignal.timeout(5000), binaries: {[agent]: binary}, onSession: async () => {}});
+      await writeFile(binary, source.replace("import readline", `import {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(capture)}, JSON.stringify({args:process.argv.slice(2), endpoint:process.env.PLAYWRIGHT_MCP_CDP_ENDPOINT, header:process.env.PLAYWRIGHT_MCP_CDP_HEADERS, author:[process.env.GIT_AUTHOR_NAME, process.env.GIT_AUTHOR_EMAIL, process.env.GIT_COMMITTER_NAME]}));\nimport readline`));
+      await nativeTurn({agent, cwd: dir, prompt: "Inspect", schema: {type: "object"}, readOnly, browser, person: {email: "matt.smith@example.com", name: "Matt Smith"}, signal: AbortSignal.timeout(5000), binaries: {[agent]: binary}, onSession: async () => {}});
       const launch = JSON.parse(await readFile(capture, "utf8"));
       assert.equal(launch.endpoint, browser.endpoint);
+      assert.deepEqual(launch.author, ["Matt Smith", "matt.smith@example.com", null], "commits are authored as the person; the committer stays the machine's");
       assert.equal(launch.header, `Authorization: Bearer ${browser.capability}`);
       assert.doesNotMatch(JSON.stringify(launch.args), /fixture-scoped-browser-capability|Authorization/);
       const toolConfiguration = agent === "claude" ? launch.args[launch.args.indexOf("--allowedTools") + 1]
@@ -143,6 +144,9 @@ test("native adapters require confirmed results, refuse approvals and stop on ca
     assert.equal(nativeEnv().RUNNER_TOKEN, undefined);
     assert.equal(nativeEnv().DOPPLER_TOKEN, undefined);
     assert.equal(nativeEnv().OPENAI_API_KEY, undefined);
+    assert.equal(nativeEnv().GIT_AUTHOR_EMAIL, undefined, "no person, no author");
+    const person = {email: "matt.smith@example.com", name: "Matt Smith"};
+    assert.deepEqual([nativeEnv(undefined, person).GIT_AUTHOR_NAME, nativeEnv(undefined, person).GIT_AUTHOR_EMAIL, nativeEnv(undefined, person).GIT_COMMITTER_EMAIL], ["Matt Smith", "matt.smith@example.com", undefined]);
     assert.equal(nativeEnv().UV_CACHE_DIR, path.join(tmpdir(), "projects-uv-cache"), "uv can cache inside a change sandbox");
     assert.equal(
       JSON.stringify(outputSchema(childResultSchema)).includes(

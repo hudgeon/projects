@@ -1,7 +1,8 @@
 // What an execution is given, and what its steps share: the conversation's
 // changing state and the services built once for it.
 import type { Screenshot, ScreenshotInput } from "../src/screenshot-model";
-import type { Agent, Child, Progress, Run, RunMessage, RunnerHost } from "../src/run-model";
+import type { Agent, BrowserSignIn, Child, Progress, Run, RunMessage, RunnerHost } from "../src/run-model";
+import type { Person } from "../src/people-model";
 import type { NativeOptions, nativeProcessStopped } from "./native";
 import type { ProjectDirectory, liveChanges, prepareWorkspace, pruneSaved, saveWorkspace, workspaceEvidence } from "./workspaces";
 import type { ConnectorAccess } from "./connectors";
@@ -43,6 +44,11 @@ export type EngineOptions = {
   // The email lane's inbox and drafting repository.
   inboxAccount?: string;
   workRepo?: string;
+  // Whose conversation this is, as the claim said: named in prompts and the
+  // author of helpers' commits; never in receipts or telemetry.
+  person?: Person;
+  // How this machine's conversation browser signs in to Projects.
+  browserSignIn?: BrowserSignIn;
   // The conversation's messages as of the latest heartbeat, without a request.
   latestMessages?: () => RunMessage[];
   changes?: typeof liveChanges;

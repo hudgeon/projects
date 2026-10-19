@@ -122,22 +122,22 @@ collector and runner, written by `scripts/install-machine.mjs`:
 
 ## Conversations
 
-The top of each signed-in view shows weekly subscription allowance remaining
-for Codex and Claude, plus the reported reset time. These are provider-reported
-percentages, not estimated token balances. Each collector reads its native
-login's usage information without starting a model turn. The newest machine's
-report is selected once, never added across machines; its source and read time
-are available on the indicator. A missing/failed read is unavailable, a read
-older than five minutes is overdue, and an elapsed reset waits for a new read.
+The top of each signed-in view shows the weekly subscription allowance left
+for Codex and Claude, with the reported reset time: provider-reported
+percentages, not estimated token balances, read by each collector from its
+native login without starting a model turn. The newest machine's report is
+used once, never added across machines; its source and read time are on the
+indicator. A missing or failed read is unavailable, a read older than five
+minutes is overdue, and an elapsed reset waits for a new read.
 
-Codex uses the native app-server's read-only `account/rateLimits/read` method
-and selects only its seven-day subscription window. Claude uses the native
-login's OAuth usage endpoint. Credentials stay on the machine and in memory
-for that HTTPS read; only allowlisted percentages and timestamps leave it.
-The collector does not refresh expired credentials, change logins or enable
-extra usage. A missing, expired or inaccessible native login shows unavailable.
-The Claude endpoint is a native-client interface rather than a public API
-contract, so an upstream change also shows unavailable until the reader is updated.
+Codex uses the native app-server's read-only `account/rateLimits/read` method,
+selecting its seven-day subscription window; Claude uses the native login's
+OAuth usage endpoint. Credentials stay on the machine and in memory for that
+HTTPS read; only allowlisted percentages and timestamps leave it. The collector
+refreshes no expired credentials, changes no login and enables no extra usage.
+A missing, expired or inaccessible login shows unavailable, as does an upstream
+change to the Claude endpoint, a native-client interface rather than a public
+API contract, until the reader is updated.
 
 Each conversation gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
@@ -153,34 +153,36 @@ continues only while it is small, and a review of a change always gets a fresh
 one, which starts from the earlier report. Child results resume the same
 master, which is sent only what it has not seen; once its own session grows
 large, a fresh master takes over with the full brief. Native agents use their
-existing sign-ins. There is no hosted agent runtime or inbound tunnel.
+existing sign-ins; there is no hosted agent runtime or inbound tunnel. The
+claim names whose conversation it is: agents address them by name, helpers'
+commits are authored as them (pushed with the machine's login), and PRs and
+work-record comments say who asked.
 
 Context follows the task rather than the age of its conversation. The master
 can set `resetContext: true` on a decision when the task changes materially,
 a correction invalidates its assumptions, or repeated attempts revive an old
-mistake. Its next decision starts fresh after the current decision is accepted;
+mistake. Its next decision starts fresh once the current one is accepted;
 running work is never interrupted. It can also set `task.freshSession: true`
 to give a helper a fresh session in the same owned worktree. Small direct
 revisions can continue their existing session.
 
 A fresh master receives the user's original instructions and corrections,
-the latest reported position, and the existing child evidence; it does not
-replay every earlier agent answer. Reports remain claims to verify, and user
-authority is preserved separately. The exact exchange stays in a private local
-context file for read-only reference: a short approval must be checked against
-the original request before acting, rather than guessed from a handoff.
-Helper briefs carry the current objective,
-applicable constraints and approvals, source evidence, open questions and
-acceptance checks. Repository instructions and canonical plans stay in their
-existing files and are read when relevant. This applies the task-scoped
+the latest reported position and the existing child evidence, never a replay
+of every earlier agent answer. Reports remain claims to verify; user authority
+is preserved separately. The exact exchange stays in a private local context
+file for read-only reference: a short approval is checked against the original
+request before acting, not guessed from a handoff. Helper briefs carry the
+current objective, applicable constraints and approvals, source evidence, open
+questions and acceptance checks. Repository instructions and canonical plans
+stay in their files and are read when relevant. This applies the task-scoped
 handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
 without discarding saved work, approval boundaries or recovery journals.
 
 Optional Jev context selection (off by default) runs in the conversation's
 executor: it trims older detail from fresh coordinator handovers and ranks
 project evidence before each coordinator, helper and recovery turn.
-[docs/context-selection.md](docs/context-selection.md) covers its modes, key
-and gateway, diagnostics, retrieval, caching and validation.
+[docs/context-selection.md](docs/context-selection.md) covers its modes, key,
+gateway, diagnostics, retrieval, caching and validation.
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.
@@ -189,22 +191,21 @@ worktree for fixes and remaining delivery. Independent review and capability
 changes can still require another helper. Before reporting completion after a
 change child, the master must account for checks, review, merge, deployment,
 visual verification and required machine sync for the **current request**. Each
-gate includes specific evidence or a reason it does not apply; missing or pending
-gates send the decision back to the master without replaying work. Draft-only
+gate has specific evidence or a reason it does not apply; missing or pending
+gates go back to the master without replaying work. Draft-only
 requests end at a verified saved draft. The final delivery record stays in the
-private local journal, not telemetry or portfolio snapshots. This makes the
-master's assessment explicit; it does not independently attest external systems
-or replace the repository's release gates.
+private local journal, not telemetry or portfolio snapshots. This makes the master's
+assessment explicit without attesting external systems or replacing the
+repository's release gates.
 
-The master checks evidence before declaring anything complete; a native turn
-ending does not prove tests, merge or deployment, and nothing here invents
-progress or verification. Repository instructions own setup, checks and
-delivery.
+The master checks evidence before declaring anything complete: a native turn
+ending proves no tests, merge or deployment, and nothing here invents progress
+or verification. Repository instructions own setup, checks and delivery.
 
 - **Feedback** can be sent while queued or running. It reaches the agent at
   work within seconds (Codex through `turn/steer`, Claude through its stream
   input) and the master still reviews it at its next decision. **Stop work**
-  cancels; cancellation cannot recall effects already performed.
+  cancels; cancellation recalls no effect already performed.
 - **Progress**: agents emit bounded `PROJECTS_PROGRESS` notes; the conversation
   shows a **Now** panel (the step in progress, what follows, what is done), the
   working agent's own plan, and for a change child the branch's changed files
@@ -218,9 +219,8 @@ delivery.
 - **Pages**: an HTML mockup or slide deck linked at a saved commit opens
   inside Projects, full screen over the current view, from the documents list
   or the link itself; **Source** keeps the GitHub copy a tap away. The first
-  machine whose runner calls after you open one reads that edition with its own
-  GitHub login, and the Worker keeps it (up to 5 MB, the 30 most recently
-  opened). The commit is the version: nothing is republished. The page runs its
+  machine whose runner calls next reads that edition with its own GitHub login,
+  and the Worker keeps it (up to 5 MB, the 30 most recently opened). The commit is the version: nothing is republished. The page runs its
   own scripts in an opaque origin (sandbox and `DOCUMENT_CSP` in
   `src/document-model.ts`), so its slide controls, notes and clicks work but it
   cannot reach your session, Projects' pages or APIs, the network or the top
@@ -230,27 +230,24 @@ delivery.
 - **Screenshots** can be pasted or added to messages (on an iPhone, with the
   Paste button); the browser re-encodes and bounds them and both master and
   children receive them.
-- **Typing**: Enter sends and Shift+Enter starts a new line. On a phone,
-  Return starts a new line and the Send button sends.
+- **Typing**: Enter sends and Shift+Enter starts a new line; on a phone,
+  Return starts a new line and Send sends.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
   prompts, so it never waits behind long work.
 - **Bounds**: ten active standard and thirty active quick conversations, 30 and
   60 starts an hour, 120 follow-ups per owner per hour, 24 children per conversation, 12 master
-  decisions a turn. User messages have no lifetime count limit. At a safe native
-  turn boundary the coordinator rotates when reported context exceeds 250,000
-  tokens or recorded prompt input reaches 128,000 characters (including when
-  native usage is unavailable). The chat, machine claim, children and worktrees
-  remain the same. Fresh coordinators receive the original goal, recent exact
-  instructions and latest reported position; omitted instructions and approval
-  exchanges must be read from the owner-only full local transcript before work
-  continues. Context rotation resets session context, not cumulative usage.
+  decisions a turn. At a safe native turn boundary the coordinator rotates when
+  reported context exceeds 250,000 tokens or recorded prompt input reaches
+  128,000 characters (including when native usage is unavailable). The chat,
+  machine claim, children and worktrees remain the same, and rotation resets
+  session context, not cumulative usage.
 
 Permissions: a Codex change child uses a named permission profile for its
 worktree and Git directories, with network access and no interactive
 approvals; the primary checkout stays read-only. A Claude change child has
 Read/Glob/Grep/Edit/Write/Bash; a read child and the master only inspect. The
 master and read-only recovery get only this conversation's browser. Helpers
-also get the user's connected accounts, read and write: Claude allows every
+also get the machine's connected accounts, read and write: Claude allows every
 claude.ai connector plus the local MCP servers in the machine's
 `helpers.localServers`, hiding other local servers and `helpers.deniedTools`;
 Codex approves its app connectors but disables account administration. Sending,
@@ -262,20 +259,19 @@ untrusted users.
 
 Recovery: each dispatch is journalled locally before it runs. A runner restart
 keeps its claim; once the old process has exited and the workspace is verified,
-the same child session is resumed **read-only** to reconcile what finished, and
-the master decides what remains. A helper turn that fails is reconciled the same
+the same child session is resumed **read-only** to reconcile what finished; the
+master decides what remains. A helper turn that fails is reconciled the same
 way at once; when its session cannot continue (out of room, say), the master
 gets the worktree's state and continues it in a fresh session. A request the
-runner refused leaves the helper's result standing, recorded as evidence, and a
-failed coordinator turn runs again. Failures reach you only after the master
+runner refused leaves the helper's result standing, as evidence, and a failed
+coordinator turn runs again. Failures reach you only after the master
 has had its say, or after four in a row in one turn. Turn limits, and how a
 helper's turn ends at its result, are in [docs/run-health.md](docs/run-health.md).
 Uncertain writes are never replayed. Each conversation runs in its own executor process, so a release
 restarts runners at once with `SIGUSR2`: the runner exits for the new bundle,
 which adopts the executors still running; each finishes its current step on
 the version it started with, saves its place and exits, and the new runner
-continues it. `SIGTERM` still stops everything, and that work recovers as
-above.
+continues it. `SIGTERM` still stops everything; that work recovers as above.
 
 ### Conversation browsers
 
@@ -291,7 +287,8 @@ conversation page offers **Watch browser** and **Open browser / sign in**
 minutes or thirty in all; no Cloudflare credential reaches a machine.
 
 On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new browser starts
-signed in as `PROJECTS_OWNER_EMAIL`. The Worker sets the cookie itself over
+signed in as the conversation's owner, while their address is allowed; else
+it is not, and the agents are told. The Worker sets the cookie itself over
 its own CDP connection before the runner's opens; no runner route returns it.
 The session belongs to that browser alone: only its hash is kept, it ends when
 the browser closes or the provider ends it (checked every five minutes), on
@@ -366,10 +363,11 @@ link enters the request, never the email text. **Done** finishes the activity;
 archiving its source email is a separate explicit action. **Archive** and
 **Unsubscribe** follow the Mark done pattern; unsubscribe uses RFC 8058
 one-click only, to a public HTTPS host checked on the connection's own DNS
-lookup, and otherwise starts a conversation.
+lookup, and otherwise starts a conversation. A conversation's email lane uses
+its owner's mailbox only when that is this `inboxAccount`; anyone else's is
+told no mailbox is connected for them yet.
 
-The retired daily brief returns Gone without sending mail; its historical
-records are retained.
+The retired daily brief returns Gone without sending mail; its records stay.
 
 ## Notifications
 
@@ -408,7 +406,8 @@ Home Screen.
   be same-origin.
 - **People**: every allowed address is a person with a profile, named from the
   address until set in Settings. A conversation belongs to whoever started it
-  (older ones to the deployment owner); everyone sees everyone's.
+  (older ones to the deployment owner); everyone sees everyone's, and its
+  machine is told who, never telemetry.
 - **Machines** authenticate with their own tokens, stored as hashes; collector
   and runner tokens reach only their own routes and never read the overview.
 - **Pages** are untrusted HTML: served only to the signed-in owner, framed only

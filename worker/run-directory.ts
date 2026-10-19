@@ -360,7 +360,7 @@ export class Runs {
         );
         const run = await this.stub(id).claim(owner, host);
         await this.get(id);
-        if (run) return run;
+        if (run) return withOwner(run, this.deploymentOwner);
         this.storage.sql.exec(
           "DELETE FROM runner_slots WHERE owner=? AND id=?",
           owner,

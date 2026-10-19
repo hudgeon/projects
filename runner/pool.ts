@@ -1,7 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Lane, Run } from "../src/run-model";
 
-export type ClaimedRun = { run: Run; activity: unknown[] };
+// The person whose conversation it is and how its browser signs in come with
+// the claim; the executor checks their shape before using them.
+export type ClaimedRun = { run: Run; activity: unknown[]; person?: unknown; browserSignIn?: unknown };
 
 // Claims stay serial so a lost reply can retry the same durable reservation.
 // Native execution is concurrent; each conversation keeps its own controller,

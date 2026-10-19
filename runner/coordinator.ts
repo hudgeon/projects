@@ -12,7 +12,7 @@ import { MASTER_CONTEXT_LIMIT, MASTER_INPUT_CHAR_LIMIT } from "./turn-limits";
 import { activityBrief } from "./activity-brief";
 import type { EngineOptions, RunState } from "./execution";
 import { savePrivate, type Journal } from "./journal";
-import { masterInstructions, movedInstructions, quickInstructions } from "./master-instructions";
+import { masterInstructions, movedInstructions, personInstructions, quickInstructions } from "./master-instructions";
 
 // The coordinator's brief and session record for one execution, read once,
 // and the first prompt of a turn that resumes its session.
@@ -59,7 +59,7 @@ export async function openCoordinator(
   };
   const workContext =
     o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue);
-  const stableBrief = `${masterInstructions}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : ""}`;
+  const stableBrief = `${masterInstructions}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : ""}`;
   const briefHash = createHash("sha256")
     .update(stableBrief)
     .digest("hex")

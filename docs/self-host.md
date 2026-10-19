@@ -31,11 +31,11 @@ variables on your copy of the repository.
 | --- | --- |
 | `PROJECTS_HOST` | Your site's host name, such as `projects.example.com`, on a domain in your Cloudflare account. |
 | `PROJECTS_PORTFOLIO` | Any stable short name for your portfolio; changing it later starts empty. |
-| `PROJECTS_OWNER_EMAIL` | The owner's address. Sign-in uses `ALLOWED_EMAILS`; conversation browsers on machines in `PROJECTS_BROWSER_SIGN_IN` start signed in as this address, which must also be allowed. |
+| `PROJECTS_OWNER_EMAIL` | The deployment owner's address. Sign-in uses `ALLOWED_EMAILS`; conversations from before people had profiles are this person's, so their browsers sign in as this address (which must also be allowed) and their email lane uses its mailbox. |
 | `PROJECTS_EMAIL_FROM` | The sender for sign-in codes, on a domain set up in step 2. |
 | `PROJECTS_TIME_ZONE` | Legacy daily-brief setting, retained for deployment compatibility; no longer affects the workspace. |
 | `PROJECTS_BROWSER_HOSTS` | Optional. Exact host names, comma separated, that conversation browsers may reach besides your site, such as `mockups.example.net`; at most ten, no wildcards. Unset, browsers reach only your site. |
-| `PROJECTS_BROWSER_SIGN_IN` | Optional. Machine IDs, comma separated, whose conversation browsers start signed in to your site, so their agents never wait for you to enter a code; at most ten. Each browser gets its own session, which ends when that browser closes; it cannot change machines, open other browsers, read or act on email, or change how agents run. Removing the machine in Settings revokes its browsers at once; removing its ID does so at the next Deploy. Unset, every browser signs in by hand. |
+| `PROJECTS_BROWSER_SIGN_IN` | Optional. Machine IDs, comma separated, whose conversation browsers start signed in to your site as the conversation's owner, while that address is allowed, so their agents never wait for a code; at most ten. Each browser gets its own session, which ends when that browser closes; it cannot change machines, open other browsers, read or act on email, or change how agents run. Removing the machine in Settings revokes its browsers at once; removing its ID does so at the next Deploy. Unset, every browser signs in by hand. |
 | `SECURITY_REVIEW_BOT_ID` | The id of a bot whose passing `security-review` status each release needs, or `none`. `none` needs `"securityReview": "optional"` in `.github/release-policy.json`, changed by a reviewed pull request. |
 
 ## 2. Set up email sign-in
@@ -123,6 +123,8 @@ every start logs the `release` it runs. Options:
   `work` are your work items. Without it, work items and Mark done are off.
 - `--inbox you@example.com` (optional): a Gmail account read through `gws`.
   Email replies also expect a `compose-email` skill in the work repository.
+  Conversations of the person whose address this is work in it; anyone else's
+  conversation is told no mailbox is connected for them until theirs is.
 - `--collector-label`, `--runner-label` (optional): launchd labels for the two
   services, when they should differ from the defaults. They are kept in
   `machine.json`, so later runs restart the same services.
@@ -170,7 +172,10 @@ In the composer choose Claude as the master once; the site remembers it on each
 device, and a machine without Codex runs Claude regardless. Conversations carry
 the name of whoever started them, and Today lists yours until you switch it to
 everyone's; conversations from before profiles existed are the owner's
-(`PROJECTS_OWNER_EMAIL`).
+(`PROJECTS_OWNER_EMAIL`). A conversation's machine is told whose it is: its
+agents address that person by name, helpers' commits are authored as them and
+pushed with the machine's Git login, and pull requests and work-record
+comments say who asked.
 
 Whoever can sign in can run code on your machines with your logins, so keep
 `ALLOWED_EMAILS` to yourself.

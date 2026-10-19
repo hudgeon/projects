@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ScreenshotInput } from "../src/screenshot-model";
 import type { ExecutionEvent, FailureReason } from "../src/telemetry";
 import type { ConnectorAccess } from "./connectors";
+import type { Person } from "../src/people-model";
 import type {
   LivePlanStep,
   NativeActivity,
@@ -30,8 +31,7 @@ export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
 // A turn's tokens so far, as its app reports them: new input (cache writes
-// included), cached input read again and output, with the latest request's
-// context size.
+// included), cached input read again, output, and the latest request's context.
 export type TurnUsage = {
   fresh: number;
   cached: number;
@@ -61,36 +61,36 @@ export type NativeOptions = {
   // A command's own text comes too, for the runner and Jev only.
   onActivity?: (event: NativeActivity, command?: string) => void;
   onProgress?: (note: ProgressNoteInput) => void;
-  // The working agent's own plan, as it changes.
+  // The working agent's plan, as it changes.
   onPlan?: (steps: LivePlanStep[]) => void;
-  // Once the turn is running: delivers the user's feedback into it. Rejects when
-  // the turn has finished or cannot take more input.
+  // Once the turn runs: delivers the user's feedback into it; rejects once
+  // the turn has finished or takes no more input.
   onSteer?: (steer: (input: SteerInput) => Promise<void>) => void;
-  // Requests the runner refused during a turn that still returned its result,
-  // as categories; never tool names or arguments.
+  // Requests the runner refused during a turn that still returned its result:
+  // categories, never tool names or arguments.
   onRefused?: (categories: string[]) => void;
-  // The process ran on after the turn's result, so it was stopped with
-  // whatever it left running; the result stands.
+  // The process ran on after the turn's result and was stopped with whatever
+  // it left running; the result stands.
   onOverran?: () => void;
-  // How long a Claude process may run on after its result.
+  // How long a Claude process may run on past its result.
   resultExitMs?: number;
-  // Called as the turn's token use grows.
+  // Called as the turn's tokens grow.
   onUsage?: (usage: TurnUsage) => void;
   // Each file the turn reads or changes: paths and line ranges only.
   onFile?: (file: FileTouch) => void;
   // The user's connectors, for helpers only.
   connectors?: ConnectorAccess;
+  // Whose commits a change turn makes.
+  person?: Person;
   binaries?: { codex?: string; claude?: string };
-  // First wait before re-running a turn the model was too busy to start.
+  // First wait before re-running a turn a busy model could not start.
   retryDelayMs?: number;
 };
-// The runner credential, Doppler credentials and provider API keys must never
-// reach a coding process. Native tools use the user's existing local login.
-export function nativeEnv(
-  browser?: NativeOptions["browser"],
-): NodeJS.ProcessEnv {
-  // Wrangler augments ProcessEnv with required Worker bindings; those bindings
-  // intentionally do not exist in a native process's environment.
+// The runner credential, Doppler credentials and provider API keys never reach
+// a coding process; native tools use the machine's own logins.
+export function nativeEnv(browser?: NativeOptions["browser"], person?: Person): NodeJS.ProcessEnv {
+  // Wrangler augments ProcessEnv with the Worker's bindings, which no native
+  // process has.
   const env = Object.fromEntries(
     [
       "HOME",
@@ -106,9 +106,15 @@ export function nativeEnv(
       "CODEX_HOME",
     ].flatMap((key) => (process.env[key] ? [[key, process.env[key]!]] : [])),
   ) as NodeJS.ProcessEnv;
-  // A change sandbox cannot write ~/.cache, so uv (the work repository's email
-  // draft helper among others) keeps its cache in the writable temporary directory.
+  // A change sandbox cannot write ~/.cache, so uv (the work repository's
+  // email draft helper, for one) caches in the temporary directory.
   env.UV_CACHE_DIR = path.join(tmpdir(), "projects-uv-cache");
+  // Commits are authored as the conversation's owner; the committer and push
+  // credentials stay the machine's.
+  if (person) {
+    env.GIT_AUTHOR_NAME = person.name;
+    env.GIT_AUTHOR_EMAIL = person.email;
+  }
   if (browser) {
     env.PLAYWRIGHT_MCP_CDP_ENDPOINT = browser.endpoint;
     env.PLAYWRIGHT_MCP_CDP_HEADERS = `Authorization: Bearer ${browser.capability}`;
@@ -135,8 +141,8 @@ export function stopProcess(child: ChildProcessWithoutNullStreams) {
   timer.unref();
 }
 export class NativeStopError extends Error {}
-// A failure with a known cause, from a native session or the runner itself: its
-// message is what the user reads, its reason the safe category telemetry keeps.
+// A failure with a known cause, native or the runner's own: its message is what
+// the user reads, its reason the safe category telemetry keeps.
 export class Failure extends Error {
   constructor(
     readonly reason: FailureReason,
@@ -145,7 +151,7 @@ export class Failure extends Error {
     super(message);
   }
 }
-// The model was at capacity or its connection dropped. `acted` records whether
+// The model was at capacity or its connection dropped; `acted` says whether
 // the turn had already run a command or tool, which makes a retry unsafe.
 export class NativeBusyError extends Error {
   constructor(readonly acted: boolean) {
@@ -164,7 +170,7 @@ const BUSY = new Set([
   "responseStreamDisconnected",
   "responseTooManyFailedAttempts",
 ]);
-// Codex's own failure category; no message or detail is kept.
+// Codex's own failure category; no message or detail kept.
 function turnFailure(info: unknown, acted: boolean): Error {
   const kind =
     typeof info === "string"
@@ -227,7 +233,7 @@ const rejected: Record<string, [FailureReason, string]> = {
 // What a refused request would have done, never its tool, command or text.
 export function nativeProcessStopped(pid: number | null): boolean {
   if (!pid || pid <= 1) return false;
-  // Check the detached process group too: a shell/tool can outlive its parent.
+  // Check the detached process group too: a shell or tool can outlive it.
   for (const target of [pid, -pid]) {
     try {
       process.kill(target, 0);
@@ -269,7 +275,7 @@ const userContent = (input: SteerInput, kind: "codex" | "claude") => [
         },
   ),
 ];
-// Only native protocol events are parsed. Tool output is drained, never uploaded.
+// Only native protocol events are parsed; tool output is drained, not uploaded.
 function readLines(
   child: ChildProcessWithoutNullStreams,
   receive: (line: Record<string, unknown>) => void,
@@ -339,8 +345,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
             ],
             enabled_tools: browserTools(o.readOnly),
             startup_timeout_sec: 60,
-            // Carry the user's browser grant only to the tools exposed for this
-            // native phase. Other MCP tools and filesystem approvals stay intact.
+            // The browser grant reaches only the tools exposed for this phase;
+            // other MCP tools and filesystem approvals stay intact.
             ...Object.fromEntries(
               browserTools(o.readOnly).map((tool) => [
                 `tools.${tool}.approval_mode`,
@@ -357,7 +363,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       "--listen",
       "stdio://",
     ],
-    { cwd: o.cwd, env: nativeEnv(o.browser), detached: true, stdio: "pipe" },
+    { cwd: o.cwd, env: nativeEnv(o.browser, o.person), detached: true, stdio: "pipe" },
   );
   let next = 1,
     finalText = "",
@@ -431,8 +437,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         return;
       }
       const p = object(message.params);
-      // The runner answers every request for approval or input itself: it
-      // declines, and the turn carries on without it.
+      // The runner itself declines every request for approval or input; the
+      // turn carries on without it.
       if (message.id !== undefined && typeof message.method === "string") {
         refusals.push(
           codexRequests[message.method] ??
@@ -462,7 +468,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         o.onTiming?.({firstOutputMs: Math.round(firstOutputAt - turnRequestedAt)});
       }
       // The thread's running totals; this process's turns are the growth
-      // since just before the first report it saw.
+      // since just before its first report.
       if (message.method === "thread/tokenUsage/updated") {
         const usage = object(p.tokenUsage);
         const total = object(usage.total),
@@ -532,7 +538,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
           const value = JSON.parse(finalText);
           o.onActivity?.({ kind: "turn", state: "finished" });
           // A refused request is evidence for the master, not a failure: the
-          // turn went on without it and reported.
+          // turn went on and reported.
           if (refusals.length) o.onRefused?.(refusals);
           finish(value);
         } catch {
@@ -566,8 +572,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       capabilities: { experimentalApi: !o.readOnly },
     });
     send({ method: "initialized", params: {} });
-    // Codex refuses to resume an archived thread. A thread that was never
-    // archived rejects this harmlessly; resume still reports real failures.
+    // Codex refuses to resume an archived thread; one never archived rejects
+    // this harmlessly, and resume still reports real failures.
     if (o.sessionId)
       await request("thread/unarchive", { threadId: o.sessionId }, 15000).catch(
         () => {},
@@ -619,8 +625,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       });
       const started = object(turn.turn).id;
       if (typeof started === "string") turnId = started;
-      // Codex adds steered input to the active turn; it refuses once the turn
-      // has ended, and the feedback then waits for the master's next decision.
+      // Codex adds steered input to the active turn; once it has ended, the
+      // feedback waits for the master's next decision.
       o.onSteer?.(async (input) => {
         if (!turnId) throw Error("The turn has not started.");
         await request(
@@ -637,8 +643,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         result = await completed;
         break;
       } catch (error) {
-        // A busy model that had not yet run anything can run the same turn
-        // again: twice more, after one and then two waits.
+        // A busy model that had run nothing yet runs the same turn again:
+        // twice more, after one and then two waits.
         if (!(error instanceof NativeBusyError) || error.acted || attempt >= 3)
           throw error;
         await delay((o.retryDelayMs ?? 60_000) * attempt, undefined, {
@@ -647,9 +653,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         arm();
       }
     }
-    // Archiving keeps runner threads out of the user's Codex sidebar; archived
-    // threads remain resumable. Failed or stopped threads stay visible for
-    // inspection.
+    // Archiving keeps runner threads out of the user's Codex sidebar, still
+    // resumable; failed or stopped threads stay visible for inspection.
     await request("thread/archive", { threadId }, 15000).catch(() => {});
     return result;
   } finally {
@@ -657,16 +662,16 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     await confirmStopped(child);
   }
 }
-// A turn ends at its result. Claude keeps its process while a command the
-// agent left in the background runs, then starts a turn of its own when that
-// command finishes, which nobody reads. Whatever still runs this long after
-// the result is stopped, and the result stands.
+// A turn ends at its result. Claude keeps its process while a background
+// command the agent left runs, then starts a turn of its own nobody reads when
+// it finishes. Whatever still runs this long after the result is stopped; the
+// result stands.
 export const RESULT_EXIT_MS = 30_000;
 async function claudeTurn(o: NativeOptions): Promise<unknown> {
   const session = o.sessionId ?? randomUUID();
-  // Write session identity before the process can execute a prompt.
+  // Write the session identity before the process can run a prompt.
   await o.onSession(session);
-  // A stop that arrived while the identity was saved starts nothing.
+  // A stop that arrived while it was saved starts nothing.
   o.signal.throwIfAborted();
   const connectors = o.connectors?.claude;
   const unrestricted = fullAccess(o);
@@ -678,14 +683,14 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     "--output-format",
     "stream-json",
     "--verbose",
-    // Input stays open until the result so feedback can reach the running turn.
+    // Input stays open until the result, so feedback reaches the running turn.
     "--input-format",
     "stream-json",
     "--json-schema",
     JSON.stringify(o.schema),
     "--permission-mode",
     unrestricted ? "bypassPermissions" : "dontAsk",
-    // TodoWrite only keeps the session's own plan; it changes nothing.
+    // TodoWrite keeps only the session's plan; it changes nothing.
     "--tools",
     enabledTools,
     ...(unrestricted ? [] : [
@@ -714,8 +719,8 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         ]
       : []),
     // Without approved connectors, only this conversation's browser: anything
-    // else would be refused in dontAsk mode, failing the whole turn. With
-    // them, local MCP servers and blocked connector tools stay hidden.
+    // else would be refused in dontAsk mode and fail the turn. With them,
+    // local MCP servers and blocked connector tools stay hidden.
     ...(connectors || unrestricted ? [] : ["--strict-mcp-config"]),
     "--mcp-config",
     JSON.stringify({
@@ -727,7 +732,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   ];
   const child = spawn(o.binaries?.claude ?? "claude", args, {
     cwd: o.cwd,
-    env: nativeEnv(o.browser),
+    env: nativeEnv(o.browser, o.person),
     detached: true,
     stdio: "pipe",
   });
@@ -752,12 +757,12 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     child.stdin.end();
   };
   const tools = new Map<string, NativeActivity["kind"]>();
-  // Each request's usage, by message: a message streamed in parts repeats it.
+  // Each request's usage, by message: one streamed in parts repeats it.
   const requests = new Map<string, Record<string, unknown>>();
   let context = 0;
   // While the turn runs, its requests so far; once it reports, the result's
-  // own count for this turn. Never the per-model totals: on a resumed session
-  // they include every earlier turn.
+  // own count. Never the per-model totals: on a resumed session they include
+  // every earlier turn.
   const usage = (turn?: Record<string, unknown>) => {
     const counted =
       turn && Object.values(turn).some((value) => typeof value === "number")
@@ -848,17 +853,17 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
             }
         }
         if (message.type !== "result") return;
-        // A resumed session can first report a turn that never ran, such as
-        // a background task's notice from its previous process. The turn for
-        // this prompt follows; its input stays open until then.
+        // A resumed session can first report a turn that never ran, such as a
+        // background task's notice from its previous process; the turn for
+        // this prompt follows, its input open until then.
         if (message.subtype === "success" && message.num_turns === 0) return;
         // Only the first result answers this prompt.
         if (received) return;
         o.onUsage?.(usage(object(message.usage)));
         subtype = typeof message.subtype === "string" ? message.subtype : "";
         if (message.is_error || message.subtype !== "success") failed = true;
-        // Don't-ask mode refuses what was not granted, and the turn carries on
-        // without it. Only the kind of each refused request is kept.
+        // Don't-ask mode refuses what was not granted and the turn carries on;
+        // only the kind of each refused request is kept.
         if (Array.isArray(message.permission_denials))
           refusals = message.permission_denials.map((denial) =>
             claudeRefusal(object(denial).tool_name),

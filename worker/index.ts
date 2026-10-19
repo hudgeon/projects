@@ -7,6 +7,7 @@ import { pushEndpoint, PushDevices, vapidPublicKey } from "./push";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
+import { claimed } from "./claims";
 import { People, peopleRoutes } from "./people";
 import { Sessions } from "./sessions";
 import { Documents } from "./documents";
@@ -131,8 +132,8 @@ export class Portfolio extends DurableObject<Env> {
     return removed;
   }
   // Only a conversation's own browser starts and ends these (worker/browser.ts).
-  startBrowserSignIn(hash: string, run: string, machine: string, expires: number) {
-    return this.signIns.start(hash, run, machine, expires);
+  startBrowserSignIn(hash: string, run: string, machine: string, owner: string, expires: number) {
+    return this.signIns.start(hash, run, machine, owner, expires);
   }
   endBrowserSignIn(run: string) {
     this.signIns.end(run);
@@ -216,6 +217,10 @@ export class Portfolio extends DurableObject<Env> {
   }
   renamePerson(email: string, name: string) {
     return this.profiles.rename(email, name);
+  }
+  // Who an address is, for a claim: no row is made for it.
+  personNamed(email: string) {
+    return this.profiles.find(email);
   }
   people() {
     return this.profiles.list();
@@ -511,32 +516,8 @@ export async function handle(
           store.screenshot(input.id, input.screenshotId, owner, input.generation));
         return Response.json(image ? { screenshot: { id: image.metadata.id, mime: image.metadata.mime, data: Buffer.from(image.bytes).toString("base64") } } : { error: "Screenshot is not available for this claim" }, { status: image ? 200 : 404 });
       }
-      if (url.pathname.endsWith("/claim")) {
-        const input = runnerClaimSchema.parse(raw);
-        const run = await trace("dispatch", {}, async () => {
-          const claimed = await store.claimRun(owner, input.activeRunIds, input.lanes, host);
-          if (claimed) attributes({ runId: claimed.id, generation: claimed.generation });
-          return claimed;
-        });
-        if (run) attributes({ runId: run.id, generation: run.generation });
-        const activity = run
-          ? (await store.overview()).map((s) => ({
-              host: s.host,
-              observedAt: s.collectedAt,
-              unassignedSessions: s.unassignedSessions,
-              projects: s.projects.map((p) => ({
-                id: p.id,
-                sessions: p.sessions,
-                worktrees: p.worktrees,
-                pulls: p.pulls,
-                sources: p.sources,
-              })),
-            }))
-          : [];
-        // A runner that can fetch documents takes the oldest one waiting.
-        const document = input.documents ? await store.leaseDocument(owner) : null;
-        return Response.json({ run, activity, settings: await store.executionSettings(), ...(document ? { document } : {}) });
-      }
+      if (url.pathname.endsWith("/claim"))
+        return Response.json(await claimed(store, env, owner, runnerClaimSchema.parse(raw), host));
       if (url.pathname.endsWith("/heartbeat")) {
         const input = runnerHeartbeatSchema.parse(raw);
         attributes({ runId: input.id, generation: input.generation });

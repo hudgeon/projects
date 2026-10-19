@@ -1,12 +1,18 @@
 import { z } from "zod";
 
 // A person who may sign in: every allowed address is one. The name is theirs
-// to set; until then it is read from the address.
+// to set; until then it is read from the address. A name is one line of plain
+// text: it is said in prompts and becomes helpers' Git author name, where a
+// control character or angle bracket would break the identity line.
 export type Person = { email: string; name: string };
 export const NAME_LIMIT = 60;
-export const nameInputSchema = z
-  .object({ name: z.string().trim().min(1).max(NAME_LIMIT) })
-  .strict();
+const plainName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(NAME_LIMIT)
+  .regex(/^[^\p{Cc}<>]+$/u);
+export const nameInputSchema = z.object({ name: plainName }).strict();
 // "matt.smith@example.com" reads as "Matt Smith" until Matt says otherwise.
 export function defaultName(email: string) {
   return email
@@ -31,3 +37,11 @@ export function yours<T extends { owner: string }>(
 ) {
   return everyone || !me ? runs : runs.filter((run) => run.owner === me);
 }
+// A person as a claim hands them to a runner: the same plain name, and an
+// address with nothing Git's author line could misread.
+export const personSchema = z
+  .object({
+    email: z.string().trim().min(1).max(254).regex(/^[^\s<>]+$/),
+    name: plainName,
+  })
+  .strict();

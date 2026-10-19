@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
-import { SESSION_COOKIE, allowed, digest, equal, signsIn, token } from "./auth";
+import { SESSION_COOKIE, allowed, deploymentOwner, digest, equal, signsIn, token } from "./auth";
 import { trace } from "./telemetry";
 import { telemetry } from "../src/telemetry";
 import type { ConversationRecord } from "./runs";
@@ -32,11 +32,10 @@ type Session = {
 };
 export const browserPath = /^\/api\/browser\/([a-f0-9-]{36})\/cdp$/;
 
-// The owner's sessions that only a conversation browser holds, kept by the
-// portfolio beside the owner's own: one per browser, for one conversation on a
-// machine the deployment signs in, ending when that browser closes, when the
-// machine is removed or leaves BROWSER_SIGN_IN, when the conversation moves to
-// another machine, or on Sign out. Hashes only.
+// Sessions only a conversation browser holds, as the conversation's owner:
+// one per browser on a machine the deployment signs in, ending with that
+// browser, the machine's removal or delisting, the conversation moving to
+// another machine, or Sign out. Hashes only.
 export class BrowserSignIns {
   constructor(
     private storage: DurableObjectStorage,
@@ -56,8 +55,10 @@ export class BrowserSignIns {
   private active(machine: string) {
     return signsIn(this.env, machine) && this.registered(machine);
   }
-  start(hash: string, run: string, machine: string, expires: number, now = Date.now()) {
-    const email = (this.env.OWNER_EMAIL ?? "").trim().toLowerCase();
+  // As the conversation's owner (the deployment owner before profiles); an
+  // address not allowed to sign in gets none.
+  start(hash: string, run: string, machine: string, owner: string, expires: number, now = Date.now()) {
+    const email = (owner ?? "").trim().toLowerCase() || deploymentOwner(this.env);
     if (
       !/^[a-f0-9]{64}$/.test(hash) ||
       !email ||
@@ -107,9 +108,9 @@ export class BrowserSignIns {
     this.storage.sql.exec("DELETE FROM browser_sign_ins WHERE hash=?", hash);
   }
 }
-// Sets the sign-in cookie in a browser's default profile over its own CDP
-// connection, which closes before the runner's opens. Host-only, like the
-// cookie the site sets, and expiring with the browser.
+// Sets the sign-in cookie in the browser's default profile over the Worker's
+// own CDP connection, closed before the runner's opens: host-only, like the
+// site's, expiring with the browser.
 async function setSignInCookie(env: Env, id: string, value: string, expires: number) {
   const connection = await env.BROWSER.connectSession(id);
   const response = await connection.webSocket.fetch("https://browser-binding.invalid", {
@@ -170,7 +171,7 @@ async function setSignInCookie(env: Env, id: string, value: string, expires: num
 }
 
 // Domain-separated, short-lived capabilities are not runner credentials. The
-// current durable claim is checked on EVERY connection, including reconnects.
+// current durable claim is checked on every connection, reconnects included.
 function signature(payload: string, secret: string) {
   return createHmac("sha256", secret)
     .update(`projects-browser-v1:${payload}`)
@@ -201,8 +202,8 @@ export function verifyBrowserClaim(
   }
 }
 
-// Owned by the existing conversation object. Only this private table contains
-// provider identifiers; capabilities and Live View URLs are never persisted.
+// Owned by the conversation object. Only this private table holds provider
+// identifiers; capabilities and Live View URLs are never persisted.
 export class ConversationBrowser {
   private pending: Promise<unknown> = Promise.resolve();
   constructor(
@@ -256,9 +257,9 @@ export class ConversationBrowser {
     try {
       return await this.env.BROWSER.getSession(id);
     } catch (error) {
-      // The live binding throws this exact error for expired sessions, despite
-      // its documented nullable result. Only normalize the observed absence;
-      // authorization, transport and other provider failures remain failures.
+      // The live binding throws this exact error for an expired session despite
+      // its documented nullable result. Only that absence is normalized; other
+      // provider failures remain failures.
       if (
         error instanceof Error &&
         /^(?:BrowserBindingError: )?Session not found \(status=404\)$/.test(
@@ -310,16 +311,16 @@ export class ConversationBrowser {
   private store() {
     return this.env.PORTFOLIOS.getByName(this.env.PORTFOLIO_ID);
   }
-  // A machine the deployment signs in gets each new browser signed in as the
-  // owner before its runner connects: a fresh session only this browser
-  // holds, kept as a hash and ending with the browser. No runner route returns
-  // it (README: its CDP connection could read it); a failure signs it out.
+  // On a machine the deployment signs in, each new browser is signed in as the
+  // conversation's owner before its runner connects: a session only this
+  // browser holds, hash-kept, ending with it. No runner route returns it (its
+  // CDP connection could read it); a failure signs it out.
   private async signIn(session: Session): Promise<Session> {
     const run = this.record()?.run;
     if (!run?.host || !session.id || !signsIn(this.env, run.host)) return session;
     const value = token();
     const started = await this.store()
-      .startBrowserSignIn(digest(value), run.id, run.host, session.expires)
+      .startBrowserSignIn(digest(value), run.id, run.host, run.owner, session.expires)
       .catch(() => false);
     if (!started) return session;
     // Recorded before the cookie, so every way it ends applies even if the
@@ -349,8 +350,8 @@ export class ConversationBrowser {
       return unsigned;
     }
   }
-  // A signed-in browser the provider ended, after five idle minutes say, is
-  // signed out at the next check rather than left valid to its deadline.
+  // A signed-in browser the provider ended (after five idle minutes, say) is
+  // signed out at the next check, not left valid to its deadline.
   private async stillLive(session: Session): Promise<Session | null> {
     if (
       !session.signedIn ||
@@ -406,8 +407,8 @@ export class ConversationBrowser {
   }
   private async close(session: Session) {
     if (session.closing && (session.retryAt ?? 0) > Date.now()) return;
-    // Mark before I/O. An eviction or failed close must not permit replacement
-    // of an existing paid session until its bounded cleanup retry succeeds.
+    // Mark before I/O: an eviction or failed close must not permit replacing
+    // an existing paid session until its bounded cleanup retry succeeds.
     this.save({ ...session, closing: true, retryAt: Date.now() + 30_000 });
     // Its sign-in ends first, so a browser that will not close is signed out.
     await this.signOut();
@@ -543,7 +544,7 @@ export class ConversationBrowser {
           : null;
         if (session?.id && (!live || live.endTime)) {
           await this.forget();
-          // Reconnect is explicit; no CDP command or browser mutation is replayed.
+          // Reconnect is explicit; no CDP command or browser change is replayed.
           return new Response(
             "Browser expired; reconnect to start a new browser",
             { status: 410 },
@@ -551,8 +552,8 @@ export class ConversationBrowser {
         }
         if (!session) {
           const started = Date.now();
-          // Persist before acquisition. Unknown replies are bounded by provider
-          // inactivity and this quarantine, including after object eviction.
+          // Persist before acquisition: unknown replies are bounded by provider
+          // inactivity and this quarantine, even after object eviction.
           this.save({ id: null, started, expires: started + IDLE_MS + 60_000 });
           const acquired = await trace("browser.acquire", this.fields(), () =>
             this.env.BROWSER.acquire({
