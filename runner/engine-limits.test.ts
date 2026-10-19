@@ -108,3 +108,51 @@ test("a wrap-up request waits for the turn to take input instead of being lost",
     assert.match(steered[0], /past its limit/);
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
+
+test("a helper that never takes the wrap-up request is still stopped after its grace period", async () => {
+  const dir = await fixture(), o = engineOptions(dir);
+  let last: Progress | undefined, masters = 0, asked = 0, stopped = false;
+  o.limits = {helperMs: 20, graceMs: 150, checkMs: 10};
+  o.processStopped = () => true;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    if (opts.agent === "codex") return ++masters === 1 ? dispatch() : complete;
+    if (opts.sessionId) return {...result, outcome: "blocked", summary: "Inspected after the stop."};
+    // Its result is in and its input closed: every request is refused.
+    opts.onSteer?.(async () => { asked++; throw Error("The turn has finished."); });
+    return new Promise((resolve, reject) => {
+      opts.signal.addEventListener("abort", () => { stopped = true; reject(Error("Native turn stopped.")); }, {once: true});
+      setTimeout(() => resolve({...result, summary: "Never stopped."}), 3000);
+    });
+  };
+  try {
+    await executeRun(o);
+    assert.ok(stopped, "the grace period ended the turn");
+    assert.ok(asked > 1, "the request was tried again while it could not be delivered");
+    assert.equal(last!.telemetry!.find((e) => e.event === "execution_handed_back")?.reason, "time_limit");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("a helper whose process ran on after it reported keeps its result, and the master hears it was stopped", async () => {
+  const dir = await fixture(), o = engineOptions(dir), prompts: string[] = [];
+  let last: Progress | undefined, masters = 0;
+  o.report = async (p) => { last = structuredClone(p); };
+  o.turn = async (opts) => {
+    await opts.onSession(randomUUID());
+    prompts.push(opts.prompt);
+    if (opts.agent === "codex") return ++masters === 1 ? dispatch() : complete;
+    opts.onOverran?.();
+    return result;
+  };
+  try {
+    await executeRun(o);
+    const helper = last!.children[0];
+    assert.equal(helper.result?.summary, "Verified");
+    assert.ok(helper.evidence.some((line) => /ran on after it reported, so Projects stopped it/.test(line)));
+    assert.equal(last!.telemetry!.find((e) => e.event === "turn_overran")?.childId, helper.id);
+    assert.match(prompts[1], /Wait on the process ID you started, not a name search/);
+    assert.match(prompts[1], /stop every background command you started or let it finish/);
+    assert.match(prompts[2], /A child has returned[\s\S]*ran on after it reported/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});

@@ -137,6 +137,8 @@ export const executionEventSchema = z
       "execution_handed_back",
       // A helper turn past its time or tokens was asked to wrap up.
       "turn_limit_reached",
+      // A helper's process ran on after its result, so the runner stopped it.
+      "turn_overran",
     ]),
     actor: z.enum(["master", "codex", "claude"]).optional(),
     // The app running a master turn; a child's actor already names its app.

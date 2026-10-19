@@ -263,3 +263,17 @@ test("Codex fast mode explicitly overrides new and resumed threads, including of
     }
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
+
+test("a Claude turn whose process runs on after its result is stopped with what it left running, and keeps that result", async () => {
+  const dir = await fixture();
+  try {
+    let overran = 0;
+    const value = await nativeTurn({agent: "claude", cwd: dir, prompt: "Work", schema: {type: "object"}, readOnly: false, signal: AbortSignal.timeout(5000), binaries: {claude: await fakeBinary(dir, "claude", "linger")}, onSession: async () => {}, onOverran: () => overran++, resultExitMs: 200});
+    assert.deepEqual(value, {summary: "Connected"}, "a later turn of its own never replaces the result");
+    assert.equal(overran, 1);
+    const pid = Number(await readFile(path.join(dir, "background.pid"), "utf8"));
+    const running = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 40 && running(); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(running(), false, "the command it left in the background was stopped with it");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});

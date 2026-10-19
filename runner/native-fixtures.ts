@@ -8,6 +8,8 @@ export async function fakeBinary(dir: string, agent: string, mode: string) {
     file,
     `#!/usr/bin/env node
 import readline from 'node:readline';
+import {spawn as spawnBackground} from 'node:child_process';
+import {writeFileSync as writePid} from 'node:fs';
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 const mode=${JSON.stringify(mode)};
 const note='PROJECTS_PROGRESS '+JSON.stringify({done:['Inspected the project'],remaining:['Run checks'],blocker:null});
@@ -80,6 +82,8 @@ if(${JSON.stringify(agent)}==='codex') {
     send({type:'assistant',message:{id:'msg-2',usage:{input_tokens:5,cache_creation_input_tokens:200,cache_read_input_tokens:1000,output_tokens:30},content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
     send({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tool-1',content:'private-output'}]}});
     if(mode==='files')for(let i=0;i<2;i++)send({type:'assistant',message:{id:'msg-3',content:[{type:'tool_use',id:'read-1',name:'Read',input:{file_path:process.cwd()+'/notes.md',offset:2,limit:3}},{type:'tool_use',id:'edit-1',name:'Edit',input:{file_path:process.cwd()+'/src/b.ts',old_string:'private-old',new_string:'private-new'}}]}});
+    // Reports, then runs on with a background command and a later turn of its own.
+    if(mode==='linger'){finish('');const bg=spawnBackground(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writePid('background.pid',String(bg.pid));setTimeout(()=>send({type:'result',subtype:'success',is_error:false,structured_output:{summary:'Later'},num_turns:1,usage:{}}),20);setInterval(()=>{},1000);return;}
     if(mode==='steer'){send({type:'assistant',message:{content:[{type:'tool_use',id:'todo-1',name:'TodoWrite',input:{todos:[{content:'Read the code',status:'completed',activeForm:'Reading'},{content:'Make the change',status:'in_progress',activeForm:'Changing'},{content:'Run checks',status:'pending',activeForm:'Checking'}]}}]}});return;}
     finish('');
   });

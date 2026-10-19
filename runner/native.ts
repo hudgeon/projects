@@ -21,6 +21,8 @@ import {
   parseProgressNote,
   type FileTouch,
 } from "./native-events";
+import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
+export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
 // A turn's tokens so far, as its app reports them: new input (cache writes
@@ -61,6 +63,11 @@ export type NativeOptions = {
   // Requests the runner refused during a turn that still returned its result,
   // as categories; never tool names or arguments.
   onRefused?: (categories: string[]) => void;
+  // The process ran on after the turn's result, so it was stopped with
+  // whatever it left running; the result stands.
+  onOverran?: () => void;
+  // How long a Claude process may run on after its result.
+  resultExitMs?: number;
   // Called as the turn's token use grows.
   onUsage?: (usage: TurnUsage) => void;
   // Each file the turn reads or changes: paths and line ranges only.
@@ -102,49 +109,6 @@ export function nativeEnv(
   }
   return env;
 }
-export const browserTools = (readOnly: boolean) => [
-  // Navigation/waiting return accessibility snapshots without accepting a
-  // filename. Standalone capture tools can write named files in MCP roots, so
-  // they belong only to change children, never the read-only coordinator.
-  "browser_navigate",
-  "browser_wait_for",
-  ...(!readOnly
-    ? [
-        "browser_snapshot",
-        "browser_take_screenshot",
-        "browser_console_messages",
-        "browser_network_requests",
-        "browser_click",
-        "browser_type",
-        "browser_fill_form",
-        "browser_press_key",
-        "browser_select_option",
-        "browser_hover",
-        "browser_drag",
-        "browser_resize",
-        "browser_navigate_back",
-      ]
-    : []),
-];
-// Claude's allowedTools grants permission but does not hide other MCP tools.
-// Keep the pinned provider's unapproved tools out of the model's context, too.
-const browserToolNames =
-  "browser_click browser_close browser_console_messages browser_drag browser_drop browser_emulate_media browser_evaluate browser_file_upload browser_fill_form browser_find browser_handle_dialog browser_hover browser_navigate browser_navigate_back browser_network_request browser_network_requests browser_press_key browser_resize browser_run_code_unsafe browser_select_option browser_snapshot browser_take_screenshot browser_type browser_wait_for browser_tabs browser_get_config browser_network_state_set browser_route browser_route_list browser_unroute browser_cookie_clear browser_cookie_delete browser_cookie_get browser_cookie_list browser_cookie_set browser_localstorage_clear browser_localstorage_delete browser_localstorage_get browser_localstorage_list browser_localstorage_set browser_sessionstorage_clear browser_sessionstorage_delete browser_sessionstorage_get browser_sessionstorage_list browser_sessionstorage_set browser_set_storage_state browser_storage_state browser_annotate browser_hide_highlight browser_highlight browser_resume browser_start_recording browser_start_tracing browser_start_video browser_stop_recording browser_stop_tracing browser_stop_video browser_video_chapter browser_video_hide_actions browser_video_show_actions browser_mouse_click_xy browser_mouse_down browser_mouse_drag_xy browser_mouse_move_xy browser_mouse_up browser_mouse_wheel browser_pdf_save browser_generate_locator browser_verify_element_visible browser_verify_list_visible browser_verify_text_visible browser_verify_value".split(
-    " ",
-  );
-export const hiddenBrowserTools = (readOnly: boolean) =>
-  browserToolNames.filter((tool) => !browserTools(readOnly).includes(tool));
-const browserArgs = (o: NativeOptions) => [
-  "-y",
-  "@playwright/mcp@0.0.83",
-  "--output-dir",
-  o.browser!.outputDir,
-  "--output-max-size",
-  "50000000",
-  "--no-webmcp",
-  "--codegen",
-  "none",
-];
 export function stopProcess(child: ChildProcessWithoutNullStreams) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null)
     return;
@@ -733,6 +697,11 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     await confirmStopped(child);
   }
 }
+// A turn ends at its result. Claude keeps its process while a command the
+// agent left in the background runs, then starts a turn of its own when that
+// command finishes, which nobody reads. Whatever still runs this long after
+// the result is stopped, and the result stands.
+export const RESULT_EXIT_MS = 30_000;
 async function claudeTurn(o: NativeOptions): Promise<unknown> {
   const session = o.sessionId ?? randomUUID();
   // Write session identity before the process can execute a prompt.
@@ -805,7 +774,9 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     failed = false,
     refusals: string[] = [],
     subtype = "",
-    open = true;
+    open = true,
+    overran = false,
+    exit: NodeJS.Timeout | undefined;
   const write = (input: SteerInput) =>
     child.stdin.write(
       JSON.stringify({
@@ -919,6 +890,8 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         // a background task's notice from its previous process. The turn for
         // this prompt follows; its input stays open until then.
         if (message.subtype === "success" && message.num_turns === 0) return;
+        // Only the first result answers this prompt.
+        if (received) return;
         o.onUsage?.(usage(object(message.usage)));
         subtype = typeof message.subtype === "string" ? message.subtype : "";
         if (message.is_error || message.subtype !== "success") failed = true;
@@ -932,12 +905,18 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         received = true;
         // One turn per process: ending input lets Claude exit.
         close();
+        exit = setTimeout(() => {
+          overran = true;
+          o.onOverran?.();
+          stopProcess(child);
+        }, o.resultExitMs ?? RESULT_EXIT_MS);
         o.onActivity?.({ kind: "turn", state: failed ? "failed" : "finished" });
       },
       fail,
     );
     child.on("close", (code) => {
       open = false;
+      clearTimeout(exit);
       o.signal.removeEventListener("abort", abort);
       if (subtype === "error_max_turns")
         reject(
@@ -960,7 +939,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
             "Claude exited before confirming the turn result.",
           ),
         );
-      else if (code !== 0 || result === undefined)
+      else if ((code !== 0 && !overran) || result === undefined)
         reject(
           new Failure(
             "invalid_result",

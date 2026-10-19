@@ -268,10 +268,9 @@ way at once; when its session cannot continue (out of room, say), the master
 gets the worktree's state and continues it in a fresh session. A request the
 runner refused leaves the helper's result standing, recorded as evidence, and a
 failed coordinator turn runs again. Failures reach you only after the master
-has had its say, or after four in a row in one turn. A helper turn past 90
-minutes or 100M tokens is asked to save its work and report, and is stopped
-and inspected 20 minutes later if it has not; a coordinator turn past 20
-minutes is stopped and runs again. Uncertain writes are never replayed. Each conversation runs in its own executor process, so a release
+has had its say, or after four in a row in one turn. Turn limits, and how a
+helper's turn ends at its result, are in [docs/run-health.md](docs/run-health.md).
+Uncertain writes are never replayed. Each conversation runs in its own executor process, so a release
 restarts runners at once with `SIGUSR2`: the runner exits for the new bundle,
 which adopts the executors still running; each finishes its current step on
 the version it started with, saves its place and exits, and the new runner
