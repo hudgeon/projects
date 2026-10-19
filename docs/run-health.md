@@ -60,3 +60,28 @@ notification for it, the runner records `turn_stuck` (reason `commands_idle`
 or `agent_silent`), and a helper is told once, at its next step, to stop
 anything waiting for input or say what it is waiting on. Stop ends the turn as
 usual.
+
+## Jev shadow checks
+
+`runner/run-checks.ts` asks the machine's Jev selector (see
+[context-selection.md](context-selection.md)) two kinds of yes/no question
+whenever context selection is on (`select` or `shadow`), and only records the
+answers:
+
+- before each dispatch, for each finished helper (up to eight), whether its
+  report already answers everything the new brief asks for;
+- at each helper progress note, whether that helper's recent notes (up to six)
+  show it progressing, repeating steps, waiting on something outside its own
+  work, or blocked.
+
+Jev sees the brief, the helpers' summaries and checks, and the notes' done,
+remaining and your-move lists; never commands, tool output, paths, sessions
+or evidence lines (owner's approval, 19 October 2026). Requests use context
+selection's key, gateway, request limits and failure diagnostics, tagged
+process `run-checks` with trigger `dispatch-check` or `progress-check`. Each
+judgment is a private receipt in the runner state's `run-checks/` (newest
+1,000) with its inputs, probabilities, tokens and latency, never in snapshots
+or telemetry; logs count `jev_check_judged` and record `jev_selection_failed`
+with these triggers. Nothing acts on a judgment: the master and the owner see
+no difference until labelled conversations validate a threshold, as the 0.5
+cutoff was validated for project review.

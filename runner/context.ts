@@ -206,7 +206,7 @@ export async function judgeContext(o: {
   signal: AbortSignal;
   selector: Selector;
   cached?: unknown;
-  trigger: "coordinator-rotation" | "project-turn" | "project-replay";
+  trigger: "coordinator-rotation" | "project-turn" | "project-replay" | "dispatch-check" | "progress-check";
 }): Promise<
   | {
       record: SelectionRecord;
@@ -326,7 +326,7 @@ export async function judgeContext(o: {
                   per_token_out: 0,
                 }),
                 "cf-aig-metadata": JSON.stringify({
-                  process: "context-selection",
+                  process: o.trigger.endsWith("-check") ? "run-checks" : "context-selection",
                   trigger: o.trigger,
                   worker: "projects-runner",
                   model: JEV_MODEL,

@@ -58,3 +58,54 @@ export function watchLimits(o: {
   }, o.limits.checkMs);
   return { limit: () => limit, clear: () => clearInterval(timer) };
 }
+// A helper failure that leaves the work for the master to judge. Only the
+// runner's own stops (shutdown, cancellation, a lost claim), an unconfirmed
+// process stop and broken local state still end the turn.
+export const HELPER_FAILURES: ReadonlySet<string> = new Set([
+  "time_limit",
+  "token_limit",
+  "turn_failed",
+  "native_exited",
+  "invalid_result",
+  "protocol_error",
+  "native_timeout",
+  "native_error",
+  "model_busy",
+  "turn_limit",
+  "context_exceeded",
+  "sandbox_error",
+  "permission_required",
+  "session_rejected",
+  "turn_rejected",
+  "usage_limit",
+  "signed_out",
+  "policy_refused",
+  "native_unavailable",
+]);
+// A coordinator turn is read-only, so one that failed can simply run again.
+export const MASTER_RETRIES: ReadonlySet<string> = new Set([
+  "time_limit",
+  "turn_failed",
+  "native_exited",
+  "invalid_result",
+  "protocol_error",
+  "native_timeout",
+  "native_error",
+  "model_busy",
+  "context_exceeded",
+  "session_rejected",
+  "turn_rejected",
+  "sandbox_error",
+]);
+// The session itself cannot take another turn: a new one continues the work.
+export const SPENT: ReadonlySet<string> = new Set([
+  "context_exceeded",
+  "session_rejected",
+]);
+// The app cannot run any turn now, so its session cannot be inspected either.
+export const UNAVAILABLE: ReadonlySet<string> = new Set([
+  "usage_limit",
+  "signed_out",
+  "policy_refused",
+  "native_unavailable",
+]);

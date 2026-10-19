@@ -272,7 +272,7 @@ export const telemetryFieldsSchema = executionEventSchema
 export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
 // These diagnostics belong to local runner logs, not Worker span attributes.
 const logFieldsSchema = telemetryFieldsSchema.extend({
-  contextTrigger: z.enum(["coordinator-rotation", "project-turn"]).optional(),
+  contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check"]).optional(),
   contextFailure: contextFailureSchema.optional(),
 });
 const logEventSchema = z.enum([
@@ -313,6 +313,8 @@ const logEventSchema = z.enum([
   "runner_executor_adopted",
   "runner_executor_failed",
   "jev_selection_failed",
+  // A shadow run check was judged; its receipt stays on the machine.
+  "jev_check_judged",
   "notification_sent",
 ]);
 export function telemetry(

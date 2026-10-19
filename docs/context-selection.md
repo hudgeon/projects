@@ -11,6 +11,9 @@ needs it and keeps it in memory for its lifetime; a failed read is retried at
 the next selection. No key enters the Worker, collector, agent environment or
 repository. Enabling a new
 consumer requires the deployment owner's credential and data-scope approval.
+The shadow run checks in [run-health.md](run-health.md) are one such consumer:
+the owner approved briefs, helper reports and progress notes for them in
+October 2026, recorded only.
 
 For AI Gateway cost reporting, set `context.gateway` to an object with the
 deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.

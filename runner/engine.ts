@@ -57,7 +57,8 @@ import { connectorAccess, type ConnectorAccess } from "./connectors";
 import { childContext, contextConversation, contextVersion, keptKey, selectContext, type Selector } from "./context";
 import { contextBrief, type ProjectTurn } from "./project-turn";
 import { browserInstructions, helperInstructions, progressInstructions, stuckInstructions } from "./instructions";
-import { TURN_LIMITS, watchLimits } from "./turn-limits";
+import { HELPER_FAILURES, MASTER_RETRIES, SPENT, TURN_LIMITS, UNAVAILABLE, watchLimits } from "./turn-limits";
+import { runChecks } from "./run-checks";
 import { watchTurn, type WATCH_LIMITS } from "./turn-watch";
 export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 import { activityBrief } from "./activity-brief";
@@ -198,57 +199,6 @@ export const MASTER_CONTEXT_LIMIT = 250_000;
 // Failures the runner gives back to the master in one turn before it stops
 // and tells the owner.
 export const HANDBACK_LIMIT = 3;
-// A helper failure that leaves the work for the master to judge. Only the
-// runner's own stops (shutdown, cancellation, a lost claim), an unconfirmed
-// process stop and broken local state still end the turn.
-const HELPER_FAILURES: ReadonlySet<string> = new Set([
-  "time_limit",
-  "token_limit",
-  "turn_failed",
-  "native_exited",
-  "invalid_result",
-  "protocol_error",
-  "native_timeout",
-  "native_error",
-  "model_busy",
-  "turn_limit",
-  "context_exceeded",
-  "sandbox_error",
-  "permission_required",
-  "session_rejected",
-  "turn_rejected",
-  "usage_limit",
-  "signed_out",
-  "policy_refused",
-  "native_unavailable",
-]);
-// A coordinator turn is read-only, so one that failed can simply run again.
-const MASTER_RETRIES: ReadonlySet<string> = new Set([
-  "time_limit",
-  "turn_failed",
-  "native_exited",
-  "invalid_result",
-  "protocol_error",
-  "native_timeout",
-  "native_error",
-  "model_busy",
-  "context_exceeded",
-  "session_rejected",
-  "turn_rejected",
-  "sandbox_error",
-]);
-// The session itself cannot take another turn: a new one continues the work.
-const SPENT: ReadonlySet<string> = new Set([
-  "context_exceeded",
-  "session_rejected",
-]);
-// The app cannot run any turn now, so its session cannot be inspected either.
-const UNAVAILABLE: ReadonlySet<string> = new Set([
-  "usage_limit",
-  "signed_out",
-  "policy_refused",
-  "native_unavailable",
-]);
 // What the owner reads when a turn stops on a failure, with what to do next.
 export function stoppedText(message: string) {
   return /send a follow-up|your move/i.test(message)
@@ -297,6 +247,7 @@ export type EngineOptions = {
 export async function executeRun(o: EngineOptions) {
   // An executor reads the selector's key once and keeps it in memory.
   const selector = o.contextSelector && {...o.contextSelector, key: keptKey(o.contextSelector.key)};
+  const checks = runChecks({ selector, stateDir: o.stateDir, runId: o.run.id, signal: o.signal });
   const file = path.join(o.stateDir, "runs", `${o.run.id}.json`);
   let journal: Journal | null = null;
   try {
@@ -719,6 +670,7 @@ export async function executeRun(o: EngineOptions) {
               childId: child?.id ?? null,
             },
           ].slice(-PROGRESS_NOTE_LIMIT);
+          if (child) checks.progress(child.id, j.progress.notes);
           dirty = true;
         },
       });
@@ -1597,6 +1549,7 @@ export async function executeRun(o: EngineOptions) {
       delete j.checkpoint;
       child.state = "running";
       dispatched++;
+      checks.dispatch(task.prompt, j.progress.children.filter((c) => c !== child));
       j.phase = "child";
       await persist();
       await publish("running", decision.summary);
