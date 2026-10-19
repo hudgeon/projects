@@ -1,5 +1,7 @@
 import {
   usageTotal,
+  type LiveWatch,
+  type WaitLabel,
   type Progress,
   type ProgressNote,
   type Run,
@@ -82,6 +84,38 @@ export function latestResult(run: Pick<Run, "messages" | "progress">) {
   );
 }
 // One plain line for lists: what is happening now, or how the turn ended.
+const waits: Record<WaitLabel, string> = {
+  review: "Waiting on a review",
+  checks: "Waiting on CI checks",
+  tests: "Running tests",
+  build: "Running a build",
+  deploy: "Running a deploy",
+  git: "Waiting on Git",
+  remote: "Waiting on another machine",
+  loop: "In a wait loop",
+};
+const minutes = (at: number, now: number) =>
+  Math.max(1, Math.round((now - at) / 60_000));
+// What the runner saw of a step that may be stuck, as a sentence's end.
+export function stuckSign(watch: LiveWatch, now = Date.now()) {
+  const quiet = minutes(watch.quietSince ?? watch.since, now);
+  return watch.stuck === "silent"
+    ? `no word from the agent for ${quiet} min`
+    : `what it is waiting on has used no CPU for ${quiet} min`;
+}
+// A long wait, or signs of a stuck one, in plain words with the minutes so far.
+export function watchText(watch: LiveWatch, now = Date.now()) {
+  if (watch.stuck) return `May be stuck: ${stuckSign(watch, now)}`;
+  const doing =
+    watch.on === "agent"
+      ? "No word from the agent"
+      : watch.label
+        ? waits[watch.label]
+        : watch.on === "command"
+          ? "Running a command"
+          : "Waiting on a tool call";
+  return `${doing} · ${minutes(watch.since, now)} min`;
+}
 export function statusLine(
   run: Pick<Run, "state" | "generation" | "messages" | "progress" | "updates">,
 ) {
@@ -95,6 +129,11 @@ export function statusLine(
     case "cancelled":
       return "Work so far is kept.";
     case "running": {
+      const watch = run.progress?.live?.watch;
+      if (watch?.stuck) {
+        const sign = stuckSign(watch);
+        return sign[0].toUpperCase() + sign.slice(1);
+      }
       const plan = latestPlan(run);
       const next = plan?.yourMove ?? plan?.remaining[0];
       return next
@@ -225,8 +264,9 @@ export function runDocuments(run: Pick<Run, "messages" | "progress">) {
 }
 
 // Which of the owner's moves a conversation is in. Stopped work is not news.
-function move(run: Pick<RunSummary, "state" | "needsYou">) {
+function move(run: Pick<RunSummary, "state" | "needsYou" | "stuck">) {
   if (run.needsYou || run.state === "blocked") return "Needs you";
+  if (run.stuck) return "May be stuck";
   if (run.state === "failed") return "Failed";
   if (run.state === "completed") return "Ready";
   return null;

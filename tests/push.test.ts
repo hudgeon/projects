@@ -81,6 +81,8 @@ test("a notice fires once when an existing conversation becomes the user's move"
   assert.equal(notice(run({}), run({ state: "blocked" }))?.title, "Needs you: Reply to Rob about training");
   assert.equal(notice(run({}), run({ needsYou: true }))?.title, "Needs you: Reply to Rob about training");
   assert.equal(notice(run({ needsYou: true }), run({ state: "completed" }))?.title, "Ready: Reply to Rob about training");
+  assert.equal(notice(run({}), run({ stuck: true }))?.title, "May be stuck: Reply to Rob about training");
+  assert.equal(notice(run({ stuck: true }), run({ stuck: true })), null, "once per stuck stretch");
   assert.equal(notice(run({}), run({ state: "failed" }))?.title, "Failed: Reply to Rob about training");
   assert.equal(notice(null, run({ state: "completed" })), null, "a new or migrated row is not news");
   assert.equal(notice(run({}), run({ state: "cancelled" })), null, "the user stopped it");

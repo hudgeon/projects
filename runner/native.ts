@@ -10,13 +10,17 @@ import type {
   LivePlanStep,
   NativeActivity,
   ProgressNoteInput,
+  WaitLabel,
 } from "../src/run-model";
 import {
   claudeFiles,
+  claudeRefusal,
   claudeToolKind,
   codexActivity,
   codexFiles,
+  codexRequests,
   object,
+  waitLabel,
   planSteps,
   parseProgressNote,
   type FileTouch,
@@ -53,7 +57,8 @@ export type NativeOptions = {
   signal: AbortSignal;
   onSession: (id: string) => Promise<void>;
   onProcess?: (pid: number) => Promise<void>;
-  onActivity?: (event: NativeActivity) => void;
+  // With what a command waits on, when the runner can tell.
+  onActivity?: (event: NativeActivity, label?: WaitLabel) => void;
   onProgress?: (note: ProgressNoteInput) => void;
   // The working agent's own plan, as it changes.
   onPlan?: (steps: LivePlanStep[]) => void;
@@ -219,23 +224,6 @@ const rejected: Record<string, [FailureReason, string]> = {
   "turn/start": ["turn_rejected", "Codex rejected the turn."],
 };
 // What a refused request would have done, never its tool, command or text.
-const codexRequests: Record<string, string> = {
-  "item/commandExecution/requestApproval": "command",
-  "item/fileChange/requestApproval": "file change",
-  "item/permissions/requestApproval": "permission",
-  "item/tool/requestUserInput": "question for the user",
-};
-export function claudeRefusal(tool: unknown): string {
-  if (tool === "Bash") return "command";
-  if (tool === "Edit" || tool === "Write" || tool === "NotebookEdit")
-    return "file change";
-  if (tool === "WebFetch" || tool === "WebSearch") return "web request";
-  if (typeof tool === "string" && tool.startsWith("mcp__projects_browser__"))
-    return "browser action";
-  if (typeof tool === "string" && tool.startsWith("mcp__"))
-    return "connector tool";
-  return "other tool";
-}
 export function nativeProcessStopped(pid: number | null): boolean {
   if (!pid || pid <= 1) return false;
   // Check the detached process group too: a shell/tool can outlive its parent.
@@ -539,7 +527,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
           object(p.item),
           message.method === "item/completed",
         );
-        if (activity) o.onActivity?.(activity);
+        if (activity) o.onActivity?.(activity, waitLabel(object(p.item).command));
         if (activity && !["response", "compaction"].includes(activity.kind))
           acted = true;
       }
@@ -864,7 +852,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
               ) {
                 const kind = claudeToolKind(block.name);
                 if (!tools.has(block.id)) {
-                  o.onActivity?.({ kind, state: "started" });
+                  o.onActivity?.({ kind, state: "started" }, block.name === "Bash" ? waitLabel(object(block.input).command) : undefined);
                   if (o.onFile)
                     claudeFiles(block.name, object(block.input), o.cwd).forEach(o.onFile);
                 }

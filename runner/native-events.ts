@@ -5,6 +5,7 @@ import {
   type LivePlanStep,
   type NativeActivity,
   type ProgressNoteInput,
+  type WaitLabel,
 } from "../src/run-model";
 
 // Native protocol events projected into fixed, safe shapes. Nothing here
@@ -176,4 +177,39 @@ export function codexFiles(
         : [];
     });
   return [];
+}
+// What the runner refused, by kind: never tool names or arguments.
+export const codexRequests: Record<string, string> = {
+  "item/commandExecution/requestApproval": "command",
+  "item/fileChange/requestApproval": "file change",
+  "item/permissions/requestApproval": "permission",
+  "item/tool/requestUserInput": "question for the user",
+};
+export function claudeRefusal(tool: unknown): string {
+  if (tool === "Bash") return "command";
+  if (tool === "Edit" || tool === "Write" || tool === "NotebookEdit")
+    return "file change";
+  if (tool === "WebFetch" || tool === "WebSearch") return "web request";
+  if (typeof tool === "string" && tool.startsWith("mcp__projects_browser__"))
+    return "browser action";
+  if (typeof tool === "string" && tool.startsWith("mcp__"))
+    return "connector tool";
+  return "other tool";
+}
+// What a command waits on, read on this machine; only the category leaves it.
+// The thing waited on wins over the loop waiting for it.
+const waitRules: [WaitLabel, RegExp][] = [
+  ["review", /\bcodex\s+(exec|review)\b|\bclaude\s+(-p|--print)\b|security-review/],
+  ["checks", /\bgh\s+(pr\s+checks|run\s+(watch|view))\b/],
+  ["tests", /\b(npm|pnpm|yarn)\s+(run\s+)?test\b|\b(vitest|jest|pytest)\b|\bplaywright\s+test\b|\b(node|tsx)\s+--test\b|\b(go|cargo)\s+test\b/],
+  ["build", /\b(npm|pnpm|yarn)\s+run\s+[\w:-]*(build|typecheck)\b|\btsc\b|\bvite\s+build\b|\b(go|cargo)\s+build\b/],
+  ["deploy", /\bwrangler\s+deploy\b|\b(npm|pnpm|yarn)\s+run\s+deploy\b|\bgh\s+workflow\s+run\b|install-machine/],
+  ["git", /\bgit\s+(push|pull|fetch|clone)\b/],
+  ["remote", /\bssh\s/],
+  ["loop", /\b(until|while)\b[\s\S]*\bsleep\b|^\s*sleep\s+\d/],
+];
+export function waitLabel(command: unknown): WaitLabel | undefined {
+  const text = Array.isArray(command) ? command.join(" ") : command;
+  if (typeof text !== "string") return undefined;
+  return waitRules.find(([, rule]) => rule.test(text))?.[0];
 }

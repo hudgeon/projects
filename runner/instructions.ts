@@ -18,3 +18,8 @@ export const helperInstructions = (agent: "codex" | "claude") =>
 // For a turn that has this conversation's browser.
 export const browserInstructions = (endpoint: string) =>
   `\n\nUse the projects_browser MCP tools for live browser checks. This is this conversation's approved Cloudflare browser, limited to the sites this Projects deployment allows, such as ${new URL(endpoint).host}. It cannot reach localhost or unpublished previews on this machine. The master/read sessions may inspect pages; delegate clicks, form entry and other interactions to a change child when authorized by the task. Navigation and waiting return accessibility snapshots; change children can also capture screenshots. If sign-in is needed, navigate to the sign-in page and emit a progress note whose yourMove asks the user to use Open browser / sign in in this conversation, then continue within five minutes. Do not copy cookies from desktop browsers or bypass authentication or browser policy. Never print connection credentials. Browser sessions close after thirty minutes or when work completes/stops; an expired connection is not evidence that an action completed. Inspect current state before retrying any mutation.`;
+// Told once when the step a helper is on may be stuck.
+export const stuckInstructions = (reason: "idle" | "silent") =>
+  reason === "idle"
+    ? "Projects: what you are waiting on has used no CPU for ten minutes. If a command is waiting for input or stuck, stop it and continue another way; if it is still working, say so in your next progress note."
+    : "Projects: nothing has come from this turn for ten minutes. If something is stuck, stop it and continue another way, and say what you are waiting on in your next progress note.";

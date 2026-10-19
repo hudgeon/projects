@@ -116,6 +116,9 @@ const reason = z.enum([
   "recovery_limit",
   "time_limit",
   "token_limit",
+  // Why a turn may be stuck: its commands idle while it waits, or no word.
+  "commands_idle",
+  "agent_silent",
 ]);
 export type FailureReason = z.infer<typeof reason>;
 export const executionEventSchema = z
@@ -139,6 +142,8 @@ export const executionEventSchema = z
       "turn_limit_reached",
       // A helper's process ran on after its result, so the runner stopped it.
       "turn_overran",
+      // A turn's step may be stuck; the owner sees it and a helper is told.
+      "turn_stuck",
     ]),
     actor: z.enum(["master", "codex", "claude"]).optional(),
     // The app running a master turn; a child's actor already names its app.

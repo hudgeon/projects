@@ -32,3 +32,31 @@ Helpers are told how to wait (`runner/instructions.ts`):
 - treat a command with no new output and no CPU use for five minutes as
   stuck, and stop it;
 - stop or finish every background command before returning a result.
+
+## Waits and signs of a stuck step
+
+`runner/turn-watch.ts` follows each native turn: the tool calls it has open,
+when the agent last said anything (tokens, a progress note, a plan), and,
+every 30 seconds, the CPU time of the processes its commands run (whatever a
+shell under the agent starts, without the shells and sleeps themselves; the
+agent and the servers it starts directly, such as its browser's, are not
+commands). It publishes `live.watch`, times and categories only:
+
+- a tool call open for two minutes shows as a wait, with what a command waits
+  on as a category the runner reads from the command on its own machine
+  (a review, CI checks, tests, a build, a deploy, Git, another machine or a
+  wait loop); the command itself never leaves the machine;
+- the agent silent for two minutes with no tool call open shows as "no word";
+- **may be stuck**, `idle`: a tool call open while nothing the commands run
+  has used CPU and the agent has said nothing for 10 minutes, or for 3 minutes
+  while a command it started earlier has sat idle for 10 (a wait loop on a
+  review waiting for input, say);
+- **may be stuck**, `silent`: no tool call open and no word for 10 minutes.
+
+Nothing is called idle without a process reading. A sign is not a verdict and
+nothing is stopped: the conversation shows "May be stuck" with what was seen,
+it joins the owner's move until the step moves again, the owner gets one push
+notification for it, the runner records `turn_stuck` (reason `commands_idle`
+or `agent_silent`), and a helper is told once, at its next step, to stop
+anything waiting for input or say what it is waiting on. Stop ends the turn as
+usual.

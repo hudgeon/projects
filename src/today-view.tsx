@@ -41,7 +41,7 @@ export function TodayView({
   const names = projectNames(snapshots, archives);
   const selected = navigation.run;
   const rank = (run: RunSummary) =>
-    urgency(run.needsYou ? "blocked" : run.state);
+    urgency(run.needsYou || run.stuck ? "blocked" : run.state);
   const yourMove = runs
     .filter(awaitsYou)
     .sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);

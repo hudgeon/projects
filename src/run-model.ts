@@ -230,6 +230,23 @@ export const liveChangesSchema = z
     at: z.number().int().positive(),
   })
   .strict();
+// What a long wait is on, as a category the runner reads from the command on
+// its own machine; the command itself never leaves it.
+export const waitLabels = ["review", "checks", "tests", "build", "deploy", "git", "remote", "loop"] as const;
+export type WaitLabel = (typeof waitLabels)[number];
+// A turn waiting on one step: since when, on what, and once the runner sees
+// signs it may be stuck, which sign and since when things went quiet. Times
+// and categories only.
+export const liveWatchSchema = z
+  .object({
+    since: z.number().int().positive(),
+    on: z.enum(["command", "tool", "agent"]),
+    label: z.enum(waitLabels).optional(),
+    stuck: z.enum(["idle", "silent"]).optional(),
+    quietSince: z.number().int().positive().optional(),
+  })
+  .strict();
+export type LiveWatch = z.infer<typeof liveWatchSchema>;
 export const liveSchema = z
   .object({
     actor: z.enum(["master", "codex", "claude"]),
@@ -239,6 +256,7 @@ export const liveSchema = z
     changes: liveChangesSchema.optional(),
     // When the change worktree was last saved to GitHub for another machine.
     savedAt: z.number().int().positive().optional(),
+    watch: liveWatchSchema.optional(),
   })
   .strict();
 export type LivePlanStep = z.infer<typeof livePlanStepSchema>;
@@ -449,6 +467,8 @@ export type RunSummary = Pick<
   remaining?: number | null;
   // Running, but waiting on steps only the owner can take.
   needsYou?: boolean;
+  // Running, but the runner sees signs its current step is stuck.
+  stuck?: boolean;
 };
 export function runProjectIds(
   run: Pick<Run, "projectId" | "progress">,
@@ -464,8 +484,8 @@ export const activeRun = (state: RunState) =>
   ["queued", "running", "cancelling"].includes(state);
 // The user's move: finished work to review, or running work only they can
 // unblock.
-export const awaitsYou = (run: Pick<RunSummary, "state" | "needsYou">) =>
-  !activeRun(run.state) || !!run.needsYou;
+export const awaitsYou = (run: Pick<RunSummary, "state" | "needsYou" | "stuck">) =>
+  !activeRun(run.state) || !!run.needsYou || !!run.stuck;
 export const RUNNER_STALE_MS = 45_000;
 // A later machine in the owner's order starts new conversations only once
 // every earlier machine's runner has been silent this long. An idle runner

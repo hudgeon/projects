@@ -43,7 +43,12 @@ test("conversation lists lead with a short title, the current step and the email
     assert.equal((await report({...running, seq: 2, notes: [{...note, id: randomUUID(), at: Date.now() + 1, yourMove: "Sign in to Gmail on the Studio"}]})).status, 200);
     [listed] = await db.listRuns();
     assert.deepEqual([listed.state, listed.status, listed.needsYou], ["running", "Sign in to Gmail on the Studio", true]);
-    assert.equal((await report({...running, seq: 3, state: "completed", notes: [], reviewedMessageIds: [run.id], summary: "Drafted the [reply to Rob](https://mail.google.com/mail/u/#all/1a13ab). **Your move:** send it.\n\nwork: #942"})).status, 200);
+    // Signs the current step is stuck reach the list too.
+    const watch = {since: Date.now() - 12 * 60_000, on: "command" as const, label: "review" as const, stuck: "idle" as const, quietSince: Date.now() - 12 * 60_000};
+    assert.equal((await report({...running, seq: 3, live: {actor: "codex", childId: null, at: Date.now(), watch}})).status, 200);
+    [listed] = await db.listRuns();
+    assert.deepEqual([listed.stuck, listed.status], [true, "What it is waiting on has used no CPU for 12 min"]);
+    assert.equal((await report({...running, seq: 4, state: "completed", notes: [], reviewedMessageIds: [run.id], summary: "Drafted the [reply to Rob](https://mail.google.com/mail/u/#all/1a13ab). **Your move:** send it.\n\nwork: #942"})).status, 200);
     [listed] = await db.listRuns();
     assert.deepEqual([listed.state, listed.title, listed.status, listed.remaining], ["completed", "Reply to Rob about training", "Drafted the reply to Rob.", null]);
     assert.equal((await db.getRun(run.id))!.emailThread, thread);

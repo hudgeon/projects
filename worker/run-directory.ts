@@ -45,6 +45,7 @@ const summary = (run: Run): RunSummary => ({
     ? (latestPlan(run)?.remaining.length ?? null)
     : null,
   needsYou: run.state === "running" && !!latestPlan(run)?.yourMove,
+  stuck: run.state === "running" && !!run.progress?.live?.watch?.stuck,
 });
 // The portfolio retains a rebuildable index and runner slots. Each conversation
 // is authoritative for its messages, generation, claim and execution receipts.

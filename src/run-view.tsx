@@ -43,6 +43,7 @@ import {
   type DocumentLink,
 } from "./run-text";
 import { Restart } from "./restart";
+import { NowStatus, Time, agentName } from "./run-watch";
 import {
   ScreenshotButtons,
   ScreenshotPreviews,
@@ -138,7 +139,7 @@ export function ConversationRow({
   search: Navigation;
   selected?: boolean;
 }) {
-  const [label, tone] = runStates[run.needsYou ? "blocked" : run.state];
+  const [label, tone] = run.stuck && !run.needsYou ? ["May be stuck", "warning"] : runStates[run.needsYou ? "blocked" : run.state];
   const projects = run.projectIds ?? (run.projectId ? [run.projectId] : []);
   const meta = [
     projects.map((id) => names.get(id) ?? id).join(", "),
@@ -463,18 +464,6 @@ export function Composer({
   );
 }
 
-function Time({ at }: { at: number }) {
-  return (
-    <time
-      dateTime={new Date(at).toISOString()}
-      title={new Date(at).toLocaleString()}
-    >
-      {ago(at, Date.now())}
-    </time>
-  );
-}
-const agentName = (actor: "master" | "codex" | "claude") =>
-  actor === "master" ? "Projects" : actor === "codex" ? "Codex" : "Claude";
 
 // The owner's words stay as typed; only HTTPS links (Markdown or bare) become links.
 export function LinkedText({ text }: { text: string }) {
@@ -614,8 +603,6 @@ function NowPanel({ run }: { run: Run }) {
   const then =
     run.state === "running" ? (plan?.remaining.slice(1, 4) ?? []) : [];
   const changes = live?.changes;
-  const last = run.progress?.activity?.at(-1)?.at;
-  const due = run.nextUpdateAt;
   const shown = earlier ? done : done.slice(-3);
   return (
     <section className="now" aria-label="Progress now">
@@ -686,32 +673,7 @@ function NowPanel({ run }: { run: Run }) {
           )}
         </div>
       )}
-      {run.state === "running" && (
-        <p className="subtle">
-          {plan ? (
-            <>
-              {agentName(plan.actor)}’s plan · <Time at={plan.at} />
-            </>
-          ) : (
-            "No plan reported yet"
-          )}
-          {last ? (
-            <>
-              {" "}
-              · last activity <Time at={last} />
-            </>
-          ) : null}
-          {live?.savedAt ? (
-            <>
-              {" "}
-              · saved to GitHub <Time at={live.savedAt} />
-            </>
-          ) : null}
-          {due
-            ? ` · next summary in ${Math.max(1, Math.ceil((due - Date.now()) / 60_000))} min`
-            : ""}
-        </p>
-      )}
+      {run.state === "running" && <NowStatus run={run} plan={plan} />}
     </section>
   );
 }
