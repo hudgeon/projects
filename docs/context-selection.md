@@ -186,5 +186,9 @@ that directory are read in place; `score replay3.json` reproduces its numbers.
 Any change to retrieval, question wording, the 0.5 cutoff or the pinned model
 ships with before/after metrics from this command in its PR: on each machine
 with labels, replay on main, then replay `--same` reviews on the branch, and
-report both. Whenever about 20 new reviews accumulate, label a sample of them,
-especially from code-heavy repositories, so the gold set follows real use.
+report both. Jev's probabilities vary between identical requests: two replays
+of the same 14 reviews (19 October) differed by 0.02 on average and at most
+0.17, 2% of units crossed 0.5, and precision at 0.5 moved by three points.
+Replay each side twice and treat a difference within that spread as no change.
+Whenever about 20 new reviews accumulate, label a sample of them, especially
+from code-heavy repositories, so the gold set follows real use.
