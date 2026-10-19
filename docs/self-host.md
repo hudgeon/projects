@@ -132,6 +132,19 @@ helpers use local MCP servers you already run, list their names under
 `helpers.localServers` in `machine.json`, and any of their tools to withhold
 under `helpers.deniedTools`; then run the installer again.
 
+An explicitly trusted execution machine can set `helpers.fullAccess: true`.
+Its change helpers get Claude's complete installed native toolset and
+`bypassPermissions`, or Codex's `danger-full-access` with approvals disabled.
+All configured local MCP servers are enabled and approved; Claude's local
+server/tool filter is removed. This grants local filesystem, network and
+native tool access beyond the assigned worktree. It uses existing logins;
+it does not create credentials or make an expired login work. The coordinator
+and recovery inspections remain read-only. Email sending still needs the
+owner's explicit message approval; connector send tools stay withheld. Task
+scope, customer/financial approvals and required release checks still apply.
+Set it back to false and restart the runner to restore restricted sessions;
+existing executors finish their current step before adopting the change.
+
 Repositories under `--root` opt in with a `.project-overview.json` file (see
 `public/agents.md`), or by name under `projects` in `machine.json`. Machines
 are ordered on the Machines page: the first one heard from recently holds the

@@ -20,7 +20,7 @@ import {
   type RunMessage,
 } from "../src/run-model";
 import { executeRun, savePrivate } from "./engine";
-import { connectorAccess } from "./connectors";
+import { connectorAccess, helperPolicySchema } from "./connectors";
 import { Failure } from "./native";
 import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
@@ -50,16 +50,7 @@ const schema = configSchema
     context: contextConfigSchema.default({mode: "off"}),
     // Local MCP servers Claude helpers may use on this machine, and tools to
     // hide from them as Claude permission rules (mcp__server__tool).
-    helpers: z
-      .object({
-        localServers: z.array(z.string().regex(/^[\w.:-]+$/)).max(50).default([]),
-        deniedTools: z
-          .array(z.string().regex(/^mcp__[\w-]+(?:__[\w-]+)?$/))
-          .max(500)
-          .default([]),
-      })
-      .strict()
-      .default({ localServers: [], deniedTools: [] }),
+    helpers: helperPolicySchema,
   })
   .transform((config) => {
     const base = path.join(config.home, ".local/share/project-overview");
@@ -337,6 +328,7 @@ async function executeClaim(o: {
       host: config.host,
       agents: config.agents,
       connectors: () => connectorAccess(config.helpers),
+      fullAccess: config.helpers.fullAccess,
       inboxAccount: config.inboxAccount,
       workRepo: config.workRepo,
       latestMessages: () => messages,

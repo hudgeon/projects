@@ -297,7 +297,7 @@ export function continuesSession(
   previous: Child[],
 ) {
   if (task.freshSession || !existing.sessionId || existing.agent !== task.agent) return false;
-  if (task.mode === "read" && existing.mode === "change") return false;
+  if (task.mode !== existing.mode) return false;
   // The session's latest turn, which a later follow-up may have made.
   const latest =
     [...previous].reverse().find((c) => c.sessionId === existing.sessionId) ??

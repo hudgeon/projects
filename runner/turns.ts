@@ -225,6 +225,7 @@ export async function runTurn(
     const value = await turn({
       ...options,
       codexFast,
+      fullAccess: o.fullAccess && !options.readOnly,
       onTiming: fields => { timing = {...timing, ...fields}; },
       prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? browserInstructions(options.browser.endpoint) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),

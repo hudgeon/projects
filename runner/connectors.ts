@@ -1,6 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
 import { nativeEnv } from "./native";
 
 const exec = promisify(execFile);
@@ -50,24 +53,29 @@ const CODEX_MAIL_BLOCKED = [
 const CODEX_ADMIN = ["connector_openai_safety_settings", "connector_openai_plugin_management"];
 // From the machine's config: the local MCP servers its owner approved for
 // Claude helpers, and further tools to hide from them. Other local servers
-// stay hidden. Codex keeps its own default for its MCP servers, which refuses
-// every tool that is not read-only.
-export type HelperPolicy = { localServers: string[]; deniedTools: string[] };
+// stay hidden unless the machine explicitly grants full execution access.
+// Full access also approves configured Codex MCP servers.
+export const helperPolicySchema = z.object({
+  fullAccess: z.boolean().default(false),
+  localServers: z.array(z.string().regex(/^[\w.:-]+$/)).max(50).default([]),
+  deniedTools: z.array(z.string().regex(/^mcp__[\w-]+(?:__[\w-]+)?$/)).max(500).default([]),
+}).strict().default({fullAccess: false, localServers: [], deniedTools: []});
+export type HelperPolicy = { fullAccess?: boolean; localServers: string[]; deniedTools: string[] };
 export function claudeRules(
   list: ReturnType<typeof parseMcpList>,
   policy: HelperPolicy = { localServers: [], deniedTools: [] },
 ) {
-  if (!list.connectors.length) return null;
+  if (!list.connectors.length && !policy.fullAccess) return null;
   const approved = new Set(policy.localServers.map(mcpName));
-  const local = list.local.filter((server) => approved.has(server));
+  const local = list.local.filter((server) => (policy.fullAccess || approved.has(server)));
   return {
     allow: [...list.connectors, ...local].map((server) => `mcp__${server}`),
     deny: [
       ...list.local
-        .filter((server) => !approved.has(server))
+        .filter((server) => !(policy.fullAccess || approved.has(server)))
         .map((server) => `mcp__${server}`),
-      ...policy.deniedTools,
-      ...list.connectors
+      ...(policy.fullAccess ? [] : policy.deniedTools),
+      ...[...list.connectors, ...local]
         .filter((server) => MAIL.test(server))
         .flatMap((server) => CLAUDE_BLOCKED.map((tool) => `mcp__${server}__${tool}`)),
     ],
@@ -152,6 +160,32 @@ function codexApps(): Promise<{ id: string; runtimeName: string }[]> {
     });
   });
 }
+// Plugin servers need plugin-scoped overrides: creating mcp_servers.<name>
+// for one loses its injected transport and prevents the app server starting.
+export function codexMcpConfig(servers: {name: string}[], plugins: Map<string, string> = new Map()) {
+  return servers.filter(s => /^[\w-]+$/.test(s.name)).flatMap(({name}) => {
+    const plugin = plugins.get(name);
+    const prefix = plugin ? `plugins.${JSON.stringify(plugin)}.mcp_servers.${name}` : `mcp_servers.${name}`;
+    return ["-c", `${prefix}.enabled=true`, "-c", `${prefix}.default_tools_approval_mode="approve"`,
+      ...(MAIL.test(name) ? ["-c", `${prefix}.disabled_tools=${JSON.stringify(CODEX_MAIL_BLOCKED)}`] : [])];
+  });
+}
+async function fullCodexConfig() {
+  const run = (args: string[]) => exec("codex", args, {
+    cwd: homedir(), env: nativeEnv(), timeout: 30_000, maxBuffer: 1_000_000,
+  }).then(result => JSON.parse(result.stdout));
+  const [servers, catalog] = await Promise.all([run(["mcp", "list", "--json"]), run(["plugin", "list", "--json"])]);
+  const plugins = new Map<string, string>();
+  for (const plugin of catalog.installed ?? []) {
+    const root = plugin.source?.source === "local" ? plugin.source.path :
+      path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "plugins/cache", plugin.marketplaceName, plugin.name, plugin.version);
+    for (const name of [".mcp.json", "mcp.json"]) {
+      const manifest = await readFile(path.join(root, name), "utf8").then(JSON.parse, () => null);
+      for (const server of Object.keys(manifest?.mcpServers ?? {})) plugins.set(server, plugin.pluginId);
+    }
+  }
+  return codexMcpConfig(servers, plugins);
+}
 let cached: { at: number; access: Promise<ConnectorAccess> } | null = null;
 // Discovered once an hour. If an app cannot be asked, its helpers keep the
 // master's setup (Claude the browser only, Codex its own defaults), which is
@@ -160,7 +194,8 @@ export function connectorAccess(policy?: HelperPolicy): Promise<ConnectorAccess>
   if (cached && Date.now() - cached.at < 3600_000) return cached.access;
   const access = Promise.all([
     claudeList().then((list) => claudeRules(list, policy), () => null),
-    codexApps().then(codexConfig, () => null),
+    Promise.all([codexApps().then(codexConfig), policy?.fullAccess ? fullCodexConfig() : []])
+      .then(parts => parts.flat(), () => null),
   ]).then(([claude, codex]) => ({ claude, codex }));
   cached = { at: Date.now(), access };
   return access;

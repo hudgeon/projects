@@ -93,6 +93,9 @@ export async function inspect(x: Execution, child: Child, project: ProjectDirect
     "Read-only recovery inspection of the same native session and existing workspace; verify uncertain prior effects without replaying them.",
     child.id, child.agent, child.sessionId, "");
   child.state = "unknown";
+  // Inspection resumes this session with restricted tools. Keep its history
+  // for reconciliation, but continue changes in a fresh session afterwards.
+  child.resumable = false;
   j.phase = "child";
   await publish(
     "running",

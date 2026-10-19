@@ -63,6 +63,12 @@ test("native browser credentials travel through environment and read sessions ca
       // Every Claude session, change helpers included, gets only this browser:
       // The user's own connectors would be refused unattended and fail the turn.
       if (agent === "claude") {
+        const enabled = launch.args[launch.args.indexOf("--tools") + 1].split(",");
+        const allowed = toolConfiguration.split(",");
+        for (const tool of ["Bash", "TaskOutput", "TaskStop"]) {
+          assert.equal(enabled.includes(tool), !readOnly, tool);
+          assert.equal(allowed.includes(tool), !readOnly, tool);
+        }
         assert.ok(launch.args.includes("--strict-mcp-config"), `strict MCP when readOnly=${readOnly}`);
         assert.deepEqual(Object.keys(JSON.parse(launch.args[launch.args.indexOf("--mcp-config") + 1]).mcpServers), ["projects_browser"]);
       }

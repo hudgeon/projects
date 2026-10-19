@@ -222,6 +222,7 @@ test("a worktree's session continues only for a same-app follow-up while it is s
   assert.equal(continuesSession(made, followUp, [made]), true);
   assert.equal(continuesSession(made, {...followUp, freshSession: true}, [made]), false, "an explicit context reset keeps the workspace but drops its transcript");
   assert.equal(continuesSession(made, {...followUp, mode: "read"}, [made]), false, "a review of a change is independent");
+  assert.equal(continuesSession({...made, mode: "read"}, followUp, [made]), false, "a restricted read session cannot continue changes");
   assert.equal(continuesSession(made, {...followUp, agent: "codex"}, [made]), false);
   assert.equal(continuesSession({...made, resumable: false}, followUp, [made]), false);
   // The session's latest turn decides, even when a later follow-up made it.

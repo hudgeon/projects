@@ -27,11 +27,23 @@ Helpers are told how to wait (`runner/instructions.ts`):
 - run anything over two minutes, such as a review, a test suite, a deploy or
   CI, in the background with its input closed (`< /dev/null`), and check on it
   with short commands that show its progress;
+- use the installed Claude version's background status and stop tools when
+  available (such as Monitor and TaskStop); otherwise check the exact task
+  or remote run directly;
+- query the exact CI/deploy run directly, with bounded polling and network
+  requests, and stop at success, failure or cancellation; never wait for an
+  output file to become nonempty as proof a task is still running;
 - wait on the process ID they started, never a name search: `pgrep -f`
   matches the waiting loop's own command line, so that loop never ends;
-- treat a command with no new output and no CPU use for five minutes as
-  stuck, and stop it;
+- inspect local commands with no new output or CPU use for five minutes;
+  remote CI/deployment needs a remote status check before calling it stuck;
 - stop or finish every background command before returning a result.
+
+After a read-only recovery inspection, the inspected session is retired from
+execution reuse. Its report and owned worktree remain available; a fresh
+session continues any changes. Follow-up briefs target the remaining gaps:
+when only the work record is unfinished, they update and read back that record
+without repeating already verified delivery.
 
 ## Waits and signs of a stuck step
 

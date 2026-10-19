@@ -145,6 +145,7 @@ test("recovery inspects the same stopped child read-only before resuming the mas
     assert.equal(last?.state, "completed");
     assert.ok(last?.reviewedMessageIds?.includes(o.run.messages[1].id));
     assert.equal(last?.children[0].state, "blocked");
+    assert.equal(last?.children[0].resumable, false, "read-only inspection cannot seed a later change turn");
     assert.equal(
       last?.telemetry?.filter((e) => e.event === "recovery_started").length,
       1,

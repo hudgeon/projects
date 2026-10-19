@@ -25,6 +25,7 @@ import {
   type FileTouch,
 } from "./native-events";
 import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
+import { fullAccess, codexPermissions, codexFilesystem } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
@@ -50,6 +51,7 @@ export type NativeOptions = {
   sessionId?: string;
   schema: Record<string, unknown>;
   readOnly: boolean;
+  fullAccess?: boolean;
   codexFast?: boolean;
   onTiming?: (fields: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs">) => void;
   writableRoots?: string[];
@@ -321,24 +323,6 @@ export async function nativeTurn(options: NativeOptions): Promise<unknown> {
   return options.agent === "codex" ? codexTurn(options) : claudeTurn(options);
 }
 async function codexTurn(o: NativeOptions): Promise<unknown> {
-  // Named profiles grant exact Git metadata paths. The legacy workspace-write
-  // policy protects them even as extra roots. These overrides are process-local;
-  // the user's Codex configuration is never edited.
-  const filesystem = {
-    ":root": "read",
-    ":tmpdir": "write",
-    ":slash_tmp": "write",
-    [o.cwd]: "write",
-    [path.join(o.cwd, ".git")]: "read",
-    [path.join(o.cwd, ".codex")]: "read",
-    [path.join(o.cwd, ".agents")]: "read",
-    ...Object.fromEntries(
-      (o.writableRoots ?? []).map((root) => [root, "write"]),
-    ),
-  };
-  const profile = `{${Object.entries(filesystem)
-    .map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`)
-    .join(",")}}`;
   const child = spawn(
     o.binaries?.codex ?? "codex",
     [
@@ -368,14 +352,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
             `mcp_servers.projects_browser.${key}=${JSON.stringify(value)}`,
           ])
         : []),
-      ...(o.readOnly
-        ? []
-        : [
-            "-c",
-            `permissions.projects_job.filesystem=${profile}`,
-            "-c",
-            "permissions.projects_job.network.enabled=true",
-          ]),
+      ...codexFilesystem(o),
       "app-server",
       "--listen",
       "stdio://",
@@ -602,9 +579,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         cwd: o.cwd,
         serviceTier: o.codexFast ? "fast" : "default",
         approvalPolicy: "never",
-        ...(o.readOnly
-          ? { sandbox: "read-only" }
-          : { permissions: "projects_job" }),
+        ...codexPermissions(o, true),
       },
     );
     const thread = object(started.thread);
@@ -639,9 +614,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         serviceTier: o.codexFast ? "fast" : "default",
         serviceTierForTurn: o.codexFast ? "fast" : "default",
         approvalPolicy: "never",
-        ...(o.readOnly
-          ? { sandboxPolicy: { type: "readOnly", networkAccess: true } }
-          : { permissions: "projects_job" }),
+        ...codexPermissions(o),
         outputSchema: o.schema,
       });
       const started = object(turn.turn).id;
@@ -696,6 +669,10 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   // A stop that arrived while the identity was saved starts nothing.
   o.signal.throwIfAborted();
   const connectors = o.connectors?.claude;
+  const unrestricted = fullAccess(o);
+  const enabledTools = unrestricted ? "default" : o.readOnly
+    ? "Read,Glob,Grep,TodoWrite"
+    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskOutput,TaskStop,Monitor";
   const args = [
     "-p",
     "--output-format",
@@ -707,17 +684,14 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     "--json-schema",
     JSON.stringify(o.schema),
     "--permission-mode",
-    "dontAsk",
+    unrestricted ? "bypassPermissions" : "dontAsk",
     // TodoWrite only keeps the session's own plan; it changes nothing.
     "--tools",
-    o.readOnly
-      ? "Read,Glob,Grep,TodoWrite"
-      : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite",
+    enabledTools,
+    ...(unrestricted ? [] : [
     "--allowedTools",
     [
-      o.readOnly
-        ? "Read,Glob,Grep,TodoWrite"
-        : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite",
+      enabledTools,
       ...(o.browser
         ? browserTools(o.readOnly).map(
             (tool) => `mcp__projects_browser__${tool}`,
@@ -725,6 +699,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         : []),
       ...(connectors?.allow ?? []),
     ].join(","),
+    ]),
     ...(o.browser || connectors?.deny.length
       ? [
           "--disallowedTools",
@@ -741,7 +716,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     // Without approved connectors, only this conversation's browser: anything
     // else would be refused in dontAsk mode, failing the whole turn. With
     // them, local MCP servers and blocked connector tools stay hidden.
-    ...(connectors ? [] : ["--strict-mcp-config"]),
+    ...(connectors || unrestricted ? [] : ["--strict-mcp-config"]),
     "--mcp-config",
     JSON.stringify({
       mcpServers: o.browser
