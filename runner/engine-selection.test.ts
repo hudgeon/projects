@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, rm, writeFile, stat } from "node:fs/promises";
+import { readdir, readFile, rm, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { executeRun, savePrivate, type EngineOptions } from "./engine";
 import { git } from "./workspaces";
 import { JEV_MODEL } from "./context";
+import { reviewsDir } from "./project-turn";
 import type { Progress, Child } from "../src/run-model";
 import { result, progress, fixture, complete, dispatch, engineOptions } from "./run-fixtures";
 
@@ -76,6 +77,11 @@ test("conversation selection failures persist the same safe diagnostic that the 
   } finally {await rm(dir, {recursive: true, force: true});}
 });
 
+// A run's coordinator reviews, oldest first.
+async function masterReviews(o: EngineOptions) {
+  const dir = reviewsDir(o.stateDir);
+  return (await readdir(dir)).filter(name => name.endsWith(`-${o.run.id.slice(0, 8)}-master.json`)).sort().map(name => path.join(dir, name));
+}
 async function projectReviewFixture() {
   const dir = await fixture();
   await writeFile(path.join(dir, ".gitignore"), ".state/\n");
@@ -110,7 +116,7 @@ test("Jev project failure receipts and logs correlate while baseline evidence st
   };
   try {
     await executeRun(o);
-    const file = path.join(o.stateDir, "runs", o.run.id + ".project-context.master.json");
+    const [file] = await masterReviews(o);
     const receipt = JSON.parse(await readFile(file, "utf8"));
     const failures = lines.map(line => JSON.parse(line)).filter(x => x.event === "jev_selection_failed");
     assert.equal(natives, 1);
@@ -135,17 +141,29 @@ test("project review precedes the first native turn and a resumed unchanged view
     natives++;
     if (natives === 1) {assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/); assert.match(opts.prompt, /Draft only/);}
     else {assert.match(opts.prompt, /Project context is unchanged/); assert.doesNotMatch(opts.prompt, /invoice fixture uses the pipe delimiter/);}
+    opts.onFile?.({path: path.join(dir, "README.md"), lines: [1, 3]});
+    opts.onFile?.({path: path.join(path.dirname(dir), "elsewhere.md")});
     await opts.onSession("project-master"); return complete;
   };
   try {
     await executeRun(o);
-    const receiptFile = path.join(o.stateDir, "runs", o.run.id + ".project-context.master.json");
+    const [receiptFile] = await masterReviews(o);
     const receipt = JSON.parse(await readFile(receiptFile, "utf8"));
     assert.equal(receipt.strategy, "select");
     assert.equal(receipt.cached, false);
     assert.equal((await stat(receiptFile)).mode & 0o077, 0);
+    // The receipt holds what the review read and, after the turn, the files
+    // the turn used: paths and line ranges, nothing else.
+    assert.equal(receipt.input.task, "Coordinate the current user request in this project; verify returned work before deciding what remains.");
+    assert.equal(receipt.input.query, "");
+    assert.deepEqual(receipt.input.instructions, o.run.messages.filter(m => m.role === "user").map(m => m.text));
+    assert.equal(receipt.head, await git(dir, ["rev-parse", "HEAD"]));
+    assert.deepEqual(receipt.usage.files, [{path: "README.md", read: true, lines: [[1, 3]]}]);
+    assert.equal(receipt.usage.outside, 1);
     await executeRun({...o, run: {...o.run, generation: 2, progress: last!}});
-    const cached = JSON.parse(await readFile(receiptFile, "utf8"));
+    const reviews = await masterReviews(o);
+    assert.equal(reviews.length, 2, "every review keeps its own receipt");
+    const cached = JSON.parse(await readFile(reviews[1], "utf8"));
     assert.equal(cached.cached, true); assert.equal(cached.reusedInSession, true);
     assert.equal(natives, 2); assert.equal(apiCalls, 1);
   } finally {await rm(dir, {recursive: true, force: true});}

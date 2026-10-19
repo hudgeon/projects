@@ -17,6 +17,7 @@
     "collector:build": "esbuild collector=collector/main.ts service=collector/service.ts work-item=hooks/work-item.ts runner=runner/main.ts --bundle --platform=node --format=esm --outdir=.local --out-extension:.js=.mjs",
     "runner": "tsx runner/main.ts",
     "context:evaluate": "tsx scripts/evaluate-context.ts",
+    "context:replay": "tsx scripts/replay-project-context.ts",
     "hooks:install": "node scripts/install-hooks.mjs"
   },
   "dependencies": {

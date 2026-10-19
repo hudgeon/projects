@@ -19,6 +19,7 @@
     "worker-configuration.d.ts",
     "vite.config.ts",
     "hooks",
-    "runner"
+    "runner",
+    "scripts"
   ]
 }

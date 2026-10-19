@@ -6,13 +6,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ScreenshotInput } from "../src/screenshot-model";
 import type { ExecutionEvent, FailureReason } from "../src/telemetry";
 import type { ConnectorAccess } from "./connectors";
-import {
-  LIVE_STEPS,
-  progressNoteInputSchema,
-  type LivePlanStep,
-  type NativeActivity,
-  type ProgressNoteInput,
+import type {
+  LivePlanStep,
+  NativeActivity,
+  ProgressNoteInput,
 } from "../src/run-model";
+import {
+  claudeFiles,
+  claudeToolKind,
+  codexActivity,
+  codexFiles,
+  object,
+  planSteps,
+  parseProgressNote,
+  type FileTouch,
+} from "./native-events";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
 // A turn's tokens so far, as its app reports them: new input (cache writes
@@ -55,6 +63,8 @@ export type NativeOptions = {
   onRefused?: (categories: string[]) => void;
   // Called as the turn's token use grows.
   onUsage?: (usage: TurnUsage) => void;
+  // Each file the turn reads or changes: paths and line ranges only.
+  onFile?: (file: FileTouch) => void;
   // The user's connectors, for helpers only.
   connectors?: ConnectorAccess;
   binaries?: { codex?: string; claude?: string };
@@ -295,81 +305,6 @@ async function confirmStopped(child: ChildProcessWithoutNullStreams) {
     stopProcess(child);
   });
 }
-function object(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-// Only an explicitly marked public status message is eligible. Ordinary text,
-// reasoning, tool arguments/results and final structured results stay local.
-export function parseProgressNote(text: unknown): ProgressNoteInput | null {
-  if (typeof text !== "string" || text.length > 5000) return null;
-  const match = /^PROJECTS_PROGRESS (\{[^\n]*\})\s*$/.exec(text.trim());
-  if (!match) return null;
-  try {
-    const parsed = progressNoteInputSchema.safeParse(JSON.parse(match[1]));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-// Deliberately project to fixed categories; even a tool name can contain private
-// data. No native text or payload crosses this callback.
-function codexActivity(
-  item: Record<string, unknown>,
-  finished: boolean,
-): NativeActivity | null {
-  const kinds: Record<string, NativeActivity["kind"]> = {
-    commandExecution: "command",
-    fileChange: "edit",
-    mcpToolCall: "tool",
-    dynamicToolCall: "tool",
-    webSearch: "search",
-    contextCompaction: "compaction",
-    agentMessage: "response",
-  };
-  const kind =
-    typeof item.type === "string" && Object.hasOwn(kinds, item.type)
-      ? kinds[item.type]
-      : undefined;
-  return kind
-    ? {
-        kind,
-        state: !finished
-          ? "started"
-          : item.status === "failed" || item.success === false
-            ? "failed"
-            : "finished",
-      }
-    : null;
-}
-// Plans are the agent's own step labels, clipped; statuses map to three states.
-function planSteps(
-  items: unknown,
-  text: (item: Record<string, unknown>) => unknown,
-  status: (item: Record<string, unknown>) => unknown,
-): LivePlanStep[] {
-  if (!Array.isArray(items)) return [];
-  return items
-    .map((entry) => object(entry))
-    .flatMap((item) => {
-      const step = typeof text(item) === "string" ? String(text(item)).trim() : "";
-      const state = status(item);
-      if (!step) return [];
-      return [
-        {
-          step: step.length > 200 ? `${step.slice(0, 199)}…` : step,
-          status:
-            state === "completed"
-              ? ("done" as const)
-              : state === "inProgress" || state === "in_progress"
-                ? ("active" as const)
-                : ("pending" as const),
-        },
-      ];
-    })
-    .slice(0, LIVE_STEPS);
-}
 const userContent = (input: SteerInput, kind: "codex" | "claude") => [
   { type: "text", text: input.text },
   ...(input.screenshots ?? []).map((image) =>
@@ -381,14 +316,6 @@ const userContent = (input: SteerInput, kind: "codex" | "claude") => [
         },
   ),
 ];
-function claudeToolKind(name: unknown): NativeActivity["kind"] {
-  if (name === "Read") return "read";
-  if (name === "Glob" || name === "Grep" || name === "WebSearch")
-    return "search";
-  if (name === "Edit" || name === "Write") return "edit";
-  if (name === "Bash") return "command";
-  return "tool";
-}
 // Only native protocol events are parsed. Tool output is drained, never uploaded.
 function readLines(
   child: ChildProcessWithoutNullStreams,
@@ -654,6 +581,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       }
       if (message.method === "item/completed") {
         const item = object(p.item);
+        if (o.onFile) codexFiles(item, o.cwd).forEach(o.onFile);
         if (item.type === "agentMessage" && item.phase === "commentary") {
           const note = parseProgressNote(item.text);
           if (note) o.onProgress?.(note);
@@ -964,8 +892,11 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
                 typeof block.id === "string"
               ) {
                 const kind = claudeToolKind(block.name);
-                if (!tools.has(block.id))
+                if (!tools.has(block.id)) {
                   o.onActivity?.({ kind, state: "started" });
+                  if (o.onFile)
+                    claudeFiles(block.name, object(block.input), o.cwd).forEach(o.onFile);
+                }
                 tools.set(block.id, kind);
               }
               if (

@@ -56,7 +56,7 @@ import {
 } from "../src/run-text";
 import { connectorAccess, type ConnectorAccess } from "./connectors";
 import { childContext, contextConversation, contextVersion, keptKey, selectContext, type Selector } from "./context";
-import { contextBrief } from "./project-context";
+import { contextBrief, type ProjectTurn } from "./project-turn";
 export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 import {
   pushPending,
@@ -1017,9 +1017,9 @@ export async function executeRun(o: EngineOptions) {
     .digest("hex")
     .slice(0, 24);
   let contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
-  const projectBrief = (project: ProjectDirectory | undefined, cwd: string, task: string, actor: string, agent: Agent, session?: string | null, query?: string) =>
+  const projectBrief = (...turn: ProjectTurn) =>
     contextBrief({stateDir: o.stateDir, run: o.run, host: o.host, workRepo: o.workRepo, selector, signal: o.signal, save: savePrivate,
-      instructions: messages.filter(m => m.role === "user").map(m => m.text)}, project, cwd, task, actor, agent, session, query);
+      instructions: messages.filter(m => m.role === "user").map(m => m.text)}, ...turn);
   const instructionsVersion = () => createHash("sha256").update(JSON.stringify(messages
     .filter(m => m.role === "user").map(m => [m.id, m.text, m.screenshots]))).digest("hex");
   // Quick work skips the repository activity dump: it is most of a first turn's
@@ -1142,6 +1142,7 @@ export async function executeRun(o: EngineOptions) {
           if (id !== child.sessionId)
             throw Error("Recovery must use the existing native session.");
         },
+        onFile: projectContext.onFile,
         onProcess: async (pid) => {
           j.pid = pid;
           await persist();
@@ -1409,6 +1410,7 @@ export async function executeRun(o: EngineOptions) {
                 j.progress.masterSessionId = id;
                 await persist();
               },
+              onFile: projectContext.onFile,
               onProcess: async (pid) => {
                 j.pid = pid;
                 await persist();
@@ -1734,6 +1736,7 @@ export async function executeRun(o: EngineOptions) {
                 await persist();
               },
               onRefused: (categories) => refusedBy.set(child.id, categories),
+              onFile: projectContext.onFile,
             },
             child,
             (value) => {

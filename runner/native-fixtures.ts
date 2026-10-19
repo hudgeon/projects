@@ -43,6 +43,10 @@ if(${JSON.stringify(agent)}==='codex') {
         return;
       }
       if(mode==='exit')process.exit(0);if(mode==='hang')return;
+      if(mode==='files'){
+        send({method:'item/completed',params:{threadId:'test-session',item:{type:'commandExecution',status:'completed',cwd:process.cwd(),command:"sed -n '2,4p' notes.md",aggregatedOutput:'private-output',commandActions:[{type:'read',command:"sed -n '2,4p' notes.md",name:'notes.md',path:'notes.md'}]}}});
+        send({method:'item/completed',params:{threadId:'test-session',item:{type:'fileChange',status:'completed',changes:[{path:process.cwd()+'/src/b.ts',kind:{type:'update'},diff:'private-diff'}]}}});
+      }
       send({method:'turn/started',params:{threadId:'test-session',turn:{id:'turn'}}});
       send({method:'item/started',params:{threadId:'foreign-session',item:{type:'fileChange'}}});
       send({method:'item/started',params:{threadId:'test-session',item:{type:'reasoning',content:['private-reasoning']}}});
@@ -75,6 +79,7 @@ if(${JSON.stringify(agent)}==='codex') {
     send({type:'assistant',message:{id:'msg-1',usage:{input_tokens:10,cache_creation_input_tokens:1000,cache_read_input_tokens:0,output_tokens:50},content:[{type:'thinking',thinking:'private-reasoning'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'secret-command'}}]}});
     send({type:'assistant',message:{id:'msg-2',usage:{input_tokens:5,cache_creation_input_tokens:200,cache_read_input_tokens:1000,output_tokens:30},content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
     send({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tool-1',content:'private-output'}]}});
+    if(mode==='files')for(let i=0;i<2;i++)send({type:'assistant',message:{id:'msg-3',content:[{type:'tool_use',id:'read-1',name:'Read',input:{file_path:process.cwd()+'/notes.md',offset:2,limit:3}},{type:'tool_use',id:'edit-1',name:'Edit',input:{file_path:process.cwd()+'/src/b.ts',old_string:'private-old',new_string:'private-new'}}]}});
     if(mode==='steer'){send({type:'assistant',message:{content:[{type:'tool_use',id:'todo-1',name:'TodoWrite',input:{todos:[{content:'Read the code',status:'completed',activeForm:'Reading'},{content:'Make the change',status:'in_progress',activeForm:'Changing'},{content:'Run checks',status:'pending',activeForm:'Checking'}]}}]}});return;}
     finish('');
   });

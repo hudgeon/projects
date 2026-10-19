@@ -17,8 +17,8 @@ deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.
 In that account, configure the custom provider with slug `typesafe` and base
 URL `https://api.typesafe.ai`. Requests use its native `/v1/systemone` path,
 tagged as process `context-selection`, trigger `coordinator-rotation` for
-conversation handovers or `project-turn` for project reviews, and worker
-`projects-runner`. The pinned model's input-token rate is supplied as custom
+conversation handovers, `project-turn` for project reviews or `project-replay`
+for their evaluation replays, and worker `projects-runner`. The pinned model's input-token rate is supplied as custom
 pricing; output tokens are free. Payload logging, gateway caching and retries
 are disabled for these requests; usage/cost metadata remains available. The
 existing provider key stays in executor memory. If the gateway fails, context
@@ -106,9 +106,9 @@ Repository instructions, source gaps and edits elsewhere in the project reach
 the prompt fresh without a new judgment. A changed input causes a new gateway
 review. An unchanged view
 already supplied to the same native session is referenced without reinserting
-its text; fresh native sessions receive the view. Project receipts live beside
-the private run journal; cache records live under its state directory's
-`project-context/`. They never enter portfolio snapshots or telemetry. Feedback
+its text; fresh native sessions receive the view. Project receipts and cache
+records live under the runner state directory's `project-context/` (see
+Quality loop below). They never enter portfolio snapshots or telemetry. Feedback
 or changed sources arriving during review discard the stale selection/action;
 a prepared workspace survives an update without replaying work. Service or
 source failures retain deterministic evidence and retrieval pointers.
@@ -134,3 +134,57 @@ existing key and configured gateway. The command writes
 tokens and latency, and estimated cost at the documented model rate. These
 measurements do not establish production savings or native-agent accuracy;
 those need ordinary-use measurement. No customer history is used by this script.
+
+## Quality loop
+
+Every project review keeps its own private receipt in the runner state
+directory's `project-context/reviews/`, named by its time; the newest 1,000
+within 180 days are kept. The receipt records what the review read (the task,
+retrieval query, the instructions Jev saw, project, plan, workspace, commit and
+linked work issue) and what it did: the considered and supplied units, Jev's
+probabilities, tokens and latency. After the native turn it served, the
+receipt also records the project files that turn read or changed, as relative
+paths and the line ranges read; never file text, commands or output. Claude
+reports them through its Read, Edit and Write tools, Codex through its own
+parse of each command and its applied patches; files read by other shell
+commands are not seen. Files outside the project are only counted.
+
+`npm run context:replay`, run on a connected machine from a checkout of the
+code to evaluate, replays stored reviews on that code: each at its recorded
+commit in a `git clone --shared` (never the project's own checkout), with its
+recorded inputs and live Jev through the machine's gateway. The work issue is
+read as it is now, without comments posted after the review. By default it
+replays the labelled reviews and the 20 newest others (`--limit N`, `--all`,
+`--review <id>`, or `--same <replay file>` for exactly the reviews of an
+earlier replay). It saves the replay, unit text included, in the private
+`jev-evaluation/` directory beside the runner state (the newest 20 are kept)
+and prints:
+
+- units and characters supplied per turn;
+- precision and recall at cutoffs 0.30 to 0.70 against the machine's labels
+  in `jev-evaluation/labels.json` (2 on the task's subject, 1 adjacent, 0
+  off-topic; strict counts 2, lenient 1 or 2), over labelled units only, with
+  the retrieval order that shadow mode and failures supply, Jev's AUC, the
+  units still unlabelled and how many labelled relevant units the shortlist
+  still holds;
+- usage proxies for reviews with recorded usage, for the replayed and the
+  original selection: the share of supplied units in files the turn read or
+  changed (and overlapping the lines read), and the share of eligible project
+  files the turn used that the selection supplied or shortlisted;
+- Jev latency, input tokens and estimated cost.
+
+`score [file]` reprints a saved replay's report (`--json` gives counts to
+combine machines); `usage` reports the selections turns actually received
+against their usage across all stored reviews, without calling Jev.
+`unlabelled [id]` prints the newest replay's unlabelled units with the
+review's task, and `label <id> <index>=<0|1|2>...` records labels and copies
+the review's receipt into `jev-evaluation/reviews/`, so the gold set outlives
+the history. Each machine's labels and gold set stay on that machine. The
+October 2026 validation's `turns.json`, `labels.json` and `replay3.json` in
+that directory are read in place; `score replay3.json` reproduces its numbers.
+
+Any change to retrieval, question wording, the 0.5 cutoff or the pinned model
+ships with before/after metrics from this command in its PR: on each machine
+with labels, replay on main, then replay `--same` reviews on the branch, and
+report both. Whenever about 20 new reviews accumulate, label a sample of them,
+especially from code-heavy repositories, so the gold set follows real use.

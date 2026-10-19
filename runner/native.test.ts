@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { nativeTurn, nativeEnv, browserTools, hiddenBrowserTools, NativeBusyError, parseProgressNote, type NativeOptions } from "./native";
+import { nativeTurn, nativeEnv, browserTools, hiddenBrowserTools, NativeBusyError, type NativeOptions } from "./native";
 import { outputSchema } from "./engine";
 import { childResultSchema, type NativeActivity, type ProgressNoteInput, type LivePlanStep } from "../src/run-model";
 import { result, fixture } from "./run-fixtures";
@@ -180,27 +180,19 @@ test("Codex archives only verified threads and restores one before resuming", as
   }
 });
 
-test("only bounded explicit progress notes are accepted, never embedded source text", () => {
-  const value = {
-    done: ["Read the plan"],
-    remaining: ["Verify the change"],
-    yourMove: "Use Open browser / sign in in this conversation",
-  };
-  const text = `PROJECTS_PROGRESS ${JSON.stringify(value)}`;
-  assert.deepEqual(parseProgressNote(text), value);
-  // Notes from sessions started before yourMove still parse.
-  const legacy = { done: [], remaining: ["Verify the change"], blocker: null };
-  assert.deepEqual(parseProgressNote(`PROJECTS_PROGRESS ${JSON.stringify(legacy)}`), legacy);
-  for (const invalid of [
-    null,
-    `Quoted output: ${text}`,
-    `\`\`\`\n${text}\n\`\`\``,
-    `${text}\nprivate extra text`,
-    "PROJECTS_PROGRESS {broken}",
-    `PROJECTS_PROGRESS ${JSON.stringify({ ...value, token: "secret" })}`,
-    `PROJECTS_PROGRESS ${JSON.stringify({ ...value, done: ["x".repeat(241)] })}`,
-  ])
-    assert.equal(parseProgressNote(invalid), null);
+test("each agent reports the files its turn read or changed as paths and line ranges only", async () => {
+  const dir = await fixture();
+  try {
+    for (const agent of ["codex", "claude"] as const) {
+      const files: unknown[] = [];
+      await nativeTurn({agent, cwd: dir, prompt: "Inspect", schema: {type: "object"}, readOnly: false, signal: AbortSignal.timeout(5000), binaries: {[agent]: await fakeBinary(dir, agent, "files")}, onSession: async () => {}, onFile: file => files.push(file)});
+      // The fake agents name files under their own resolved working directory.
+      const real = await realpath(dir);
+      assert.deepEqual(files, [{path: path.join(real, "notes.md"), lines: [2, 4]}, {path: path.join(real, "src/b.ts"), change: true}], agent);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("a busy model's turn runs again only when it had not acted yet", async () => {
