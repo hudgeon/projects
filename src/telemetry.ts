@@ -274,6 +274,13 @@ export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
 const logFieldsSchema = telemetryFieldsSchema.extend({
   contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
   contextFailure: contextFailureSchema.optional(),
+  // The key path a runner's config failed on, never a value: identifier
+  // segments joined by dots, "*" for a segment the owner chose, or a
+  // placeholder in angle brackets when no key applies.
+  configKey: z.string().regex(/^[\w.*<>-]{1,200}$/).optional(),
+  // The release an installed bundle came from: a commit prefix, "-dirty"
+  // when the checkout had uncommitted changes.
+  release: z.string().regex(/^[0-9a-f]{7,40}(?:-dirty)?$/).optional(),
 });
 const logEventSchema = z.enum([
   ...executionEventSchema.shape.event.options,
@@ -309,6 +316,7 @@ const logEventSchema = z.enum([
   "runner_needs_inspection",
   "runner_connection_unavailable",
   "runner_start_failed",
+  "runner_config_invalid",
   "runner_draining",
   "runner_executor_adopted",
   "runner_executor_failed",

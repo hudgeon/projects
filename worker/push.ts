@@ -1,6 +1,7 @@
 // Web Push (RFC 8030) signed with VAPID (RFC 8292) and sent without a payload.
 // The device then asks Projects what to show, with the owner's own sign-in, so no
 // conversation title, text or ID crosses Apple's, Google's or Mozilla's servers.
+import { telemetry } from "../src/telemetry";
 const PUSH_HOSTS = [
   "web.push.apple.com",
   "fcm.googleapis.com",
@@ -96,5 +97,162 @@ export async function sendPush(
     return response.ok ? "sent" : "failed";
   } catch {
     return "failed";
+  }
+}
+type Notice = { run: string | null; title: string; body: string };
+export type PushEvent = {
+  id: string;
+  title: string;
+  body: string;
+  at: number;
+  url: string;
+};
+type PushEnv = { VAPID_PRIVATE_KEY?: string; SITE_URL: string };
+// Each person's devices and the notices they fetch. A device belongs to the
+// sign-in that subscribed it; a notice to the conversation's owner. Rows from
+// before people had profiles name no one and are the deployment owner's.
+export class PushDevices {
+  constructor(
+    private storage: DurableObjectStorage,
+    private env: PushEnv,
+    private deploymentOwner: string,
+    private waitUntil: (work: Promise<unknown>) => void,
+  ) {
+    storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS push_devices (endpoint TEXT PRIMARY KEY, created INTEGER NOT NULL, used INTEGER NOT NULL)",
+    );
+    storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS push_events (id TEXT PRIMARY KEY, run TEXT, title TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)",
+    );
+    for (const table of ["push_devices", "push_events"])
+      if (
+        !storage.sql
+          .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+          .toArray()
+          .some((c) => c.name === "email")
+      )
+        storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN email TEXT`);
+  }
+  // A device's push URL is a capability: it stays here, never logged or returned.
+  // Opening Projects refreshes a device and keeps it with the sign-in that
+  // opened it; only a new one gets the test notice, and only that device.
+  subscribe(endpoint: string, email: string) {
+    const now = Date.now();
+    const known =
+      this.storage.sql
+        .exec("SELECT 1 FROM push_devices WHERE endpoint=?", endpoint)
+        .toArray().length > 0;
+    this.storage.sql.exec(
+      "INSERT INTO push_devices(endpoint,created,used,email) VALUES(?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET used=excluded.used,email=excluded.email",
+      endpoint,
+      now,
+      now,
+      email,
+    );
+    // Ten devices a person, the most recently opened.
+    this.storage.sql.exec(
+      "DELETE FROM push_devices WHERE COALESCE(email,?)=? AND endpoint NOT IN (SELECT endpoint FROM push_devices WHERE COALESCE(email,?)=? ORDER BY used DESC LIMIT 10)",
+      this.deploymentOwner,
+      email,
+      this.deploymentOwner,
+      email,
+    );
+    if (!known)
+      this.notify(
+        email,
+        {
+          run: null,
+          title: "Notifications are on",
+          body: "Projects will tell you here when a conversation is ready or needs you.",
+        },
+        [endpoint],
+      );
+  }
+  // A person forgets only their own device.
+  unsubscribe(endpoint: string, email: string) {
+    this.storage.sql.exec(
+      "DELETE FROM push_devices WHERE endpoint=? AND COALESCE(email,?)=?",
+      endpoint,
+      this.deploymentOwner,
+      email,
+    );
+  }
+  // What a woken device shows: its person's notices from the last day, newest first.
+  events(email: string): PushEvent[] {
+    return this.storage.sql
+      .exec<{
+        id: string;
+        run: string | null;
+        title: string;
+        body: string;
+        at: number;
+      }>(
+        "SELECT id,run,title,body,at FROM push_events WHERE COALESCE(email,?)=? AND at>? ORDER BY at DESC LIMIT 5",
+        this.deploymentOwner,
+        email,
+        Date.now() - 86400_000,
+      )
+      .toArray()
+      .map((e) => ({
+        id: e.id,
+        title: e.title,
+        body: e.body,
+        at: e.at,
+        url: e.run ? `/?run=${e.run}` : "/",
+      }));
+  }
+  // Pushes carry nothing; each of the person's devices fetches events() with
+  // its own sign-in.
+  notify(email: string, event: Notice, endpoints?: string[]) {
+    const at = Date.now();
+    this.storage.sql.exec(
+      "INSERT INTO push_events(id,run,title,body,at,email) VALUES(?,?,?,?,?,?)",
+      crypto.randomUUID(),
+      event.run,
+      event.title,
+      event.body,
+      at,
+      email,
+    );
+    this.storage.sql.exec(
+      "DELETE FROM push_events WHERE at<? OR (COALESCE(email,?)=? AND id NOT IN (SELECT id FROM push_events WHERE COALESCE(email,?)=? ORDER BY at DESC LIMIT 50))",
+      at - 86400_000,
+      this.deploymentOwner,
+      email,
+      this.deploymentOwner,
+      email,
+    );
+    const secret = this.env.VAPID_PRIVATE_KEY;
+    const targets =
+      endpoints ??
+      this.storage.sql
+        .exec<{ endpoint: string }>(
+          "SELECT endpoint FROM push_devices WHERE COALESCE(email,?)=?",
+          this.deploymentOwner,
+          email,
+        )
+        .toArray()
+        .map((d) => d.endpoint);
+    if (!secret || !targets.length) return;
+    this.waitUntil(
+      Promise.all(
+        targets.map(async (endpoint) => {
+          const result = await sendPush(endpoint, secret, this.env.SITE_URL);
+          if (result === "gone")
+            this.storage.sql.exec(
+              "DELETE FROM push_devices WHERE endpoint=?",
+              endpoint,
+            );
+          telemetry(
+            "worker",
+            "notification_sent",
+            result === "failed"
+              ? { outcome: "failed", reason: "http_error" }
+              : { outcome: result === "sent" ? "accepted" : "rejected" },
+            result === "failed" ? "warn" : "info",
+          );
+        }),
+      ),
+    );
   }
 }

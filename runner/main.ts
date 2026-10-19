@@ -1,5 +1,5 @@
 import { readFile, mkdir, open, unlink, stat, readdir } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -11,7 +11,7 @@ import {
   decodeScreenshots,
   screenshotInputSchema,
 } from "../src/screenshot-model";
-import { configSchema, machineSecret } from "../collector/collect";
+import { machineSecret } from "../collector/collect";
 import {
   laneSchema,
   progressSchema,
@@ -20,54 +20,15 @@ import {
   type RunMessage,
 } from "../src/run-model";
 import { executeRun, savePrivate } from "./engine";
-import { connectorAccess, helperPolicySchema } from "./connectors";
+import { connectorAccess } from "./connectors";
 import { Failure } from "./native";
 import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
 import { readDocument } from "./documents";
 import { documentJobSchema } from "../src/document-model";
-import { contextConfigSchema } from "./context";
+import { installedRelease, loadConfig, type Config } from "./config";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
 
-const absolute = z.string().refine(path.isAbsolute);
-// Every connected machine runs this with its own config, the same file its
-// collector reads. Its paths default beside it.
-const schema = configSchema
-  .extend({
-    concurrency: z.number().int().min(1).max(5).default(3),
-    // Extra slots only quick work (such as unsubscribes) may use.
-    quickConcurrency: z.number().int().min(0).max(5).default(5),
-    endpoint: z.url(),
-    stateDir: absolute.optional(),
-    worktreeRoot: absolute.optional(),
-    masterCwd: absolute.optional(),
-    // An owner-only file holding this machine's runner token. Without one, a
-    // runner-token file beside this config, else RUNNER_TOKEN from the
-    // machine's Doppler config.
-    tokenFile: absolute.optional(),
-    // The selector reads JEV_API_KEY only in this executor's memory. Native
-    // agents and the collector never receive it. Off until explicitly enabled.
-    context: contextConfigSchema.default({mode: "off"}),
-    // Local MCP servers Claude helpers may use on this machine, and tools to
-    // hide from them as Claude permission rules (mcp__server__tool).
-    helpers: helperPolicySchema,
-  })
-  .transform((config) => {
-    const base = path.join(config.home, ".local/share/project-overview");
-    return {
-      ...config,
-      stateDir: config.stateDir ?? path.join(base, "runner"),
-      worktreeRoot: config.worktreeRoot ?? path.join(base, "worktrees"),
-      masterCwd: config.masterCwd ?? config.root,
-      // Doppler supplies the token only when no file is named or present.
-      tokenFile:
-        config.tokenFile ??
-        (config.doppler && !existsSync(path.join(base, "runner-token"))
-          ? null
-          : path.join(base, "runner-token")),
-    };
-  });
-type Config = z.output<typeof schema>;
 type Route =
   | "/api/runner/claim"
   | "/api/runner/heartbeat"
@@ -577,6 +538,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
   telemetry("runner", "runner_started", {
     concurrency: config.concurrency,
     host: config.host,
+    release: installedRelease(),
   });
   // Conversations executing here settle their own copies when a turn ends.
   // For every other conversation this machine ran, copies that nothing needs,
@@ -753,7 +715,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
 }
 async function main() {
   const [configFile = "", ...flags] = process.argv.slice(2);
-  const config = schema.parse(JSON.parse(await readFile(configFile, "utf8")));
+  const config = await loadConfig(configFile);
   const endpoint = new URL(config.endpoint);
   if (
     endpoint.protocol !== "https:" &&
@@ -775,6 +737,6 @@ async function main() {
 }
 main().catch(() => {
   if (!process.argv.includes("--execute"))
-    telemetry("runner", "runner_start_failed", {}, "error");
+    telemetry("runner", "runner_start_failed", { release: installedRelease() }, "error");
   process.exitCode = 1;
 });

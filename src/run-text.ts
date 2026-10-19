@@ -271,13 +271,14 @@ function move(run: Pick<RunSummary, "state" | "needsYou" | "stuck">) {
   if (run.state === "completed") return "Ready";
   return null;
 }
-// A notification when an existing conversation newly becomes the owner's move.
+// A notification to a conversation's owner when it newly becomes their move.
 // New conversations, Done and Reopen never notify.
 export function notice(previous: RunSummary | null, next: RunSummary) {
   const kind = move(next);
   if (!previous || !kind || next.archivedAt || kind === move(previous))
     return null;
   return {
+    to: next.owner,
     title: `${kind}: ${clip(next.title, 80)}`,
     body: clip(next.status ?? "", 140),
   };

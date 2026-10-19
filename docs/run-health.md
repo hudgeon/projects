@@ -68,11 +68,11 @@ commands). It publishes `live.watch`, times and categories only:
 
 Nothing is called idle without a process reading. A sign is not a verdict and
 nothing is stopped: the conversation shows "May be stuck" with what was seen,
-it joins the owner's move until the step moves again, the owner gets one push
-notification for it, the runner records `turn_stuck` (reason `commands_idle`
-or `agent_silent`), and a helper is told once, at its next step, to stop
-anything waiting for input or say what it is waiting on. Stop ends the turn as
-usual.
+it joins its owner's move until the step moves again, the conversation's owner
+gets one push notification for it, the runner records `turn_stuck` (reason
+`commands_idle` or `agent_silent`), and a helper is told once, at its next
+step, to stop anything waiting for input or say what it is waiting on. Stop
+ends the turn as usual.
 
 ## Jev shadow checks
 

@@ -373,12 +373,12 @@ records are retained.
 
 ## Notifications
 
-Projects sends a Web Push notification when a conversation becomes your move:
-Ready, Needs you or Failed. Pushes carry no payload: the device fetches the
-notice with its own session, so no title or text crosses the browser vendors'
-push services. The Worker posts only to those services and forgets a device
-they report gone. On an iPhone, notifications need Projects added to the Home
-Screen.
+A conversation becoming its owner's move (Ready, Needs you or Failed) sends a
+Web Push notification to that person's devices. Pushes carry no payload: a
+device fetches its person's notices with its own session, so no title or text
+crosses a push service. The Worker posts only to those services and forgets
+devices reported gone. On an iPhone, notifications need Projects on the
+Home Screen.
 
 ## Evidence and limits
 
@@ -490,7 +490,7 @@ request and a manual **Deploy** workflow run on `main`, which:
 
 Transient Cloudflare failures retry with backoff; anything else stops the
 release. After a deploy that changes the machine bundles, run
-`node scripts/install-machine.mjs` on each connected machine: it keeps the
-machine's config and tokens and restarts its runner at once; conversations in
-flight finish their current step first. A machine that is away gets the
+`node scripts/install-machine.mjs` from a checkout of the released commit on
+each connected machine: it builds the bundles there, keeps the config and
+tokens, and drains or starts the runner. A machine that is away gets the
 release when it returns.

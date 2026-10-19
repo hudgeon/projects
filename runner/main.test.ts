@@ -169,3 +169,25 @@ test("a stopping runner abandons a document read at once and delivers nothing", 
     await rm(dir, {recursive: true, force: true});
   }
 });
+
+test("a runner that rejects its config logs the offending keys beside the start failure, so a crash loop is diagnosable from its log", {timeout: 30000}, async () => {
+  const dir = await fixture();
+  const config = path.join(dir, "machine.json");
+  // A config written for a newer runner than this one (an unknown helpers
+  // key) with a value out of range: both are named, no value is.
+  await writeFile(config, JSON.stringify({host: "studio", root: dir, home: dir, endpoint: "https://projects.example.com", agents: ["claude"], concurrency: 9, helpers: {fullAccess: true, later: {setting: "a secret value"}}}));
+  const runner = spawn(process.execPath, ["--import", "tsx", "runner/main.ts", config], {stdio: ["ignore", "ignore", "pipe"]});
+  let stderr = "";
+  runner.stderr!.on("data", (chunk) => { stderr += chunk; });
+  try {
+    const code = await new Promise<number | null>((resolve) => runner.once("exit", (c) => resolve(c)));
+    assert.equal(code, 1);
+    const events = stderr.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as {event: string; configKey?: string});
+    assert.deepEqual(events.filter((e) => e.event === "runner_config_invalid").map((e) => e.configKey).sort(), ["concurrency", "helpers.later"]);
+    assert.equal(events.at(-1)?.event, "runner_start_failed");
+    assert.ok(!stderr.includes("secret value") && !stderr.includes(dir), "no value or path leaves the config");
+  } finally {
+    runner.kill("SIGKILL");
+    await rm(dir, {recursive: true, force: true});
+  }
+});

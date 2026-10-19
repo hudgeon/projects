@@ -1,8 +1,10 @@
-// Connects this machine to a Projects site: writes its config and tokens, installs
-// the collector and runner bundles, and starts both as background services.
-// Run it again after each release; an existing config and tokens are kept
-// unless new values are given, and so are the services' launchd labels. A
-// machine whose machine.json names a Doppler config keeps its tokens there, as
+// Connects this machine to a Projects site: builds the collector and runner
+// bundles from this checkout, writes the machine's config and tokens, installs
+// the bundles with the checkout's commit recorded beside them, and starts both
+// as background services. Run it again after each release (after `npm ci`
+// when dependencies changed); an existing config and tokens are kept unless
+// new values are given, and so are the services' launchd labels. A machine
+// whose machine.json names a Doppler config keeps its tokens there, as
 // COLLECTOR_TOKEN and RUNNER_TOKEN, and gets no token files.
 //
 // node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
@@ -33,9 +35,34 @@ const fail = (message) => {
   console.error(message);
   process.exit(1);
 };
-for (const bundle of ["collector", "service", "runner", "work-item"])
+const bundles = ["collector", "service", "runner", "work-item"];
+// The bundles are built here, from the checkout as it is, so a release can
+// never install ones left by an earlier build. The checkout's commit is kept
+// beside them (release.json) and the runner logs it when it starts.
+const git = (...command) => {
+  try {
+    return execFileSync("git", ["-C", repo, ...command], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+};
+const commit = git("rev-parse", "HEAD"), porcelain = git("status", "--porcelain", "--untracked-files=no");
+const release = {
+  commit: /^[0-9a-f]{40}$/.test(commit ?? "") ? commit : null,
+  dirty: porcelain !== null && porcelain !== "",
+  installedAt: new Date().toISOString(),
+};
+const describe = (r) =>
+  r?.commit ? `${r.commit.slice(0, 12)}${r.dirty ? " with uncommitted changes" : ""}` : "an unrecorded commit";
+try {
+  execFileSync("npm", ["run", "collector:build"], { cwd: repo, stdio: "inherit" });
+} catch (error) {
+  if (error.code === "ENOENT") fail("npm was not found on PATH; nothing was installed.");
+  fail(`Building the bundles failed; nothing was installed. Run \`npm ci\` in ${repo} and try again.`);
+}
+for (const bundle of bundles)
   if (!existsSync(path.join(repo, `.local/${bundle}.mjs`)))
-    fail("Run `npm ci && npm run collector:build` first.");
+    fail(`The build left no .local/${bundle}.mjs; nothing was installed.`);
 
 // The config: what was there before, with any new values given.
 mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -137,18 +164,27 @@ for (const [role, target] of tokens) {
 }
 
 // Bundles, then the background services.
-for (const bundle of ["collector", "service", "runner", "work-item"])
+const releaseFile = path.join(base, "release.json");
+let previous = null;
+try {
+  previous = JSON.parse(readFileSync(releaseFile, "utf8"));
+} catch {
+  /* The first install, or one from before releases were recorded. */
+}
+for (const bundle of bundles)
   copyFileSync(
     path.join(repo, `.local/${bundle}.mjs`),
     path.join(base, `${bundle}.mjs`),
   );
+owned(releaseFile, JSON.stringify(release, null, 2) + "\n");
+const installed = `Installed ${describe(release)} (was ${describe(previous)}) in ${base}.`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",
   });
 if (process.platform !== "darwin" || args.includes("--no-services")) {
   console.log(
-    `Installed in ${base}. Run service.mjs every two minutes and keep runner.mjs ${file} running with your service manager.`,
+    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file} running with your service manager.`,
   );
   process.exit(0);
 }
@@ -198,14 +234,22 @@ const services = [
   },
 ];
 const domain = `gui/${process.getuid()}`;
-const loaded = (label) => {
+// What launchd knows of a job: whether it is loaded and, when a process is
+// running, its pid. A loaded job with no pid has exited (or never started)
+// and launchd is between retries.
+const status = (label) => {
   try {
-    execFileSync("launchctl", ["print", `${domain}/${label}`], { stdio: "ignore" });
-    return true;
+    const print = execFileSync("launchctl", ["print", `${domain}/${label}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return {
+      loaded: true,
+      pid: Number(/^\s*pid = (\d+)$/m.exec(print)?.[1]) || null,
+      exit: /^\s*last exit code = (.+)$/m.exec(print)?.[1] ?? null,
+    };
   } catch {
-    return false;
+    return { loaded: false, pid: null, exit: null };
   }
 };
+const loaded = (label) => status(label).loaded;
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 // launchd refuses a bootstrap ("5: Input/output error") while a job it was
 // told to boot out is still exiting, so wait for it to go, then retry briefly.
@@ -226,13 +270,42 @@ const restart = (label, target) => {
 };
 const agents = path.join(home, "Library/LaunchAgents");
 mkdirSync(agents, { recursive: true });
+// The runner's state once launchd has acted: a process started after the
+// bundles were copied runs this release; one from before is still draining.
+const settled = (label, before) => {
+  let now = status(label);
+  for (let waited = 0; (now.pid === null || now.pid === before.pid) && waited < 15_000; waited += 500) {
+    pause(500);
+    now = status(label);
+  }
+  if (now.pid !== null && now.pid !== before.pid) {
+    // A start that fails exits within moments, so a pid that lasts is running.
+    pause(2000);
+    const again = status(label);
+    if (again.pid === now.pid) return `running (pid ${now.pid}) on ${describe(release)}`;
+    now = again;
+  }
+  if (now.pid !== null && now.pid === before.pid)
+    return `still the earlier process (pid ${now.pid}) on ${describe(previous)}, which has not exited yet; launchd starts ${describe(release)} when it does`;
+  // A clean exit is the drain; launchd holds a restart to one per 30 seconds.
+  if (now.exit === "0") return `not running yet; launchd starts ${describe(release)} within its 30-second throttle`;
+  return `not running (last exit code ${now.exit ?? "unknown"}); launchd retries every 30 seconds. Look for runner_config_invalid and runner_start_failed in ${path.join(base, "runner-error.log")}`;
+};
+let runnerState = "";
 for (const service of services) {
   const target = path.join(agents, `${service.label}.plist`);
   const changed = !existsSync(target) || readFileSync(target, "utf8") !== service.content;
   if (changed) writeFileSync(target, service.content);
-  if (!loaded(service.label)) start(target);
+  const before = status(service.label);
+  if (!before.loaded) start(target);
   else if (!service.runner && changed) restart(service.label, target);
-  else if (service.runner) {
+  else if (service.runner && before.pid === null) {
+    // Nothing is running, so there is nothing to drain: a changed definition
+    // can be reloaded at once, and otherwise a kickstart runs the new bundle
+    // now rather than at launchd's next retry.
+    if (changed) restart(service.label, target);
+    else execFileSync("launchctl", ["kickstart", `${domain}/${service.label}`], { stdio: "inherit" });
+  } else if (service.runner) {
     // The runner exits at once and launchd starts the new bundle, which
     // adopts the conversations' executors: each finishes its current step on
     // the old version, then continues on the new one.
@@ -242,7 +315,9 @@ for (const service of services) {
         `The runner's service definition changed. Once it is idle, run: launchctl bootout ${domain}/${service.label}; sleep 5; launchctl bootstrap ${domain} ${target}`,
       );
   }
+  if (service.runner) runnerState = settled(service.label, before);
 }
+console.log(`${installed}\nRunner: ${runnerState}.`);
 console.log(
   `${config.host} is connected: its collector reports every two minutes and its runner picks up conversations. It needs you logged in after a restart.`,
 );

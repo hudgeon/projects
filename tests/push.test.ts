@@ -63,7 +63,7 @@ test("pushes are VAPID-signed for the service's origin and carry no content", as
   assert.match(requests[0].headers.get("Authorization")!, /^vapid t=/);
 });
 
-test("a notice fires once when an existing conversation becomes the user's move", () => {
+test("a notice fires once, to the conversation's owner, when an existing conversation becomes their move", () => {
   const run = (over: Partial<RunSummary>): RunSummary => ({
     id: "6f1d1b9a-6a39-4c43-9a6b-2b7c3e5e2f10",
     projectId: null,
@@ -78,7 +78,8 @@ test("a notice fires once when an existing conversation becomes the user's move"
     status: "Drafted the reply to Rob.",
     ...over,
   });
-  assert.deepEqual(notice(run({}), run({ state: "completed" })), { title: "Ready: Reply to Rob about training", body: "Drafted the reply to Rob." });
+  assert.deepEqual(notice(run({}), run({ state: "completed" })), { to: "owner@example.com", title: "Ready: Reply to Rob about training", body: "Drafted the reply to Rob." });
+  assert.equal(notice(run({ owner: "matt.smith@example.com" }), run({ owner: "matt.smith@example.com", state: "completed" }))?.to, "matt.smith@example.com", "addressed to whoever started it");
   assert.equal(notice(run({}), run({ state: "blocked" }))?.title, "Needs you: Reply to Rob about training");
   assert.equal(notice(run({}), run({ needsYou: true }))?.title, "Needs you: Reply to Rob about training");
   assert.equal(notice(run({ needsYou: true }), run({ state: "completed" }))?.title, "Ready: Reply to Rob about training");

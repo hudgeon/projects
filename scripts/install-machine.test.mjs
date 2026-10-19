@@ -2,32 +2,91 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 // Each test installs a release into a home of its own, with stand-ins for the
-// commands the installer runs placed first on PATH.
+// commands the installer runs placed first on PATH: a git that answers for the
+// checkout, an npm whose build writes the bundles (stale ones are there
+// first), and a launchd that remembers the jobs it was told to bootstrap and
+// a pid for each, which a kill or kickstart replaces as a restart would.
 async function machine(t) {
   const root = await mkdtemp(path.join(tmpdir(), "projects-install-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const release = path.join(root, "release"), home = path.join(root, "home"), bin = path.join(root, "bin");
   const base = path.join(home, ".local/share/project-overview");
+  const log = path.join(root, "launchctl.log"), state = path.join(root, "launchd");
   await mkdir(path.join(release, "scripts"), { recursive: true });
   await mkdir(path.join(release, ".local"));
   await mkdir(base, { recursive: true });
   await mkdir(bin);
+  await mkdir(state);
   await copyFile(path.join(import.meta.dirname, "install-machine.mjs"), path.join(release, "scripts/install-machine.mjs"));
   for (const bundle of ["collector", "service", "runner", "work-item"])
-    await writeFile(path.join(release, ".local", `${bundle}.mjs`), "// bundle\n");
+    await writeFile(path.join(release, ".local", `${bundle}.mjs`), "// stale bundle\n");
+  await writeFile(path.join(bin, "git"), `#!/bin/sh
+case "$*" in
+  *"rev-parse HEAD") printf '%s\\n' "${COMMIT}" ;;
+  *"status --porcelain"*) printf '%s' "\${DIRTY:-}" ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+  await writeFile(path.join(bin, "npm"), `#!/bin/sh
+printf '%s\\n' "$PWD $*" >> "${root}/npm.log"
+[ "\${BUILD_FAILS:-}" = 1 ] && exit 1
+mkdir -p .local
+for bundle in collector service runner work-item; do printf '// built %s\\n' "\${BUILD_STAMP:-fresh}" > ".local/$bundle.mjs"; done
+`, { mode: 0o755 });
+  await writeFile(path.join(bin, "launchctl"), `#!/bin/sh
+printf '%s\\n' "$*" >> "${log}"
+case "$1" in
+  print) job="${state}/\${2##*/}"; [ -f "$job" ] || exit 113
+    if [ -s "$job" ]; then printf '\\tstate = running\\n\\tpid = %s\\n\\tlast exit code = 0\\n' "$(cat "$job")"
+      if [ -f "$job.dies" ]; then : > "$job"; fi
+    else printf '\\tstate = not running\\n\\tlast exit code = 1\\n'; fi ;;
+  bootstrap) label="\${3##*/}"; label="\${label%.plist}"
+    case "$label" in *runner*) echo $$ > "${state}/$label" ;; *) : > "${state}/$label" ;; esac ;;
+  bootout) rm -f "${state}/\${2##*/}" ;;
+  kickstart) echo $$ > "${state}/\${2##*/}" ;;
+  kill) job="${state}/\${3##*/}"
+    [ -s "$job" ] || { echo "Could not signal service: 3: No process to signal" >&2; exit 3; }
+    echo $(( $(cat "$job") + 1 )) > "$job" ;;
+esac
+`, { mode: 0o755 });
   const install = (args, env = {}, node = []) =>
     promisify(execFile)(process.execPath, [...node, path.join(release, "scripts/install-machine.mjs"), ...args], { env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env } });
   const config = async () => JSON.parse(await readFile(path.join(base, "machine.json"), "utf8"));
+  const calls = async () => (await readFile(log, "utf8")).trim().split("\n");
   const connect = ["--machine", "laptop", "--endpoint", "https://projects.example.com", "--root", path.join(root, "code")];
-  return { root, home, bin, base, install, config, connect };
+  return { root, home, bin, base, release, state, install, config, calls, connect };
 }
 const tokens = { PROJECTS_COLLECTOR_TOKEN: "c".repeat(64), PROJECTS_RUNNER_TOKEN: "r".repeat(64) };
+// The services are installed only on a Mac.
+const mac = ["--import", 'data:text/javascript,Object.defineProperty(process,"platform",{value:"darwin"})'];
+const domain = `gui/${process.getuid()}`;
+
+test("the installer builds the bundles from the checkout, records its commit, and installs nothing when the build fails", { timeout: 30000 }, async (t) => {
+  const { root, base, release, install, connect } = await machine(t);
+  const { stdout } = await install([...connect, "--no-services"], tokens);
+  assert.deepEqual((await readFile(path.join(root, "npm.log"), "utf8")).trim().split("\n"), [`${await realpath(release)} run collector:build`], "built in the checkout the installer came from");
+  for (const bundle of ["collector", "service", "runner", "work-item"])
+    assert.equal(await readFile(path.join(base, `${bundle}.mjs`), "utf8"), "// built fresh\n", `${bundle} comes from this build, not the stale one`);
+  const recorded = JSON.parse(await readFile(path.join(base, "release.json"), "utf8"));
+  assert.equal(recorded.commit, COMMIT);
+  assert.equal(recorded.dirty, false);
+  assert.match(stdout, /^Installed 0123456789ab \(was an unrecorded commit\) in /m);
+  // A failed build changes nothing: the installed bundles and record stay.
+  await assert.rejects(install([...connect, "--no-services"], { ...tokens, BUILD_FAILS: "1" }), (e) => e.stderr.includes("Building the bundles failed; nothing was installed."));
+  assert.equal(await readFile(path.join(base, "runner.mjs"), "utf8"), "// built fresh\n");
+  assert.equal(JSON.parse(await readFile(path.join(base, "release.json"), "utf8")).commit, COMMIT);
+  // A later build from a changed checkout replaces them and says what was there.
+  const again = await install([...connect, "--no-services"], { ...tokens, BUILD_STAMP: "later", DIRTY: " M runner/main.ts" });
+  assert.equal(await readFile(path.join(base, "runner.mjs"), "utf8"), "// built later\n");
+  assert.match(again.stdout, /^Installed 0123456789ab with uncommitted changes \(was 0123456789ab\) in /m);
+});
 
 test("the installer keeps a Doppler machine's tokens in Doppler and writes token files only without one", { timeout: 30000 }, async (t) => {
   const { base, bin, install, config, connect } = await machine(t);
@@ -54,36 +113,41 @@ test("the installer keeps a Doppler machine's tokens in Doppler and writes token
   assert.equal((await config()).collectorTokenFile, path.join(base, "collector-token"));
 });
 
-test("a later run without labels restarts the services under the launchd labels first given", { timeout: 30000 }, async (t) => {
-  const { root, home, bin, install, config, connect } = await machine(t);
-  // A launchd stand-in that logs each call and knows the jobs it bootstrapped.
-  const log = path.join(root, "launchctl.log");
-  await writeFile(
-    path.join(bin, "launchctl"),
-    `#!/bin/sh
-printf '%s\\n' "$*" >> "${log}"
-case "$1" in
-  print) grep -qxF "$2" "${log}.loaded" ;;
-  bootstrap) printf '%s/%s\\n' "$2" "$(basename "$3" .plist)" >> "${log}.loaded" ;;
-esac
-`,
-    { mode: 0o755 },
-  );
-  // The services are installed only on a Mac.
-  const mac = ["--import", 'data:text/javascript,Object.defineProperty(process,"platform",{value:"darwin"})'];
+test("a later run without labels drains the running runner under the launchd labels first given and reports the new process", { timeout: 30000 }, async (t) => {
+  const { home, install, config, calls, connect, state } = await machine(t);
   await install([...connect, "--collector-label", "com.example.collector", "--runner-label", "com.example.runner"], tokens, mac);
   const { collectorLabel, runnerLabel } = await config();
   assert.deepEqual([collectorLabel, runnerLabel], ["com.example.collector", "com.example.runner"]);
-  await rm(log);
-  await install([], {}, mac);
-  // The collector's definition is unchanged, so it keeps running; the runner restarts.
-  const domain = `gui/${process.getuid()}`;
-  assert.deepEqual((await readFile(log, "utf8")).trim().split("\n"), [
-    `print ${domain}/com.example.collector`,
-    `print ${domain}/com.example.runner`,
-    `kill SIGUSR2 ${domain}/com.example.runner`,
-  ]);
+  const first = Number(await readFile(path.join(state, "com.example.runner"), "utf8"));
+  const before = (await calls()).length;
+  const { stdout } = await install([], {}, mac);
+  // The collector's definition is unchanged, so it keeps running; the runner
+  // is asked to drain, and no job is booted out or started again.
+  const later = (await calls()).slice(before);
+  assert.deepEqual(later.filter((call) => !call.startsWith("print ")), [`kill SIGUSR2 ${domain}/com.example.runner`]);
+  assert.ok(later.includes(`print ${domain}/com.example.collector`));
+  assert.match(stdout, new RegExp(`^Runner: running \\(pid ${first + 1}\\) on 0123456789ab\\.$`, "m"));
   assert.deepEqual((await readdir(path.join(home, "Library/LaunchAgents"))).sort(), ["com.example.collector.plist", "com.example.runner.plist"]);
   await assert.rejects(install(["--runner-label", "../runner"], {}, mac), (e) => e.stderr.includes("as launchd labels"));
   assert.equal((await config()).runnerLabel, "com.example.runner");
+});
+
+test("a runner job with no process is kickstarted rather than signalled, and one that keeps exiting is reported with where to look", { timeout: 30000 }, async (t) => {
+  const { base, install, calls, connect, state } = await machine(t);
+  await install(connect, tokens, mac);
+  // The runner crashed at start (a config this bundle rejects, say) and
+  // launchd is waiting to retry: its job is loaded, but nothing is running.
+  const job = path.join(state, "local.projects.runner");
+  await writeFile(job, "");
+  let before = (await calls()).length;
+  const { stdout } = await install([], {}, mac);
+  assert.deepEqual((await calls()).slice(before).filter((call) => !call.startsWith("print ")), [`kickstart ${domain}/local.projects.runner`]);
+  assert.match(stdout, /^Runner: running \(pid \d+\) on 0123456789ab\.$/m);
+  // When the started process exits again, the report says so and names the log.
+  await writeFile(job, "");
+  await writeFile(`${job}.dies`, "");
+  before = (await calls()).length;
+  const failing = await install([], {}, mac);
+  assert.deepEqual((await calls()).slice(before).filter((call) => !call.startsWith("print ")), [`kickstart ${domain}/local.projects.runner`]);
+  assert.match(failing.stdout, new RegExp(`^Runner: not running \\(last exit code 1\\); launchd retries every 30 seconds\\. Look for runner_config_invalid and runner_start_failed in ${path.join(base, "runner-error.log")}\\.$`, "m"));
 });

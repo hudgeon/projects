@@ -96,18 +96,26 @@ the machine observes, and a runner token, which runs conversations. Then, in a
 checkout of this repository on that machine:
 
 ```bash
-npm ci && npm run collector:build
+npm ci
 ```
 
 ```bash
 node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code --agents claude
 ```
 
-It asks for the two tokens without echoing them, writes the machine's config
-to `~/.local/share/project-overview/machine.json` and its tokens beside it,
-readable only by you, installs the bundles, and starts the collector and
-runner as background services. Run it again after each release; the config
-and tokens are kept. Options:
+It builds the collector and runner bundles from the checkout, asks for the two
+tokens without echoing them, writes the machine's config to
+`~/.local/share/project-overview/machine.json` and its tokens beside it,
+readable only by you, installs the bundles with the checkout's commit recorded
+in `release.json` next to them, and starts the collector and runner as
+background services. Run it again after each release, from a checkout of the
+released commit (`npm ci` first when dependencies changed); the config and
+tokens are kept, a running runner drains and restarts on the new bundle, and
+one that is not running is started. It ends by printing what is installed and
+the runner's state. If the runner is not running, read
+`~/.local/share/project-overview/runner-error.log`: a `runner_config_invalid`
+line names each `machine.json` key the runner rejected (never its value), and
+every start logs the `release` it runs. Options:
 
 - `--agents`: the apps signed in on this machine, such as `claude` or
   `claude,codex`. Conversations never start an app that is not listed.

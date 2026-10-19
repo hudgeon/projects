@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { MESSAGE_REQUEST_BYTES } from "../src/screenshot-model";
 import type { MessageInput } from "../src/run-model";
 import { Runs } from "./run-directory";
-import { pushEndpoint, sendPush, vapidPublicKey } from "./push";
+import { pushEndpoint, PushDevices, vapidPublicKey } from "./push";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
@@ -26,6 +26,7 @@ import {
   allowed,
   allowedEmails,
   browserMay,
+  deploymentOwner,
   signsIn,
 } from "./auth";
 import { freshness, snapshotSchema, STALE_AFTER, type Snapshot } from "../src/model";
@@ -59,25 +60,21 @@ export class Portfolio extends DurableObject<Env> {
   private signIns: BrowserSignIns;
   private sessions: Sessions;
   private profiles: People;
+  private pushes: PushDevices;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
     this.documents = new Documents(ctx.storage);
     this.sessions = new Sessions(ctx.storage);
     this.profiles = new People(ctx.storage);
+    this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
-      if (text) this.notify({ run: next.id, ...text });
+      if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });
     });
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS push_devices (endpoint TEXT PRIMARY KEY, created INTEGER NOT NULL, used INTEGER NOT NULL)",
-    );
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS push_events (id TEXT PRIMARY KEY, run TEXT, title TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL)",
-    );
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS snapshots (host TEXT PRIMARY KEY, observed INTEGER NOT NULL, payload TEXT NOT NULL)",
     );
@@ -382,57 +379,16 @@ export class Portfolio extends DurableObject<Env> {
     const thread = currentInbox(this.overview())?.threads.find((t) => t.id === threadId);
     return thread ? { body: thread.body ?? null, unsubscribe: thread.unsubscribe ?? null } : null;
   }
-  // A device's push URL is a capability: it stays here, never logged or returned.
-  // Opening Projects refreshes a device; only a new one gets the test notice.
-  subscribePush(endpoint: string) {
-    const now = Date.now();
-    const known = this.ctx.storage.sql.exec("SELECT 1 FROM push_devices WHERE endpoint=?", endpoint).toArray().length > 0;
-    this.ctx.storage.sql.exec(
-      "INSERT INTO push_devices(endpoint,created,used) VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET used=excluded.used",
-      endpoint, now, now,
-    );
-    this.ctx.storage.sql.exec("DELETE FROM push_devices WHERE endpoint NOT IN (SELECT endpoint FROM push_devices ORDER BY used DESC LIMIT 10)");
-    if (!known)
-      this.notify({ run: null, title: "Notifications are on", body: "Projects will tell you here when a conversation is ready or needs you." }, [endpoint]);
+  // Notifications are each person's (worker/push.ts): their devices, their
+  // conversations' notices.
+  subscribePush(endpoint: string, email: string) {
+    this.pushes.subscribe(endpoint, email);
   }
-  unsubscribePush(endpoint: string) {
-    this.ctx.storage.sql.exec("DELETE FROM push_devices WHERE endpoint=?", endpoint);
+  unsubscribePush(endpoint: string, email: string) {
+    this.pushes.unsubscribe(endpoint, email);
   }
-  // What a woken device shows: the last day's notices, newest first.
-  pushEvents() {
-    return this.ctx.storage.sql
-      .exec<{ id: string; run: string | null; title: string; body: string; at: number }>(
-        "SELECT id,run,title,body,at FROM push_events WHERE at>? ORDER BY at DESC LIMIT 5",
-        Date.now() - 86400_000,
-      )
-      .toArray()
-      .map((e) => ({ id: e.id, title: e.title, body: e.body, at: e.at, url: e.run ? `/?run=${e.run}` : "/" }));
-  }
-  // Pushes carry nothing; each device fetches pushEvents with its own sign-in.
-  private notify(event: { run: string | null; title: string; body: string }, endpoints?: string[]) {
-    const at = Date.now();
-    this.ctx.storage.sql.exec(
-      "INSERT INTO push_events(id,run,title,body,at) VALUES(?,?,?,?,?)",
-      crypto.randomUUID(), event.run, event.title, event.body, at,
-    );
-    this.ctx.storage.sql.exec("DELETE FROM push_events WHERE at<? OR id NOT IN (SELECT id FROM push_events ORDER BY at DESC LIMIT 50)", at - 86400_000);
-    const secret = this.env.VAPID_PRIVATE_KEY;
-    const targets = endpoints ?? this.ctx.storage.sql.exec<{ endpoint: string }>("SELECT endpoint FROM push_devices").toArray().map((d) => d.endpoint);
-    if (!secret || !targets.length) return;
-    this.ctx.waitUntil(
-      Promise.all(
-        targets.map(async (endpoint) => {
-          const result = await sendPush(endpoint, secret, this.env.SITE_URL);
-          if (result === "gone") this.ctx.storage.sql.exec("DELETE FROM push_devices WHERE endpoint=?", endpoint);
-          telemetry(
-            "worker",
-            "notification_sent",
-            result === "failed" ? { outcome: "failed", reason: "http_error" } : { outcome: result === "sent" ? "accepted" : "rejected" },
-            result === "failed" ? "warn" : "info",
-          );
-        }),
-      ),
-    );
+  pushEvents(email: string) {
+    return this.pushes.events(email);
   }
   // Only the request the machine on duty was given, and only while it is
   // still queued.
@@ -884,7 +840,7 @@ export async function handle(
       : Response.json({ error: "Notifications are not set up yet." }, { status: 503 });
   if (url.pathname === "/api/push/events" && request.method === "GET")
     return Response.json(
-      { events: await trace("push.events", {}, () => store.pushEvents()) },
+      { events: await trace("push.events", {}, () => store.pushEvents(caller as string)) },
       { headers: { "Cache-Control": "no-store" } },
     );
   if ((url.pathname === "/api/push/subscribe" || url.pathname === "/api/push/unsubscribe") && request.method === "POST") {
@@ -896,10 +852,10 @@ export async function handle(
     }
     if (!(await store.rate(`push:${caller}`, 10, 3600_000)))
       return Response.json({ error: "Try again shortly." }, { status: 429 });
-    if (url.pathname.endsWith("/unsubscribe")) await store.unsubscribePush(input.endpoint);
+    if (url.pathname.endsWith("/unsubscribe")) await store.unsubscribePush(input.endpoint, caller as string);
     else if (!env.VAPID_PRIVATE_KEY)
       return Response.json({ error: "Notifications are not set up yet." }, { status: 503 });
-    else await trace("push.subscribe", {}, () => store.subscribePush(input.endpoint));
+    else await trace("push.subscribe", {}, () => store.subscribePush(input.endpoint, caller as string));
     return Response.json({ ok: true });
   }
   if (url.pathname === "/api/inbox/act" && request.method === "POST") {
