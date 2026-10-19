@@ -45,7 +45,7 @@ test("a long command shows as a wait with its category, and one whose processes 
   const {w, at, procs, shown, stuck, start} = harness();
   try {
     procs(0);
-    w.activity({kind: "command", state: "started"}, "tests");
+    w.activity({kind: "command", state: "started"}, "npm test");
     for (let m = 0; m <= 30; m++) { at(m); procs(m); await w.sample(); }
     assert.deepEqual(shown[0], {since: start, on: "command", label: "tests"});
     assert.ok(shown.every((watch) => !watch?.stuck), "busy tests are not stuck");
@@ -59,7 +59,7 @@ test("a wait whose processes use no CPU for ten minutes may be stuck, once per w
   const {w, at, procs, shown, stuck, start} = harness();
   try {
     procs(0);
-    w.activity({kind: "command", state: "started"}, "review");
+    w.activity({kind: "command", state: "started"}, "codex exec --sandbox read-only review");
     for (let m = 0; m <= 9; m++) { at(m); await w.sample(); }
     assert.ok(!shown.at(-1)?.stuck);
     at(10); await w.sample();
@@ -75,7 +75,7 @@ test("a wait loop on a background command that sat idle for ten minutes may be s
     // The review was started in the background; the agent kept working.
     procs(0);
     for (let m = 0; m <= 11; m++) { at(m); w.touch(); await w.sample(); }
-    w.activity({kind: "command", state: "started"}, "loop");
+    w.activity({kind: "command", state: "started"}, "until ! pgrep -f review; do sleep 5; done");
     at(13); await w.sample();
     assert.ok(!shown.at(-1)?.stuck, "two quiet minutes are not enough");
     at(14); await w.sample();
@@ -101,4 +101,29 @@ test("an agent with no tool call open shows as silent, may be stuck after ten mi
     clock = 20 * MIN; await v.sample();
     assert.equal(blind.at(-1)?.stuck, undefined);
   } finally { v.clear(); }
+});
+
+test("Jev is asked once what a long command the local rules cannot place waits on, and its label is shown", async () => {
+  let clock = 0;
+  const shown: (LiveWatch | undefined)[] = [], asked: string[] = [];
+  const w = watchTurn({
+    pid: () => 100, now: () => clock, rows: async () => [],
+    publish: (watch) => shown.push(watch), stuck: () => {},
+    label: async (command) => { asked.push(command); return "deploy"; },
+  });
+  try {
+    w.activity({kind: "command", state: "started"}, "./scripts/release.sh --all");
+    clock = MIN; await w.sample();
+    assert.deepEqual(asked, [], "a short wait is not labelled");
+    clock = 3 * MIN; await w.sample();
+    await new Promise((r) => setTimeout(r, 0));
+    clock = 4 * MIN; await w.sample();
+    assert.deepEqual(asked, ["./scripts/release.sh --all"]);
+    assert.deepEqual(shown.at(-1), {since: 0, on: "command", label: "deploy"});
+    w.activity({kind: "command", state: "finished"});
+    w.activity({kind: "command", state: "started"}, "npm test");
+    clock = 8 * MIN; await w.sample();
+    assert.equal(asked.length, 1, "a command the rules place is not sent");
+    assert.equal(shown.at(-1)?.label, "tests");
+  } finally { w.clear(); }
 });

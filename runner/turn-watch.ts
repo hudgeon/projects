@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import type { LiveWatch, NativeActivity, WaitLabel } from "../src/run-model";
+import { waitLabel } from "./native-events";
 
 // When a turn's wait is shown, and when it may be stuck. These are signs, not
 // verdicts: the owner sees them and the helper is told once; nothing is stopped.
@@ -67,18 +68,20 @@ export function commandProcesses(rows: ProcessRow[], root: number) {
 const TOOLS = new Set<NativeActivity["kind"]>(["command", "read", "search", "edit", "tool"]);
 // Follows one native turn: its open tool calls, its last word and the CPU its
 // commands use. publish gets each change of what to show; stuck is called
-// once for each wait that may be stuck.
+// once for each wait that may be stuck; label, when given, is asked once what
+// a long command the local rules cannot place waits on.
 export function watchTurn(o: {
   pid: () => number | null;
   publish: (watch: LiveWatch | undefined) => void;
   stuck: (reason: NonNullable<LiveWatch["stuck"]>) => void;
+  label?: (command: string) => Promise<WaitLabel | undefined>;
   rows?: () => Promise<ProcessRow[]>;
   limits?: Partial<typeof WATCH_LIMITS>;
   now?: () => number;
 }) {
   const limits = { ...WATCH_LIMITS, ...o.limits },
     now = o.now ?? Date.now;
-  const open: { kind: NativeActivity["kind"]; at: number; label?: WaitLabel }[] = [];
+  const open: { kind: NativeActivity["kind"]; at: number; label?: WaitLabel; command?: string; asked?: boolean }[] = [];
   // Each command process: CPU seconds, when first seen, when it last used CPU.
   const procs = new Map<number, { cpu: number; seen: number; busy: number }>();
   let said = now(),
@@ -105,6 +108,15 @@ export function watchTurn(o: {
           : idle && t - quiet >= limits.quietMs
             ? idle.busy
             : null;
+      if (o.label && first.command && !first.label && !first.asked && t - first.at >= limits.showMs) {
+        first.asked = true;
+        void o.label(first.command).then((label) => {
+          if (label && open.includes(first)) {
+            first.label = label;
+            check();
+          }
+        }, () => {});
+      }
       if (stuckSince !== null || t - first.at >= limits.showMs)
         watch = {
           since: first.at,
@@ -156,11 +168,11 @@ export function watchTurn(o: {
   const timer = setInterval(() => void sample(), limits.sampleMs);
   return {
     // A native event: the agent said something, or a tool call started or ended.
-    activity(event: NativeActivity, label?: WaitLabel) {
+    activity(event: NativeActivity, command?: string) {
       said = now();
       if (TOOLS.has(event.kind)) {
         if (event.state === "started")
-          open.push({ kind: event.kind, at: said, label });
+          open.push({ kind: event.kind, at: said, label: waitLabel(command), command });
         else {
           const i = open.findLastIndex((t) => t.kind === event.kind);
           if (i >= 0) open.splice(i, 1);

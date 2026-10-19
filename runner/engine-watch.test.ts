@@ -17,7 +17,7 @@ test("a helper's quiet wait is shown, reported as possibly stuck, and the helper
     // A process with no commands of its own: nothing it runs uses CPU.
     await opts.onProcess?.(process.pid);
     opts.onSteer?.(async (input) => { steered.push(input.text); });
-    opts.onActivity?.({kind: "command", state: "started"}, "review");
+    opts.onActivity?.({kind: "command", state: "started"}, "codex exec --sandbox read-only review < /dev/null");
     await waitFor(() => reports.some((p) => p.live?.watch?.stuck === "idle"), 10_000);
     return result;
   };

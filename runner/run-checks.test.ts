@@ -79,3 +79,26 @@ test("at a progress note, Jev rates that helper's recent notes on four signs; no
     assert.equal(failed.judged, undefined);
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
+
+test("Jev labels a long command from its redacted text, only when one category is likely enough, and never sees a credential-like one", async () => {
+  const dir = await fixture(), bodies: any[] = [];
+  let ratings: number[] = [];
+  const selector: Selector = {mode: "select", key: async () => "fixture-key", fetch: async (_url, init) => {
+    const body = JSON.parse(init!.body as string); bodies.push(body);
+    return Response.json({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(body.questions).map((k, i) => [k, {type: "noul", noul: ratings[i] ?? 0.1}])), usage: {input_tokens: 80, output_tokens: 0}});
+  }};
+  try {
+    const checks = runChecks({selector, stateDir: dir, runId: randomUUID(), signal: new AbortController().signal});
+    const child = randomUUID();
+    ratings = [0.1, 0.2, 0.1, 0.1, 0.9, 0.1, 0.1, 0.3, 0.7];
+    assert.equal(await checks.label(child, "DEPLOY_TOKEN=dp.st.prd.abcdefghijklmnopqrstuvwxyz ./scripts/release.sh"), "deploy");
+    assert.deepEqual(bodies[0].state, {command: "DEPLOY_TOKEN=[redacted] ./scripts/release.sh"});
+    assert.equal(Object.keys(bodies[0].questions).length, 9);
+    const [receipt] = await receipts(dir);
+    assert.deepEqual([receipt.kind, receipt.child, receipt.judged.deploy, receipt.judged.waitsForInput], ["wait", child, 0.9, 0.7]);
+    ratings = [0.4, 0.45];
+    assert.equal(await checks.label(child, "./scripts/custom.sh"), undefined, "no category likely enough");
+    assert.equal(await checks.label(child, `echo 'password: "my long pass phrase"'`), undefined);
+    assert.equal(bodies.length, 2, "a command still credential-like is never sent");
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});

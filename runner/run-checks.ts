@@ -1,18 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Child, ProgressNote } from "../src/run-model";
+import { waitLabels, type Child, type ProgressNote, type WaitLabel } from "../src/run-model";
 import { clip } from "../src/run-text";
 import { telemetry } from "../src/telemetry";
+import { commandForJev } from "./command-text";
 import { judgeContext, type Selector } from "./context";
 
-// Shadow judgments of a conversation's own course, by the machine's Jev
-// selector: before each dispatch, whether a finished helper's report already
-// answers the new brief; at each helper progress note, whether that helper is
-// progressing, repeating, waiting or blocked. Jev sees briefs, helper reports
-// and progress notes only. Each judgment is kept as a private receipt in the
-// runner state's run-checks/ and counted in logs; nothing acts on it until a
-// labelled replay validates a threshold.
+// Judgments of a conversation's own course, by the machine's Jev selector:
+// before each dispatch, whether a finished helper's report already answers the
+// new brief; at each helper progress note, whether that helper is progressing,
+// repeating, waiting or blocked; for a long command the local rules cannot
+// place, what it waits on and whether it waits for input it will not get. Jev
+// sees briefs, helper reports, progress notes and command text with
+// credentials redacted (owner's approvals, 19 October 2026). Each judgment is
+// a private receipt in the runner state's run-checks/, counted in logs. Only
+// the wait label is shown, as a category; nothing else acts on a judgment
+// until a labelled replay validates a threshold.
 export const CHECK_RECEIPTS = 1000;
 const REPORTS = 8,
   NOTES = 6;
@@ -45,10 +49,38 @@ const progressQuestions = [
   ),
 ];
 export const PROGRESS_SIGNS = ["progressing", "repeating", "waiting", "blocked"];
+const waits: Record<WaitLabel, string> = {
+  review: "a code or security review by another agent or tool",
+  checks: "CI checks on a pull request, or a workflow run",
+  tests: "a test suite",
+  build: "a build, typecheck or bundle",
+  deploy: "a deployment, release or machine install",
+  git: "a Git network operation such as push, pull, fetch or clone",
+  remote: "work on another machine over SSH",
+  loop: "a loop that polls or sleeps until some condition holds",
+};
+const waitQuestions = [
+  ...waitLabels.map((label) =>
+    noul(
+      `Is the command in \`command\` mainly waiting on ${waits[label]}?`,
+      `It mainly waits on ${waits[label]}.`,
+      "It mainly does or waits on something else.",
+    ),
+  ),
+  noul(
+    "Will the command in `command` wait for input it is not given, such as an interactive prompt or reading its standard input?",
+    "It waits for input it will not get.",
+    "It runs without needing more input.",
+  ),
+];
+export const WAIT_SIGNS = [...waitLabels, "waitsForInput"];
+// A label is shown only when Jev rates it at least this likely, best first.
+export const LABEL_AT_LEAST = 0.5;
 // What Jev reads for each kind of check, as its receipt records it.
 export type CheckInputs =
   | { brief: string; reports: { id: string; state: string; summary: string; checks: string[] }[] }
-  | { notes: { at: string; done: string[]; remaining: string[]; yourMove: string | null }[] };
+  | { notes: { at: string; done: string[]; remaining: string[]; yourMove: string | null }[] }
+  | { command: string };
 const repeatQuestion = (i: number) =>
   noul(
     `Does the finished helper report in \`reports[${i}]\` already answer everything the new task in \`brief\` asks for, so that doing the brief would repeat work that report shows was done?`,
@@ -62,12 +94,14 @@ export async function judgeCheck(o: {
   inputs: CheckInputs;
   selector: Selector;
   signal: AbortSignal;
-  trigger: "dispatch-check" | "progress-check" | "check-replay";
+  trigger: "dispatch-check" | "progress-check" | "wait-check" | "check-replay";
 }) {
   const [questions, labels] =
     "reports" in o.inputs
       ? [o.inputs.reports.map((_, i) => repeatQuestion(i)), o.inputs.reports.map((r) => r.id)]
-      : [progressQuestions, PROGRESS_SIGNS];
+      : "command" in o.inputs
+        ? [waitQuestions, WAIT_SIGNS]
+        : [progressQuestions, PROGRESS_SIGNS];
   const result = await judgeContext({
     version: createHash("sha256").update(JSON.stringify(o.inputs)).digest("hex"),
     state: o.inputs,
@@ -100,9 +134,9 @@ export function runChecks(o: {
   const dir = path.join(o.stateDir, "run-checks");
   // The receipt names the helper judged or dispatched, so a labeller can
   // find what it did next in the conversation's journal.
-  const judge = async (kind: "repeat" | "progress", child: string, inputs: CheckInputs) => {
+  const judge = async (kind: "repeat" | "progress" | "wait", child: string, inputs: CheckInputs) => {
     const at = Date.now();
-    const trigger = kind === "repeat" ? "dispatch-check" : "progress-check";
+    const trigger = kind === "repeat" ? "dispatch-check" : kind === "wait" ? "wait-check" : "progress-check";
     const judgment = await judgeCheck({ inputs, selector: o.selector!, signal: o.signal, trigger });
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await writeFile(
@@ -117,12 +151,27 @@ export function runChecks(o: {
       telemetry("runner", "jev_check_judged", { runId: o.runId, contextTrigger: trigger, durationMs: judgment.durationMs });
     else if (judgment.failure)
       telemetry("runner", "jev_selection_failed", { runId: o.runId, contextTrigger: trigger, contextFailure: judgment.failure }, "warn");
+    return judgment;
   };
   // A judgment never delays or changes the conversation.
-  const quietly = (work: () => Promise<void>) => {
+  const quietly = (work: () => Promise<unknown>) => {
     if (on) void work().catch(() => {});
   };
   return {
+    // What a long command the local rules cannot place waits on, when Jev
+    // rates one category likely enough; whether it waits for input is only
+    // recorded. Never sent while something credential-like remains.
+    async label(child: string, command: string): Promise<WaitLabel | undefined> {
+      const text = commandForJev(command);
+      if (!on || text === null) return undefined;
+      const judgment = await judge("wait", child, { command: text }).catch(() => undefined);
+      const judged = judgment && "judged" in judgment ? judgment.judged : undefined;
+      if (!judged) return undefined;
+      const [best, p] = waitLabels
+        .map((label) => [label, judged[label] ?? 0] as const)
+        .sort((a, b) => b[1] - a[1])[0];
+      return p >= LABEL_AT_LEAST ? best : undefined;
+    },
     // Before a helper starts on a brief: does another finished helper's report already answer it?
     dispatch(brief: string, child: Child, children: Child[]) {
       const done = children.filter((c) => c !== child && c.result).slice(-REPORTS);

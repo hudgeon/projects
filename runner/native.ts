@@ -10,7 +10,6 @@ import type {
   LivePlanStep,
   NativeActivity,
   ProgressNoteInput,
-  WaitLabel,
 } from "../src/run-model";
 import {
   claudeFiles,
@@ -19,8 +18,8 @@ import {
   codexActivity,
   codexFiles,
   codexRequests,
+  commandText,
   object,
-  waitLabel,
   planSteps,
   parseProgressNote,
   type FileTouch,
@@ -57,8 +56,8 @@ export type NativeOptions = {
   signal: AbortSignal;
   onSession: (id: string) => Promise<void>;
   onProcess?: (pid: number) => Promise<void>;
-  // With what a command waits on, when the runner can tell.
-  onActivity?: (event: NativeActivity, label?: WaitLabel) => void;
+  // A command's own text comes too, for the runner and Jev only.
+  onActivity?: (event: NativeActivity, command?: string) => void;
   onProgress?: (note: ProgressNoteInput) => void;
   // The working agent's own plan, as it changes.
   onPlan?: (steps: LivePlanStep[]) => void;
@@ -527,7 +526,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
           object(p.item),
           message.method === "item/completed",
         );
-        if (activity) o.onActivity?.(activity, waitLabel(object(p.item).command));
+        if (activity) o.onActivity?.(activity, commandText(object(p.item).command));
         if (activity && !["response", "compaction"].includes(activity.kind))
           acted = true;
       }
@@ -852,7 +851,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
               ) {
                 const kind = claudeToolKind(block.name);
                 if (!tools.has(block.id)) {
-                  o.onActivity?.({ kind, state: "started" }, block.name === "Bash" ? waitLabel(object(block.input).command) : undefined);
+                  o.onActivity?.({ kind, state: "started" }, block.name === "Bash" ? commandText(object(block.input).command) : undefined);
                   if (o.onFile)
                     claudeFiles(block.name, object(block.input), o.cwd).forEach(o.onFile);
                 }

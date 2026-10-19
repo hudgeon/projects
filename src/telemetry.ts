@@ -272,7 +272,7 @@ export const telemetryFieldsSchema = executionEventSchema
 export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
 // These diagnostics belong to local runner logs, not Worker span attributes.
 const logFieldsSchema = telemetryFieldsSchema.extend({
-  contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check"]).optional(),
+  contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
   contextFailure: contextFailureSchema.optional(),
 });
 const logEventSchema = z.enum([

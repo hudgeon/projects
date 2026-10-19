@@ -208,8 +208,11 @@ const waitRules: [WaitLabel, RegExp][] = [
   ["remote", /\bssh\s/],
   ["loop", /\b(until|while)\b[\s\S]*\bsleep\b|^\s*sleep\s+\d/],
 ];
-export function waitLabel(command: unknown): WaitLabel | undefined {
+// A command's text as the agent gave it, a string or an argument list.
+export function commandText(command: unknown): string | undefined {
   const text = Array.isArray(command) ? command.join(" ") : command;
-  if (typeof text !== "string") return undefined;
-  return waitRules.find(([, rule]) => rule.test(text))?.[0];
+  return typeof text === "string" ? text : undefined;
+}
+export function waitLabel(command: string | undefined): WaitLabel | undefined {
+  return command ? waitRules.find(([, rule]) => rule.test(command))?.[0] : undefined;
 }

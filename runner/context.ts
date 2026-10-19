@@ -206,7 +206,7 @@ export async function judgeContext(o: {
   signal: AbortSignal;
   selector: Selector;
   cached?: unknown;
-  trigger: "coordinator-rotation" | "project-turn" | "project-replay" | "dispatch-check" | "progress-check" | "check-replay";
+  trigger: "coordinator-rotation" | "project-turn" | "project-replay" | "dispatch-check" | "progress-check" | "wait-check" | "check-replay";
 }): Promise<
   | {
       record: SelectionRecord;

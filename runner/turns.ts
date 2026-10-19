@@ -132,6 +132,7 @@ export async function runTurn(
   let pid: number | null = null;
   const stall = watchTurn({
     limits: o.limits,
+    label: (command) => checks.label(child?.id ?? "master", command),
     pid: () => pid,
     publish: (watch) => {
       if (!j.progress.live) return;
@@ -231,8 +232,8 @@ export async function runTurn(
         pid = p;
         await options.onProcess?.(p);
       },
-      onActivity: (event, label) => {
-        stall.activity(event, label);
+      onActivity: (event, command) => {
+        stall.activity(event, command);
         j.progress.activity = [
           ...(j.progress.activity ?? []),
           {
