@@ -109,7 +109,24 @@ test("the brief states the rules: evidence thresholds, a baseline cycle, one gua
     "7. \"No change needed\" is a complete result: one line, no move for Owner, with the versions reviewed recorded in the standing issue.",
   ])
     assert.ok(rules.includes(phrase), phrase);
-  assert.equal(rules.match(/^\d\. /gm)?.length, 9);
+  assert.equal(rules.match(/^\d+\. /gm)?.length, 14);
+});
+
+test("the brief closes the loop: what moved means, revised once or reverted, kept guards stay, the guard each change gets, and who keeps the record", () => {
+  const text = brief();
+  const rules = text.slice(text.indexOf("Rules:"));
+  for (const phrase of [
+    "10. A friction measure moved when it fell: over a window of as many days as its before measure, ending today and wholly after the day the change landed, the count per session is at least a quarter lower than before and at least three below what the before rate predicts for the window's sessions. Short of either margin, or higher, it did not move.",
+    "is not yet measurable: the change stays watching and is never counted as not moved.",
+    "11. A change whose measure did not move is revised once or reverted.",
+    "a revision whose measure does not move is reverted, and the change it revised with it. A revert goes through the same delivery path as a change, under rules 5 and 6, without counting as the cycle's one change: its row names the revert's pull request as soon as it is open, and becomes reverted once it lands.",
+    "12. A change whose measure moved is kept: its row gets the after measure and the state kept, and its guard stays in place, named in the record;",
+    "13. The guard fits the change: in the Projects repository a runner prompt gets an instructions test beside it",
+    "a hook gets its own check in the repository that holds it; a shared rule or skill gets the configuration repository's own check; anything else gets a friction category the next cycle compares. Name that guard when you dispatch the change child; its row names the guard it added.",
+    "14. The cycle's change child keeps the record, after re-reading the body and keeping everything else in it: a new change's row goes in as waiting, with its pull request link and before measure, before the change lands,",
+  ])
+    assert.ok(rules.includes(phrase), phrase);
+  assert.match(text, /\n\nClosing the loop\. The standing issue's record of changes is not in this machine's work item cache yet/);
 });
 
 test("without a linked issue or a registered configuration repository, the brief says what that means for the cycle", () => {

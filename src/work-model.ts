@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { reviewedVersionsSchema } from "./upkeep-model";
+import { reviewedVersionsSchema, upkeepChangeSchema, UPKEEP_RECORD_ROWS } from "./upkeep-model";
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/);
 const repo = z.string().regex(/^[\w.-]+\/[\w.-]+$/);
 const label = z.string().min(1).max(200);
@@ -263,6 +263,9 @@ export const issueSchema = z
     // The harness versions its research last reviewed, from the `## Upkeep`
     // section of its body (src/upkeep-model.ts); only the standing issue has it.
     reviewed: reviewedVersionsSchema.optional(),
+    // Its record of changes from the same section, which the next cycle
+    // compares; null when the table is not in its fixed form.
+    changes: z.array(upkeepChangeSchema).max(UPKEEP_RECORD_ROWS).nullable().optional(),
     updatedAt: z.number().int().nonnegative(),
     position: positionSchema.nullable().optional(),
     details: workDetailsSchema.nullable().optional(),

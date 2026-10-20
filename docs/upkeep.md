@@ -3,8 +3,9 @@
 Once a week, Projects runs an **upkeep conversation** for the deployment
 owner: a master that reads the evidence of friction in the native Claude Code
 and Codex sessions on the connected machines, checks the installed harness
-versions, and makes at most one bounded change to the configuration that
-drives those sessions, or reports in one line that no change is needed. The
+versions, checks whether each earlier change moved the measure it named, and
+makes at most one bounded change to the configuration that drives those
+sessions, or reports in one line that no change is needed. The
 plan behind it, with the agreed decisions and slices, is `docs/upkeep/PLAN.md`
 on the `epic/upkeep` branch; the evidence it reads is described in
 [Friction receipts](friction.md).
@@ -45,8 +46,10 @@ instructions for this lane. It carries:
 
 - **Evidence**: for every connected machine, from the latest snapshots the
   claim hands over, the harness versions its newest sessions ran with and the
-  friction totals per app for the last seven days and the seven before. A count
-  is what the transcripts show, not a verdict.
+  friction totals per app for the last seven days and the seven before, and,
+  with two or more machines' totals, the same added together, so a measure on
+  all machines reads off one line. A count is what the transcripts show, not a
+  verdict.
 - **The research status**: each app's newest installed version across the
   machines against the version the standing issue last reviewed, read from
   this machine's work item cache (the collector refreshes it each scan), and
@@ -64,6 +67,12 @@ instructions for this lane. It carries:
   change child creates it before anything is recorded. It holds every change
   with the measure it should move, its before and after measures, and the
   versions reviewed; there is no second backlog.
+- **Closing the loop**: each recorded change still waiting or watching, and
+  what this cycle does with it: for a watching one, its after measure from the
+  same snapshots and whether it moved, with the numbers; for a waiting one, its
+  pull request to check. Then the guards of the kept changes, which stay, and
+  the record's fixed form, so the change child writes it exactly
+  ([Closing the loop](#closing-the-loop)).
 - **The configuration repository**: `configRepo` in `machine.json` (the
   installer's `--config-repo owner/repo`) names the shared repository of
   global agent rules, skills, hooks and repository templates, the way
@@ -101,11 +110,33 @@ instructions for this lane. It carries:
    second change when the first is a friction fix, delivered under rules 3
    to 6. A baseline cycle records proposals for the next cycle and adopts
    none. Adopted or not, the cycle records the versions reviewed.
+10. A friction measure moved when it fell: over a window as long as its
+    before measure, ending on the cycle's day and wholly after the day the
+    change landed, its count per session is at least a quarter lower and at
+    least three below what the before rate predicts for the window's
+    sessions. Short of either margin, or higher, it did not move. A window
+    that still holds the day the change landed, or has too few sessions to
+    tell, is not yet measurable, never "did not move". A guard measure moved
+    when a read child finds the guard in place and passing.
+11. A change whose measure did not move is revised once or reverted. A
+    revision is the cycle's one change and a new row naming the change it
+    revises; a revision that does not move either is reverted, with the
+    change it revised. A revert takes the same delivery path, under rules 5
+    and 6, without counting as the cycle's one change; its row names the
+    revert's pull request as soon as it is open.
+12. A change whose measure moved is kept, and its guard stays in place, named
+    in the record; a later change removes it only as a recorded revision or
+    revert of that change.
+13. The guard fits the change ([Guards](#guards)); the master names it when it
+    dispatches the change child, and the row records it.
+14. The cycle's change child keeps the record, after re-reading the body and
+    keeping everything else in it.
 
 The rules are tested as text (`runner/upkeep-instructions.test.ts`), the
 trigger's idempotence and the lane's slot in `worker/upkeep.test.ts` and
-`runner/pool.test.ts`, the sources and the reviewed-versions line in
-`tests/upkeep.test.ts`, and the research child's web access in
+`runner/pool.test.ts`, the sources, the reviewed-versions line and the
+record's form in `tests/upkeep.test.ts`, the comparisons in
+`runner/upkeep-changes.test.ts`, and the research child's web access in
 `runner/native.test.ts`.
 
 ## Harness research
@@ -161,3 +192,80 @@ The collector parses it into the work item (`reviewed` on the issue,
 compares the installed versions with it without anyone reading GitHub in the
 master's session. Installing a newer release is machine-local and never a
 cycle's change; the status only notes one the app has seen.
+
+## Closing the loop
+
+Every change a cycle makes is a row in one table under the standing issue's
+`## Upkeep` heading, after the `Reviewed versions:` line. The collector parses
+it into the work item (`changes` on the issue, read by `upkeepChanges` in
+`src/upkeep-model.ts`), and the next cycle's brief reads it from the machine's
+work item cache and compares each change with the snapshots
+(`runner/upkeep-changes.ts`). People edit the table too, so its text is fixed:
+
+```
+## Upkeep
+Reviewed versions: Claude Code 2.1.304, Codex 0.163.0 (2026-11-02)
+| Date | Change | Measure | Before | After | Guard | State |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-11-02 | Run the formatter before committing ([#140](https://github.com/owner/repo/pull/140)) | failed commands, Claude, all machines | 14 in 9 sessions, 7 days to 2026-11-02 | not yet | runner/instructions.test.ts | watching |
+```
+
+| Cell | Form |
+| --- | --- |
+| Date | `YYYY-MM-DD`: the day the change landed; while it waits, the day it was recorded |
+| Change | what changed, with its pull request link, at most 300 characters |
+| Measure | `<friction category>, <Claude or Codex>, <machine or all machines>`, with a [friction category](friction.md) other than prompts and tool calls and a machine by its id, or `guard` when the guard itself is the measure |
+| Before | `<count> in <sessions> sessions, <days> days to YYYY-MM-DD`, copied from the evidence before the change lands; `none` for a guard measure |
+| After | `not yet`, then the same form as Before; `passes` or `fails` for a guard measure |
+| Guard | the test or check that keeps the change in place, at most 200 characters |
+| State | `waiting`, `watching`, `kept`, `revised` or `reverted` |
+
+A table in another form, a second table in the section or more than 60 rows
+makes the record unreadable: the brief says so and compares nothing until the
+change child restores the form. It is never read as an empty record.
+
+A row goes in as `waiting`, with its pull request link and before measure,
+before the change lands, and becomes `watching`, dated the day it landed, once
+delivery is verified. A change that ends blocked for review stays `waiting`
+until its pull request merges: the next cycle's read child checks, and the
+change child then marks it `watching`, dated the day it merged. A watching change ends `kept`
+when its measure moved, `revised` when a later row's revision lands, or
+`reverted` when a revert, through the same delivery path, lands; the row names
+the revert's pull request from the moment it is open, so no later cycle starts
+another.
+
+### The comparison
+
+For a watching change measured by a friction category, the brief adds up the
+app's sessions and the category's count on the measured machines (for all
+machines, every machine with totals, naming any without) over the last N days,
+N being the days of its before measure, ending today as the evidence's last
+seven days do:
+
+| Result | When |
+| --- | --- |
+| not yet measurable | the window still holds the day the change landed, the machine has no totals, or the window has fewer sessions than the comparison needs: at least three, and enough for the before rate to predict three |
+| moved | the count per session is at least a quarter lower than before, and at least three below what the before rate predicts for the window's sessions |
+| did not move | anything else; "it rose" when it is higher by the same margins |
+
+Each result carries the numbers: both measures, each one's rate a session, the
+change in percent, the difference from what the before rate predicts, and the
+After text to record. Rates a session keep a busy or quiet week from reading
+as a move, the count margin keeps a few commands either way from counting,
+and the sessions threshold keeps a thin week from deciding anything. A guard
+measure is not counted: a read child confirms the guard is in place and
+passing on the default branch.
+
+### Guards
+
+| Change | Guard |
+| --- | --- |
+| a runner prompt (`runner/master-instructions.ts`, `runner/instructions.ts`, `runner/upkeep-instructions.ts`) | an instructions test beside it |
+| a runner flag (`runner/native.ts`) | a test in `runner/native.test.ts` |
+| a hook | its own check, in the repository that holds it |
+| a shared rule, skill or repository template | the configuration repository's own check |
+| anything else | a friction category the next cycle compares |
+
+The brief states this (rule 13), the master names the guard when it
+dispatches the change child, and the row records it. A kept change's guard
+stays, listed in every cycle's brief.

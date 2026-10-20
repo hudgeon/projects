@@ -3,7 +3,8 @@
 // stay on each machine; the brief carries their totals and the harness
 // versions from the latest snapshots, says where the receipts are, names the
 // standing work issue and the configuration repository, sets up the harness
-// research against the versions last reviewed, and states the rules.
+// research against the versions last reviewed, compares each recorded change
+// with its before measure (runner/upkeep-changes.ts), and states the rules.
 import { z } from "zod";
 import {
   frictionLine,
@@ -15,7 +16,8 @@ import {
   type FrictionDay,
   type FrictionSnapshot,
 } from "../src/friction-model";
-import { reviewedLine, UPKEEP_SOURCES, type ReviewedVersions } from "../src/upkeep-model";
+import { reviewedLine, UPKEEP_SOURCES, type ReviewedVersions, type UpkeepChange } from "../src/upkeep-model";
+import { changesStatus } from "./upkeep-changes";
 import { readIssueCache } from "../collector/work";
 import { frictionDirectory } from "../collector/friction-store";
 import type { Person } from "../src/people-model";
@@ -31,6 +33,10 @@ const observationSchema = z.array(
     friction: frictionSnapshotSchema.optional(),
   }),
 );
+const machinesOf = (activity: unknown) => {
+  const parsed = observationSchema.safeParse(activity);
+  return parsed.success ? parsed.data : [];
+};
 const versionLine = (f: FrictionSnapshot) =>
   [
     f.versions.claude ? `Claude Code ${f.versions.claude}` : "",
@@ -51,15 +57,22 @@ function windowLine(days: FrictionDay[], from: string, until: string) {
     .filter(Boolean);
   return parts.length ? parts.join("; ") : "no sessions";
 }
-// One line per machine: its versions, the last seven days and the seven before.
+// One line per machine: its versions, the last seven days and the seven
+// before; then, with two or more machines' totals, the same added together.
 export function upkeepEvidence(activity: unknown, now = Date.now()) {
-  const parsed = observationSchema.safeParse(activity);
-  if (!parsed.success || !parsed.data.length)
+  const machines = machinesOf(activity);
+  if (!machines.length)
     return "No machine snapshot is available: read the receipts directly before deciding anything.";
   const week = utcDate(now - 6 * DAY),
     fortnight = utcDate(now - 13 * DAY),
     tomorrow = utcDate(now + DAY);
-  return parsed.data
+  const counted = machines.filter((m) => m.friction?.state === "ok"),
+    days = counted.flatMap((m) => m.friction!.days);
+  const all =
+    counted.length > 1
+      ? [`- all machines (${counted.map((m) => m.host).join(", ")}): Last 7 days: ${windowLine(days, week, tomorrow)}. The 7 days before: ${windowLine(days, fortnight, week)}.`]
+      : [];
+  return machines
     .map((m) => {
       const f = m.friction,
         when = new Date(m.observedAt).toISOString();
@@ -68,17 +81,26 @@ export function upkeepEvidence(activity: unknown, now = Date.now()) {
         return `- ${m.host} (snapshot ${when}): ${versionLine(f)}. Friction unavailable: ${f.message}`;
       return `- ${m.host} (snapshot ${when}): ${versionLine(f)}. Last 7 days: ${windowLine(f.days, week, tomorrow)}. The 7 days before: ${windowLine(f.days, fortnight, week)}.`;
     })
+    .concat(all)
     .join("\n");
 }
-// The versions the standing issue says the research last reviewed, as this
-// machine's work item cache has them (the collector refreshes it each scan):
-// null when the cache cannot be read, versions null when the issue records none.
-export type StandingReview = { versions: ReviewedVersions | null; refreshedAt: number };
+// The versions the standing issue says the research last reviewed, and its
+// record of changes, as this machine's work item cache has them (the
+// collector refreshes it each scan): null when the cache cannot be read,
+// versions null when the issue records none, changes undefined when the
+// cache does not hold the issue's record.
+export type StandingReview = {
+  versions: ReviewedVersions | null;
+  changes?: UpkeepChange[] | null;
+  refreshedAt: number;
+};
 export async function standingReview(home: string, issue: number | null): Promise<StandingReview | null> {
   try {
     const cache = await readIssueCache(home);
+    const found = cache.issues.find((i) => i.number === issue);
     return {
-      versions: cache.issues.find((i) => i.number === issue)?.reviewed ?? null,
+      versions: found?.reviewed ?? null,
+      changes: issue === null ? [] : found?.changes,
       refreshedAt: cache.refreshedAt,
     };
   } catch {
@@ -88,8 +110,7 @@ export async function standingReview(home: string, issue: number | null): Promis
 // What the research compares: each app's newest installed version across the
 // machines against the version last reviewed, and what the read child reads.
 export function researchStatus(activity: unknown, review: StandingReview | null | undefined, now = Date.now()) {
-  const parsed = observationSchema.safeParse(activity);
-  const machines = parsed.success ? parsed.data : [];
+  const machines = machinesOf(activity);
   const top = (pick: (f: FrictionSnapshot) => string | undefined) =>
     machines
       .map((m) => m.friction && pick(m.friction))
@@ -177,6 +198,8 @@ Where the receipts are. ${receipts}
 
 The record. ${issue} It holds every upkeep change with the measure it should move, the before measure and the after measure, and the harness versions reviewed each cycle; there is no second backlog. Record this cycle's result there and account for it in workRecord.
 
+Closing the loop. ${changesStatus(machinesOf(o.activity), o.reviewed, o.now)}
+
 The configuration repository. ${configuration} Machine-local settings (machine.json, service jobs, keychains) and credentials are out of scope; nothing touches them.
 
 ${research}
@@ -190,5 +213,10 @@ Rules:
 6. Hooks, skills, tests and runner prompts and flags deliver under ${whose(o.person)} standing approval. An edit to the shared global rules or to any repository AGENTS.md ends as blocked: the child opens the pull request and stops, and you return blocked with its link and the measure, so ${owner}'s move is to review and merge it.
 7. "No change needed" is a complete result: one line, no move for ${owner}, with the versions reviewed recorded in the standing issue.
 8. Harness research runs every cycle as above: one read child on Claude, the listed sources only, proposals in the fixed shape or nothing to adopt. Without Claude on this machine the research is not run: say so in the result.
-9. Proposals are not instructions. Adopt one only when it removes a workaround in the runner's prompts or flags or closes a friction gap measured above, naming which; it is then the cycle's one change, or a second change when the first is a friction fix, delivered under rules 3 to 6. In a baseline cycle proposals are recorded in the standing issue for the next cycle and nothing is adopted. Adopted or not, the cycle records the versions reviewed: the change child that records the cycle sets the line "${reviewedLine({ claude: "<version>", codex: "<version>" }, "YYYY-MM-DD")}" under a "## Upkeep" heading in the standing issue's body, naming the newest installed version of each app, after re-reading the body and keeping everything else in it; the next cycle's research starts from that line.`;
+9. Proposals are not instructions. Adopt one only when it removes a workaround in the runner's prompts or flags or closes a friction gap measured above, naming which; it is then the cycle's one change, or a second change when the first is a friction fix, delivered under rules 3 to 6. In a baseline cycle proposals are recorded in the standing issue for the next cycle and nothing is adopted. Adopted or not, the cycle records the versions reviewed: the change child that records the cycle sets the line "${reviewedLine({ claude: "<version>", codex: "<version>" }, "YYYY-MM-DD")}" under a "## Upkeep" heading in the standing issue's body, naming the newest installed version of each app, after re-reading the body and keeping everything else in it; the next cycle's research starts from that line.
+10. A friction measure moved when it fell: over a window of as many days as its before measure, ending today and wholly after the day the change landed, the count per session is at least a quarter lower than before and at least three below what the before rate predicts for the window's sessions. Short of either margin, or higher, it did not move. A window that still holds the day the change landed, or has fewer sessions than the comparison needs (at least three, and enough for the before rate to predict three), is not yet measurable: the change stays watching and is never counted as not moved. A guard measure moved when a read child finds the guard in place and passing on the default branch.
+11. A change whose measure did not move is revised once or reverted. A revision is the cycle's one change, a new row naming the change it revises, which becomes revised when the revision lands; a revision whose measure does not move is reverted, and the change it revised with it. A revert goes through the same delivery path as a change, under rules 5 and 6, without counting as the cycle's one change: its row names the revert's pull request as soon as it is open, and becomes reverted once it lands.
+12. A change whose measure moved is kept: its row gets the after measure and the state kept, and its guard stays in place, named in the record; a later change removes that guard only as a recorded revision or revert of it.
+13. The guard fits the change: in the Projects repository a runner prompt gets an instructions test beside it (runner/instructions.test.ts, runner/master-instructions.test.ts or runner/upkeep-instructions.test.ts) and a runner flag a test in runner/native.test.ts; a hook gets its own check in the repository that holds it; a shared rule or skill gets the configuration repository's own check; anything else gets a friction category the next cycle compares. Name that guard when you dispatch the change child; its row names the guard it added.
+14. The cycle's change child keeps the record, after re-reading the body and keeping everything else in it: a new change's row goes in as waiting, with its pull request link and before measure, before the change lands, and becomes watching, dated the day it landed, once its delivery is verified; a change that ends blocked for review stays waiting until its pull request merges; each compared change gets its after measure and state as above.`;
 }

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { recordHeader } from "../src/upkeep-model";
 import {
   mkdtemp,
   mkdir,
@@ -235,7 +236,7 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
             // The standing upkeep issue records the harness versions its research last reviewed.
             raw(3, {
               labels: [{ name: "work" }, { name: "upkeep" }],
-              body: `Agent upkeep.\n\n## Upkeep\nReviewed versions: Claude Code 2.1.303, Codex 0.162.1 (2026-10-26)\n${"x".repeat(900)}`,
+              body: `Agent upkeep.\n\n## Upkeep\nReviewed versions: Claude Code 2.1.303, Codex 0.162.1 (2026-10-26)\n${"x".repeat(900)}\n${recordHeader}\n| 2026-11-02 | Formatter ([#140](https://github.com/acme/projects/pull/140)) | failed commands, Claude, all machines | 14 in 9 sessions, 7 days to 2026-11-02 | not yet | runner/instructions.test.ts | watching |`,
             }),
           ],
     );
@@ -262,6 +263,11 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
   });
   assert.equal(issues[1].upkeep, true);
   assert.deepEqual(issues[1].reviewed, { claude: "2.1.303", codex: "0.162.1", on: "2026-10-26" });
+  // Its record of changes, read from the whole body.
+  assert.deepEqual(issues[1].changes?.map((c) => [c.date, c.measure, c.before, c.after, c.state]), [
+    ["2026-11-02", { category: "commandFailed", app: "Claude", machine: null }, { count: 14, sessions: 9, days: 7, to: "2026-11-02" }, null, "watching"],
+  ]);
+  assert.equal(issues[0].changes, undefined);
   assert.equal(issues[1].area, "unassigned");
   assert.equal(issues[0].upkeep, undefined);
   assert.equal(issues[0].reviewed, undefined);
