@@ -31,6 +31,10 @@ type Operation =
   | "upkeep.start"
   | "inbox.action"
   | "inbox.read"
+  | "chat.publish"
+  | "chat.list"
+  | "chat.read"
+  | "chat.action"
   | "push.subscribe"
   | "push.events"
   | "dispatch"
@@ -78,6 +82,7 @@ export function requestRoute(pathname: string) {
   const route = routeSchema.safeParse(
     pathname.replace(/^\/api\/runs\/[a-f0-9-]{36}(?=\/|$)/, "/api/runs/:id")
       .replace(/^\/api\/inbox\/threads\/[a-f0-9]{10,40}$/, "/api/inbox/threads/:id")
+      .replace(/^\/api\/chats\/[a-f0-9]{64}$/, "/api/chats/:id")
       .replace(/^\/api\/browser\/[a-f0-9-]{36}\/cdp$/, "/api/browser/:id/cdp")
       .replace(/^\/api\/documents\/[a-f0-9]{64}$/, "/api/documents/:id")
       .replace(/\/screenshots\/[a-f0-9-]{36}$/, "/screenshots/:id"),

@@ -15,7 +15,16 @@ import {
   useRuns,
 } from "./run-view";
 import { BiggerWork, WorkDetail } from "./work-view";
-import { conversationSearch, workSearch, type Navigation } from "./navigation";
+import { chatSearch, conversationSearch, workSearch, type Navigation } from "./navigation";
+import { ChatDetail, ChatRow, useChats } from "./chat-view";
+import { chatsToDo, type ChatView } from "./chat-model";
+
+// Today's count: the conversations waiting on the person, as the list shows
+// them, and the Slack and Teams items that need them.
+export function useWaiting(me: string | undefined, everyone: boolean) {
+  const runs = useRuns().data?.pages.flatMap((page) => page.runs) ?? [];
+  return yours(runs, me, everyone).filter(awaitsYou).length + chatsToDo(useChats().data).length;
+}
 
 // One place to work: start things, see what needs you and what is running,
 // and keep the bigger work in view. On a phone a selected conversation takes
@@ -51,6 +60,12 @@ export function TodayView({
     me,
     everyone,
   );
+  // Slack and Teams items that need the person join Your move, unless a
+  // project filters the list; they belong to no project.
+  const chatItems = chatsToDo(useChats().data);
+  const chats = done || navigation.project ? [] : chatItems;
+  const chatAt = chats.findIndex((item) => item.key === navigation.chat);
+  const nextChat = chatAt >= 0 ? (chats[chatAt + 1] ?? chats[chatAt - 1]) : undefined;
   // The switch appears once more than one person has a profile.
   const people = usePeople().data?.people ?? [];
   const names = projectNames(snapshots, archives);
@@ -74,15 +89,25 @@ export function TodayView({
   const projectName = navigation.project
     ? (names.get(navigation.project) ?? navigation.project)
     : null;
-  const section = (title: string, items: RunSummary[], empty?: string) =>
-    items.length || empty ? (
+  const section = (title: string, items: RunSummary[], empty?: string, chatRows: ChatView[] = []) =>
+    items.length || chatRows.length || empty ? (
       <section className="queue-section" aria-label={title}>
         <h2>
           {title}{" "}
-          {!!items.length && <span className="count">{items.length}</span>}
+          {!!(items.length + chatRows.length) && (
+            <span className="count">{items.length + chatRows.length}</span>
+          )}
         </h2>
-        {items.length ? (
+        {items.length || chatRows.length ? (
           <div className="rows">
+            {chatRows.map((item) => (
+              <ChatRow
+                key={item.key}
+                item={item}
+                search={chatSearch(item.key, navigation.project)}
+                selected={item.key === navigation.chat}
+              />
+            ))}
             {items.map((run) => (
               <ConversationRow
                 key={run.id}
@@ -99,7 +124,7 @@ export function TodayView({
       </section>
     ) : null;
   return (
-    <div className={`today${selected || navigation.work ? " has-run" : ""}`}>
+    <div className={`today${selected || navigation.work || navigation.chat ? " has-run" : ""}`}>
       <aside className="today-queue" aria-label="Your conversations">
         {projectName && (
           <p className="filter-chip">
@@ -165,6 +190,7 @@ export function TodayView({
               "Your move",
               yourMove,
               everyone ? "Nothing waiting on anyone." : "Nothing waiting on you.",
+              chats,
             )}
             {section("Working", working)}
           </>
@@ -199,6 +225,15 @@ export function TodayView({
             archives={archives}
             back={search()}
             next={next ? search(next) : undefined}
+          />
+        ) : navigation.chat ? (
+          <ChatDetail
+            key={navigation.chat}
+            chatKey={navigation.chat}
+            snapshots={snapshots}
+            archives={archives}
+            back={conversationSearch(undefined, navigation.project)}
+            next={nextChat ? chatSearch(nextChat.key, navigation.project) : undefined}
           />
         ) : navigation.work ? (
           <WorkDetail

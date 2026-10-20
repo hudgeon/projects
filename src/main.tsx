@@ -5,10 +5,8 @@ import { Restart } from "./restart";
 import {
   ProjectConversations,
   useEmailConversations,
-  useRuns,
 } from "./run-view";
-import { awaitsYou } from "./run-model";
-import { TodayView } from "./today-view";
+import { TodayView, useWaiting } from "./today-view";
 import { ArchiveButton, ArchiveView } from "./archive-view";
 import {
   isArchived,
@@ -60,7 +58,6 @@ import { NotificationPrompt } from "./notifications";
 import { DocumentViewer } from "./document-view";
 import { SignIn, Topbar, useSignOut } from "./topbar";
 import { ProfilePanel, useEveryone, useMe } from "./people-view";
-import { yours } from "./people-model";
 
 const quotaReasons = {
   login_expired: "login expired",
@@ -560,11 +557,11 @@ function Dashboard() {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all");
   const query = useQuery(overviewQueryOptions);
-  const current = useRuns(),
-    email = useEmailConversations();
+  const email = useEmailConversations();
   // Whose work Today and Inbox show: the signed-in person's, or everyone's.
   const [everyone, setEveryone] = useEveryone();
   const me = useMe().data?.email;
+  const waiting = useWaiting(me, everyone);
   const signOut = useSignOut();
   if (query.error?.message === "SIGN_IN")
     return (
@@ -580,13 +577,6 @@ function Dashboard() {
   const archives = query.data?.archives ?? [];
   const inboxActions = query.data?.inboxActions ?? [];
   const toHandle = inboxCount(snapshots, email.data?.runs, inboxActions, now, me);
-  // Today's "Your move": finished conversations not yet marked Done, and
-  // running ones only their owner can unblock.
-  const waiting = yours(
-    current.data?.pages.flatMap((page) => page.runs) ?? [],
-    me,
-    everyone,
-  ).filter(awaitsYou).length;
   const groups = group(snapshots);
   const currentGroups = groups.filter(
     (g) =>
@@ -672,6 +662,7 @@ function Dashboard() {
             archives={archives}
             actions={inboxActions}
             selectedEmail={navigation.email}
+            source={navigation.source}
             emailHidden={query.data?.emailHidden}
             now={now}
             everyone={everyone}

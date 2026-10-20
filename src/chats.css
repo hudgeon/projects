@@ -1,0 +1,87 @@
+/* Slack and Teams items: every row leads with where the message was said. */
+.chat-place {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 7px;
+  min-width: 0;
+}
+.chat-source {
+  flex: none;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.chat-slack {
+  background: #5b2266;
+}
+.chat-teams {
+  background: #5458b8;
+}
+.chat-shared {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.chat-row .row-status {
+  color: #3c5568;
+}
+/* The router marks the open item's link as the current page. */
+.chat-row[aria-current="page"] {
+  background: #eaf2f8;
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+.chat-detail .convo-head {
+  grid-template-columns: minmax(0, 1fr);
+}
+.chat-detail .chat-place .row-title {
+  font-weight: 650;
+}
+.chat-text {
+  padding: 12px 14px;
+  border-left: 3px solid #87afc0;
+  border-radius: 0 6px 6px 0;
+  background: #f4f8fa;
+  color: #2b4557;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-actions a.btn-quiet {
+  text-decoration: none;
+}
+.chat-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+.chat-filter {
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.chat-filter a {
+  border-radius: 6px;
+  padding: 8px 13px;
+  color: #536c7d;
+  text-decoration: none;
+}
+.chat-filter a.selected {
+  background: #dce8f0;
+  color: #153b56;
+  font-weight: 650;
+}

@@ -3,7 +3,10 @@ import { Buffer } from "node:buffer";
 import { MESSAGE_REQUEST_BYTES } from "../src/screenshot-model";
 import type { MessageInput } from "../src/run-model";
 import { Runs } from "./run-directory";
-import { pushEndpoint, PushDevices, vapidPublicKey } from "./push";
+import { PushDevices } from "./push";
+import { pushRoutes } from "./push-routes";
+import { Chats, chatRoutes } from "./chats";
+import type { ChatAction, ChatRead } from "../src/chat-model";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
@@ -55,6 +58,7 @@ export class Portfolio extends DurableObject<Env> {
   private profiles: People;
   private pushes: PushDevices;
   private inbox: InboxRequests;
+  private chats: Chats;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
@@ -64,6 +68,7 @@ export class Portfolio extends DurableObject<Env> {
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
+    this.chats = new Chats(ctx.storage);
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });
@@ -302,6 +307,11 @@ export class Portfolio extends DurableObject<Env> {
   pendingInboxActions() { return this.inbox.pending(); }
   reportInboxAction(r: InboxActionReport) { return this.inbox.report(r); }
   inboxThread(threadId: string, account: string) { return this.inbox.thread(threadId, account); }
+  // Chat is each person's own (worker/chats.ts).
+  publishChats(read: ChatRead, host: string) { return this.chats.publish(read, host); }
+  chatList(email: string) { return this.chats.list(email); }
+  chatText(key: string, email: string) { return this.chats.text(key, email); }
+  actOnChat(key: string, email: string, action: ChatAction["action"], to?: string) { return this.chats.act(key, email, action, to); }
   // Notifications are each person's (worker/push.ts): their devices, their
   // conversations' notices.
   subscribePush(endpoint: string, email: string) {
@@ -331,7 +341,7 @@ export class Portfolio extends DurableObject<Env> {
 }
 
 // Routes authorised by the collector token; every other route needs a session.
-export const collectorRoutes = new Set(["/api/ingest", "/api/closes", "/api/inbox/actions", "/api/review", "/api/collector/duties"]);
+export const collectorRoutes = new Set(["/api/ingest", "/api/closes", "/api/inbox/actions", "/api/review", "/api/collector/duties", "/api/chats/read"]);
 export const runnerRoutes = new Set(["/api/runner/claim", "/api/runner/heartbeat", "/api/runner/report", "/api/runner/screenshot", "/api/runner/readiness", "/api/runner/browser", "/api/runner/document"]);
 // An owner's HTML edition, served only to their signed-in session.
 export const documentPath = /^\/api\/documents\/([a-f0-9]{64})$/;
@@ -359,9 +369,6 @@ async function runnerOwner(machine: MachineCaller, runnerId: string) {
 const updatingScreenshots = () => Response.json({error: "Projects is finishing an update. Your screenshot is still in the draft; try sending it again shortly."}, {status: 503});
 const closeRequestSchema = z
   .object({ issue: z.number().int().positive() })
-  .strict();
-const pushRequestSchema = z
-  .object({ endpoint: z.string().max(1000).refine(pushEndpoint) })
   .strict();
 export async function handle(
   request: Request,
@@ -717,30 +724,10 @@ export async function handle(
   }
   const inbox = await inboxRoutes(request, store, caller, onDuty);
   if (inbox) return inbox;
-  if (url.pathname === "/api/push/key" && request.method === "GET")
-    return env.VAPID_PRIVATE_KEY
-      ? Response.json({ key: vapidPublicKey(env.VAPID_PRIVATE_KEY) })
-      : Response.json({ error: "Notifications are not set up yet." }, { status: 503 });
-  if (url.pathname === "/api/push/events" && request.method === "GET")
-    return Response.json(
-      { events: await trace("push.events", {}, () => store.pushEvents(caller as string)) },
-      { headers: { "Cache-Control": "no-store" } },
-    );
-  if ((url.pathname === "/api/push/subscribe" || url.pathname === "/api/push/unsubscribe") && request.method === "POST") {
-    let input;
-    try {
-      input = pushRequestSchema.parse(await readJson(request, 2048));
-    } catch {
-      return Response.json({ error: "Invalid notification request" }, { status: 400 });
-    }
-    if (!(await store.rate(`push:${caller}`, 10, 3600_000)))
-      return Response.json({ error: "Try again shortly." }, { status: 429 });
-    if (url.pathname.endsWith("/unsubscribe")) await store.unsubscribePush(input.endpoint, caller as string);
-    else if (!env.VAPID_PRIVATE_KEY)
-      return Response.json({ error: "Notifications are not set up yet." }, { status: 503 });
-    else await trace("push.subscribe", {}, () => store.subscribePush(input.endpoint, caller as string));
-    return Response.json({ ok: true });
-  }
+  const push = typeof caller === "string" && (await pushRoutes(request, store, caller, env));
+  if (push) return push;
+  const chats = await chatRoutes(request, store, caller, (email) => allowed(email, env));
+  if (chats) return chats;
   if (url.pathname === "/api/work/close" && request.method === "POST") {
     let number;
     try {

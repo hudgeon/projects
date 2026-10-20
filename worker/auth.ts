@@ -114,6 +114,8 @@ export function browserMay(pathname: string, method: string) {
   return !(
     /^\/api\/runs\/[^/]+\/browser\/view$/.test(pathname) ||
     pathname.startsWith("/api/inbox/") ||
+    pathname === "/api/chats" ||
+    pathname.startsWith("/api/chats/") ||
     pathname.startsWith("/api/push/")
   );
 }

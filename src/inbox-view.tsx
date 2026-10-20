@@ -14,6 +14,8 @@ import { MailRow, type Item } from "./inbox-row";
 import { useMe, useOwnerLabel } from "./people-view";
 import type { RunSummary } from "./run-model";
 import type { ArchiveEntry } from "./archive-model";
+import type { ChatSource } from "./chat-model";
+import { ChatSections, SourceFilter, useChats } from "./chat-view";
 
 // Emails to handle in one inbox, and whether that number covers the whole
 // inbox. A stale, truncated or failed read is never presented as an inbox with
@@ -52,10 +54,26 @@ export function inboxCount(
     complete: coverage(inbox, snapshots, now),
   };
 }
+// The Inbox: the person's email and, once a machine reads them, their Slack
+// and Teams items, by source or all together. A conversation browser's own
+// sign-in sees neither.
+export function InboxView({
+  source,
+  ...email
+}: Parameters<typeof EmailInbox>[0] & { source?: "email" | ChatSource }) {
+  const chats = useChats();
+  return (
+    <div className="inbox">
+      {!email.emailHidden && <SourceFilter source={source} list={chats.data} />}
+      {source !== "slack" && source !== "teams" && <EmailInbox {...email} />}
+      {!email.emailHidden && source !== "email" && <ChatSections source={source} now={email.now} />}
+    </div>
+  );
+}
 // The signed-in person's own inbox, as its machine read it, or how much waits
 // in everyone's. Another person's messages are never shown here: only the
 // count of them.
-export function InboxView({
+function EmailInbox({
   snapshots,
   archives,
   actions,
