@@ -6,7 +6,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import { collect, subprocessEnv, unpushedCommits } from "../collector/collect";
-import { discover, configSchema, command, machineSecret } from "../collector/collect";
+import { discover, command, machineSecret } from "../collector/collect";
+import { configSchema } from "../collector/config";
 import type { Worktree } from "../src/model";
 
 test("unnamed native tasks never upload the original prompt as a title", async () => {
@@ -112,9 +113,9 @@ test("the Laptop reads Gmail only on duty, and its upload bearer never reaches a
       home: root,
       inboxAccount: "owner@example.com",
     });
-    assert.equal((await collect(config)).inbox, undefined);
+    assert.equal((await collect(config)).inboxes, undefined);
     assert.equal(existsSync(marker), false, "off duty, Gmail is not read");
-    assert.equal((await collect(config, { inbox: true })).inbox?.state, "unavailable");
+    assert.equal((await collect(config, { inbox: true })).inboxes?.[0].state, "unavailable");
     assert.equal(existsSync(marker), true, "on duty, the Laptop reads Gmail");
     assert.equal(subprocessEnv().COLLECTOR_TOKEN, undefined);
     assert.equal(subprocessEnv().RUNNER_TOKEN, undefined);

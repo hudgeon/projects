@@ -22,7 +22,12 @@ import {
   type Issue,
   type WorkAssociation,
 } from "./work-model";
-import { currentInbox, inboxRows, gmailUrl } from "./inbox-model";
+import {
+  currentInboxes,
+  inboxRows,
+  inboxWithThread,
+  gmailUrl,
+} from "./inbox-model";
 import { Restart } from "./restart";
 import { awaitsYou, type RunSummary } from "./run-model";
 import { plainText } from "./run-text";
@@ -61,8 +66,8 @@ export type Row = {
 const recentWindow = RECENT_WORK_DAYS * 86400_000;
 const onBranch = (branch: string | null): branch is string =>
   branch !== null && !["main", "master"].includes(branch);
-// Hook associations joined with the native session observed on the same machine,
-// so a linked session shows its live title and state, not only the hook's.
+// Hook associations joined with the native session seen on that machine, so a
+// linked session shows its live title and state, not just the hook's.
 export function linkedSessions(snapshots: Snapshot[], now: number): Linked[] {
   return snapshots.flatMap((s) => {
     const stale = freshness(s.collectedAt, now);
@@ -90,8 +95,8 @@ export function linkedSessions(snapshots: Snapshot[], now: number): Linked[] {
     });
   });
 }
-// Sessions that can still classify themselves: open ones, recently active. An
-// ended session has no further reply to declare in; resuming it lists it again.
+// Sessions that can still classify themselves: open, recent ones. An ended
+// session has no reply left to declare in; resuming it lists it again.
 export function unclassified(snapshots: Snapshot[], now: number) {
   return linkedSessions(snapshots, now).filter(
     (a) =>
@@ -100,7 +105,7 @@ export function unclassified(snapshots: Snapshot[], now: number) {
       now - a.at < 7 * 86400_000,
   );
 }
-// GitHub is repository-wide: use the freshest successful observation per repo.
+// GitHub is repository-wide: the freshest good observation per repo.
 function currentPulls(snapshots: Snapshot[], now: number) {
   const best = new Map<string, { at: number; pulls: Pull[] }>();
   for (const s of snapshots)
@@ -118,13 +123,12 @@ export function rows(
   now: number,
   closes: Close[] = [],
 ): Row[] {
-  const inbox = currentInbox(snapshots);
   const emailReview = new Set(
-    inbox
-      ? inboxRows(inbox, work.issues)
-          .filter((r) => !r.reviewed)
-          .flatMap((r) => r.linked.map((i) => i.number))
-      : [],
+    currentInboxes(snapshots).flatMap((inbox) =>
+      inboxRows(inbox, work.issues)
+        .filter((r) => !r.reviewed)
+        .flatMap((r) => r.linked.map((i) => i.number)),
+    ),
   );
   const requested = new Map(closes.map((c) => [c.issue, c]));
   const linked = linkedSessions(snapshots, now);
@@ -201,7 +205,7 @@ function SessionLine({ s, now }: { s: Linked; now: number }) {
     </span>
   );
 }
-// Work still attached to an item; Mark done leaves all of it untouched.
+// Work still attached to an item; Mark done leaves it all untouched.
 export function openWork(row: Pick<Row, "pulls" | "checkouts" | "live">) {
   const count = (n: number, one: string, many: string) =>
     n ? `${n} ${n === 1 ? one : many}` : "";
@@ -215,7 +219,7 @@ export function openWork(row: Pick<Row, "pulls" | "checkouts" | "live">) {
     row.live ? "a session working now" : "",
   ].filter(Boolean);
 }
-// Mark done queues the issue; the machine on duty closes it on GitHub on its next run.
+// Mark done queues the issue; the machine on duty closes it next run.
 function CloseControl({ row, now }: { row: Row; now: number }) {
   const client = useQueryClient();
   const [confirming, setConfirming] = useState(false);
@@ -289,7 +293,7 @@ function CloseControl({ row, now }: { row: Row; now: number }) {
 export type Agenda =
   "needs" | "active" | "waiting" | "review" | "planned" | "history";
 export function agenda(row: Row): Agenda {
-  // Closed on GitHub is closed here; a new email on it waits in the Inbox.
+  // Closed on GitHub is closed here; new email on it waits in the Inbox.
   if (row.done) return "history";
   if (row.emailAttention) return "review";
   switch (row.issue.position?.status) {
@@ -616,7 +620,7 @@ export function WorkCard({
                       search={{ view: "inbox", email: link.threadId }}
                     >
                       {link.subject ||
-                        currentInbox(snapshots)?.threads.find(
+                        inboxWithThread(snapshots, link.threadId)?.threads.find(
                           (t) => t.id === link.threadId,
                         )?.subject ||
                         "Email conversation"}
@@ -714,8 +718,8 @@ export function WorkFacts({ issue }: { issue: Issue }) {
     </div>
   );
 }
-// The bigger picture: open work grouped by who it is for and why, with the
-// groups that need the owner first. Planned and closed work stays folded away.
+// Open work grouped by who it is for and why, the groups that need the owner
+// first. Planned and closed work stays folded away.
 export function BiggerWork({
   snapshots,
   archives,
@@ -768,12 +772,13 @@ export function BiggerWork({
   const closed = all.filter((r) => agenda(r) === "history");
   const needs = current.filter((r) => agenda(r) === "needs").length;
   const pending = unclassified(snapshots, now);
-  const inbox = currentInbox(snapshots);
-  // A failed or stale read must not look like quiet work.
+  // A failed or stale read must not read as quiet work.
   const degraded =
     freshness(work.observedAt, now) ||
     snapshots.some((s) => s.work?.associationsState !== "ok") ||
-    (!!inbox && (inbox.state !== "ok" || freshness(inbox.observedAt, now)));
+    currentInboxes(snapshots).some(
+      (inbox) => inbox.state !== "ok" || freshness(inbox.observedAt, now),
+    );
   return (
     <section className="bigger" aria-label="Bigger work">
       <div className="bigger-head">
@@ -857,8 +862,8 @@ export function BiggerWork({
   );
 }
 
-// Business work may span repositories. Only a single explicit, current match
-// is a safe default; the coordinator can choose otherwise.
+// Work may span repositories. Only one explicit, current match is a safe
+// default; the coordinator can choose otherwise.
 export function workProject(
   issue: Pick<Issue, "repos">,
   snapshots: Snapshot[],
@@ -891,7 +896,7 @@ function emailContext(
   snapshots: Snapshot[],
 ) {
   if (!threadId) return undefined;
-  const inbox = currentInbox(snapshots);
+  const inbox = inboxWithThread(snapshots, threadId);
   const thread = inbox?.threads.find((t) => t.id === threadId);
   const link = issue.emailLinks?.find((l) => l.threadId === threadId);
   const url = thread && inbox ? gmailUrl(inbox.account, threadId) : link?.url;

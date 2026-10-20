@@ -188,14 +188,16 @@ const cacheSchema = z.object({
     .array(z.object({ historyId: z.string(), thread: inboxThreadSchema }))
     .max(500),
 });
-// The machine on duty's existing gws login owns Gmail access. The Worker receives metadata
-// only; no OAuth credential, message body, snippet or attachment is requested.
+// The account's own gws sign-in on the machine on duty owns Gmail access, and
+// must be signed in as that account. The Worker receives metadata only; no
+// OAuth credential, snippet or attachment is requested.
 export async function readInbox(
   account: string,
   run: Gws,
   now = Date.now(),
   home?: string,
   tracked: string[] = [],
+  cacheName = "inbox-cache.json",
 ): Promise<Inbox> {
   const result: Inbox = { account, observedAt: now, state: "ok", threads: [] };
   const call = async (resource: string, method: string, params: object) =>
@@ -218,7 +220,7 @@ export async function readInbox(
       (l: { id: string; name: string }) => l.name === "Projects/Reference",
     )?.id;
     const file = home
-      ? path.join(home, ".local/share/project-overview/inbox-cache.json")
+      ? path.join(home, ".local/share/project-overview", cacheName)
       : null;
     const cached = new Map<
       string,

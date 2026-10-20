@@ -11,7 +11,7 @@ import { result, makeRun, fixture, complete, dispatch, engineOptions } from "./r
 test("quick work gives the master a light prompt without the repository activity dump", async () => {
   const dir = await fixture(),
     o = engineOptions(dir, {...makeRun(), lane: "quick"});
-  o.inboxAccount = "owner@example.com";
+  o.inboxes = [{ account: "owner@example.com" }];
   o.workRepo = "acme/work";
   o.activity = [{host: "studio", projects: [{id: "acme/test", sessions: ["ACTIVITY-MARKER"]}]}];
   const prompts: string[] = [];

@@ -173,7 +173,7 @@ test("the Laptop's collector publishes for itself and takes the Studio's duties 
     const inbox = {...inboxSnapshot().inbox, observedAt: Date.now() + 1000};
     assert.equal((await ingest({...archiveSnapshot("laptop", Date.now() + 1000), work: closeSnapshot().work, inbox}, laptop)).status, 200);
     const view = (await (await get("/api/overview", {Cookie: signed.Cookie})).json()) as PortfolioView;
-    assert.equal(view.snapshots.find((s) => s.inbox?.observedAt === inbox.observedAt)?.host, "laptop", "the Laptop's inbox read is the newest");
+    assert.equal(view.snapshots.find((s) => s.inboxes?.[0]?.observedAt === inbox.observedAt)?.host, "laptop", "the Laptop's inbox read is the newest");
     assert.equal((await ingest(closeSnapshot(Date.now() + 2000), studio)).status, 200);
     assert.equal(await duties(), false, "the Studio takes its duties back as soon as it publishes");
   } finally { await mf.dispose(); await rm(dir, {recursive: true, force: true}); }

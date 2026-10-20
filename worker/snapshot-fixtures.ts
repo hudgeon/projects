@@ -27,6 +27,20 @@ export const inboxSnapshot = (at = Date.now()) => ({
   },
 });
 
+// Two people's inboxes, as a collector that lists accounts publishes them.
+export const peopleInboxSnapshot = (at = Date.now()) => {
+  const { inbox, ...rest } = inboxSnapshot(at);
+  return {
+    ...rest,
+    inboxes: [
+      inbox,
+      { account: "matt@example.com", observedAt: at, state: "ok", threads: [
+        { id: "cccccccccc01", subject: "Invoice", from: "Supplier <billing@supplier.example.com>", latestMessageId: "cccccccccc02", updatedAt: at - 60_000, inInbox: true, lastSentByMe: false, unread: true, messages: 1, body: "Pay by Friday: MATT-BODY-MARKER", unsubscribe: null },
+      ] },
+    ],
+  };
+};
+
 export function archiveSnapshot(host: "studio" | "laptop", at = Date.now()): Snapshot {
   const source = {state: "ok" as const, message: "Observed", observedAt: at};
   const session = {id: "shared-session", title: "Review this project", app: "Codex" as const, cwd: "/fixture/project", updatedAt: at, state: "idle" as const, evidence: "Native turn completed"};

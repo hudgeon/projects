@@ -5,7 +5,7 @@ import type { ExecutionEvent } from "../src/telemetry";
 import { ACTIVITY_LIMIT, PROGRESS_NOTE_LIMIT, noUsage, type Child } from "../src/run-model";
 import { Failure, type NativeOptions, type SteerInput, type TurnUsage } from "./native";
 import { liveChanges, saveWorkspace } from "./workspaces";
-import { browserInstructions, progressInstructions, stuckInstructions, responseInstructions } from "./instructions";
+import { browserInstructions, mailboxFor, progressInstructions, stuckInstructions, responseInstructions } from "./instructions";
 import { TURN_LIMITS, watchLimits } from "./turn-limits";
 import { watchTurn } from "./turn-watch";
 import type { Execution } from "./execution";
@@ -228,6 +228,7 @@ export async function runTurn(
       fullAccess: o.fullAccess && !options.readOnly,
       onTiming: fields => { timing = {...timing, ...fields}; },
       person: o.person,
+      mailbox: mailboxFor(o.person, o.inboxes),
       prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),
       onProcess: async (p) => {

@@ -9,6 +9,7 @@ import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
 import { claimed } from "./claims";
 import { People, peopleRoutes } from "./people";
+import { InboxRequests, inboxRoutes, keepInboxes, overviewInboxes } from "./inbox";
 import { Sessions } from "./sessions";
 import { Documents } from "./documents";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
@@ -30,16 +31,9 @@ import {
   deploymentOwner,
   signsIn,
 } from "./auth";
-import { freshness, snapshotSchema, STALE_AFTER, type Snapshot } from "../src/model";
+import { freshness, snapshotSchema, type Snapshot } from "../src/model";
 import { Machines, type MachineCaller, type MachineRole } from "./machines";
-import {
-  currentInbox,
-  inboxActionReportSchema,
-  inboxActionRequestSchema,
-  type InboxAction,
-  type InboxActionReport,
-  type PendingInboxAction,
-} from "../src/inbox-model";
+import type { InboxAction, InboxActionReport } from "../src/inbox-model";
 import {
   closeReportSchema,
   currentWork,
@@ -50,9 +44,6 @@ import {
   type PendingClose,
 } from "../src/work-model";
 
-// How long a machine on duty keeps its last inbox read through scans that
-// could not learn they were on duty.
-const KEEP_INBOX_MS = 3 * STALE_AFTER;
 // A portfolio belongs to one owner, not a shared global collection.
 export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
@@ -62,6 +53,7 @@ export class Portfolio extends DurableObject<Env> {
   private sessions: Sessions;
   private profiles: People;
   private pushes: PushDevices;
+  private inbox: InboxRequests;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
@@ -70,6 +62,7 @@ export class Portfolio extends DurableObject<Env> {
     this.profiles = new People(ctx.storage);
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
+    this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
@@ -87,12 +80,6 @@ export class Portfolio extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS issue_closes (issue INTEGER PRIMARY KEY, requested INTEGER NOT NULL, email TEXT NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
     );
-    this.ctx.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS inbox_actions (thread TEXT PRIMARY KEY, action TEXT NOT NULL, requested INTEGER NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
-    );
-    if (!this.ctx.storage.sql.exec<{name: string}>("PRAGMA table_info(inbox_actions)").toArray().some(c => c.name === "issue"))
-      this.ctx.storage.sql.exec("ALTER TABLE inbox_actions ADD COLUMN issue INTEGER");
-
   }
   // Each machine's collector publishes its own snapshot. The first machine in
   // order that published in the last five minutes also reads the inbox and
@@ -231,15 +218,12 @@ export class Portfolio extends DurableObject<Env> {
       snapshot.host,
       Date.now(),
     );
-    // The machine on duty keeps its last inbox read through a scan that could
-    // not learn it was on duty, so a brief outage does not empty the inbox.
-    // The read keeps its own time, so its age shows, and lapses after a few
-    // missed scans.
-    const last = !snapshot.inbox && this.collectorDuties(snapshot.host)
+    // The machine on duty keeps its last inbox reads through a scan that
+    // could not learn it was on duty (worker/inbox.ts).
+    const last = this.collectorDuties(snapshot.host)
       ? this.ctx.storage.sql.exec<{ payload: string }>("SELECT payload FROM snapshots WHERE host=?", snapshot.host).toArray()[0]
       : undefined;
-    const kept = last ? (JSON.parse(last.payload) as Snapshot).inbox : undefined;
-    const stored = kept && Date.now() - kept.observedAt < KEEP_INBOX_MS ? { ...snapshot, inbox: kept } : snapshot;
+    const stored = keepInboxes(snapshot, last ? (JSON.parse(last.payload) as Snapshot) : undefined);
     const result = this.ctx.storage.sql
       .exec<{ host: string }>(
         "INSERT INTO snapshots(host,observed,payload) VALUES(?,?,?) ON CONFLICT(host) DO UPDATE SET observed=excluded.observed,payload=excluded.payload WHERE excluded.observed > snapshots.observed RETURNING host",
@@ -332,58 +316,14 @@ export class Portfolio extends DurableObject<Env> {
       .filter((c) => c.state === "queued")
       .map(({ issue, requestedAt }) => ({ issue, requestedAt }));
   }
-  inboxActions(): InboxAction[] {
-    return this.ctx.storage.sql
-      .exec<{ thread: string; action: InboxAction["action"]; requested: number; state: InboxAction["state"]; message: string | null; updated: number; issue: number | null }>(
-        "SELECT thread,action,requested,state,message,updated,issue FROM inbox_actions ORDER BY requested",
-      )
-      .toArray()
-      .map((r) => ({ threadId: r.thread, action: r.action, requestedAt: r.requested, state: r.state, message: r.message, updatedAt: r.updated, ...(r.issue !== null ? { issue: r.issue } : {}) }));
+  // Inbox requests and thread text are each inbox owner's (worker/inbox.ts).
+  inboxActions() { return this.inbox.list(); }
+  requestInboxAction(threadId: string, action: InboxAction["action"], requester: string, cancel = false, issue?: number) {
+    return this.inbox.request(threadId, action, requester, cancel, issue);
   }
-  // One request per thread. Only a thread in the latest inbox read can be
-  // queued; a queued request can be withdrawn before the machine on duty
-  // applies it.
-  requestInboxAction(threadId: string, action: InboxAction["action"], cancel = false, issue?: number) {
-    const now = Date.now();
-    this.ctx.storage.sql.exec("DELETE FROM inbox_actions WHERE state<>'queued' AND updated<?", now - 7 * 86400_000);
-    if (cancel) {
-      this.ctx.storage.sql.exec("DELETE FROM inbox_actions WHERE thread=? AND action=? AND state='queued'", threadId, action);
-      return this.inboxActions();
-    }
-    const thread = currentInbox(this.overview())?.threads.find((t) => t.id === threadId);
-    if (!thread) return null;
-    if (action === "link" && (!issue || !currentWork(this.overview())?.issues.some(i => i.number === issue && i.open))) return null;
-    if (action !== "link" && issue !== undefined) return null;
-    // A different queued operation must finish before accepting another one.
-    const pending = this.inboxActions().find(a => a.threadId === threadId && a.state === "queued");
-    if (pending) return pending.action === action && pending.issue === issue ? this.inboxActions() : null;
-    this.ctx.storage.sql.exec(
-      "INSERT INTO inbox_actions(thread,action,requested,state,message,updated,issue) VALUES(?,?,?,'queued',NULL,?,?) ON CONFLICT(thread) DO UPDATE SET action=excluded.action,requested=excluded.requested,state='queued',message=NULL,updated=excluded.updated,issue=excluded.issue",
-      threadId, action, now, now, issue ?? null,
-    );
-    return this.inboxActions();
-  }
-  pendingInboxActions(): PendingInboxAction[] {
-    return this.inboxActions()
-      .filter((a) => a.state === "queued")
-      .map(({ threadId, action, requestedAt, issue }) => ({ threadId, action, requestedAt, ...(issue !== undefined ? { issue } : {}) }));
-  }
-  // Only the exact request the machine on duty was given, and only while
-  // still queued.
-  reportInboxAction(r: InboxActionReport) {
-    const updated = this.ctx.storage.sql
-      .exec(
-        "UPDATE inbox_actions SET state=?,message=?,updated=? WHERE thread=? AND action=? AND requested=? AND issue IS ? AND state='queued' RETURNING thread",
-        r.state, r.message, Date.now(), r.threadId, r.action, r.requestedAt, r.issue ?? null,
-      )
-      .toArray();
-    return { updated: updated.length === 1 };
-  }
-  // One thread's latest message text, read from the stored inbox on demand.
-  inboxThread(threadId: string) {
-    const thread = currentInbox(this.overview())?.threads.find((t) => t.id === threadId);
-    return thread ? { body: thread.body ?? null, unsubscribe: thread.unsubscribe ?? null } : null;
-  }
+  pendingInboxActions() { return this.inbox.pending(); }
+  reportInboxAction(r: InboxActionReport) { return this.inbox.report(r); }
+  inboxThread(threadId: string, account: string) { return this.inbox.thread(threadId, account); }
   // Notifications are each person's (worker/push.ts): their devices, their
   // conversations' notices.
   subscribePush(endpoint: string, email: string) {
@@ -804,17 +744,8 @@ export async function handle(
     }
     return Response.json(await store.reportClose(report));
   }
-  if (url.pathname === "/api/inbox/actions" && request.method === "GET")
-    return Response.json({ actions: (await onDuty()) ? await store.pendingInboxActions() : [] });
-  if (url.pathname === "/api/inbox/actions" && request.method === "POST") {
-    let report;
-    try {
-      report = inboxActionReportSchema.parse(await readJson(request, 4096));
-    } catch {
-      return Response.json({ error: "Invalid report" }, { status: 400 });
-    }
-    return Response.json(await store.reportInboxAction(report));
-  }
+  const inbox = await inboxRoutes(request, store, caller, onDuty);
+  if (inbox) return inbox;
   if (url.pathname === "/api/push/key" && request.method === "GET")
     return env.VAPID_PRIVATE_KEY
       ? Response.json({ key: vapidPublicKey(env.VAPID_PRIVATE_KEY) })
@@ -838,27 +769,6 @@ export async function handle(
       return Response.json({ error: "Notifications are not set up yet." }, { status: 503 });
     else await trace("push.subscribe", {}, () => store.subscribePush(input.endpoint, caller as string));
     return Response.json({ ok: true });
-  }
-  if (url.pathname === "/api/inbox/act" && request.method === "POST") {
-    let input;
-    try {
-      input = inboxActionRequestSchema.parse(await readJson(request, 512));
-    } catch {
-      return Response.json({ error: "Invalid inbox request" }, { status: 400 });
-    }
-    if (!(await store.rate(`inbox:${caller}`, 120, 60_000)))
-      return Response.json({ error: "Try again shortly." }, { status: 429 });
-    const actions = await trace("inbox.action", {}, () =>
-      store.requestInboxAction(input.threadId, input.action, input.cancel, input.issue));
-    return Response.json(actions ? { actions } : { error: "This email or work item is unavailable, or another action is still queued." }, { status: actions ? 200 : 404 });
-  }
-  const inboxThread = /^\/api\/inbox\/threads\/([a-f0-9]{10,40})$/.exec(url.pathname);
-  if (inboxThread && request.method === "GET") {
-    const thread = await trace("inbox.read", {}, () => store.inboxThread(inboxThread[1]));
-    return Response.json(thread ? { thread } : { error: "This email is no longer in the inbox." }, {
-      status: thread ? 200 : 404,
-      headers: { "Cache-Control": "no-store" },
-    });
   }
   if (url.pathname === "/api/work/close" && request.method === "POST") {
     let number;
@@ -899,30 +809,10 @@ export async function handle(
   }
   if (url.pathname === "/api/overview" && request.method === "GET")
     return Response.json({
-      // Message text stays out of the 30-second poll; it is read per thread.
-      // A browser's own sign-in gets no inbox and no work item's email links;
-      // work text is shown as written.
-      snapshots: (await store.overview()).map(({ inbox, ...snapshot }) =>
-        browser
-          ? {
-              ...snapshot,
-              ...(snapshot.work && {
-                work: {
-                  ...snapshot.work,
-                  issues: snapshot.work.issues?.map(({ emailLinks: _links, ...issue }) => issue) ?? null,
-                },
-              }),
-            }
-          : inbox
-            ? {
-                ...snapshot,
-                inbox: {
-                  ...inbox,
-                  threads: inbox.threads.map(({ body: _body, ...thread }) => thread),
-                },
-              }
-            : snapshot,
-      ),
+      // Message text stays out of the 30-second poll; a person reads their
+      // own one thread at a time, and sees only counts of everyone else's
+      // (worker/inbox.ts). Work text is shown as written.
+      snapshots: (await store.overview()).map((snapshot) => overviewInboxes(snapshot, browser ? null : (caller as string))),
       ...(browser && { emailHidden: true }),
       archives: await store.archives(),
       closes: await store.closes(),

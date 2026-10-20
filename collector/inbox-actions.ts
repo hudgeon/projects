@@ -3,13 +3,14 @@ import { request } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 import {
+  gmailUrl,
   pendingInboxActionSchema,
+  sameAccount,
   type Inbox,
   type InboxActionReport,
   type PendingInboxAction,
 } from "../src/inbox-model";
 import { emailLinks, type Issue } from "../src/work-model";
-import { gmailUrl } from "../src/inbox-model";
 import { userGh } from "./close";
 import { unsubscribeOptions, type Gws } from "./inbox";
 
@@ -289,13 +290,15 @@ export async function linkInboxThread(
   return report("done", "Linked to bigger work.");
 }
 
-// The machine on duty's scheduled step, beside Mark done: fetch queued requests, apply
-// each, report back. Without a fresh inbox read a request stays queued.
+// The machine on duty's scheduled step, beside Mark done: fetch queued
+// requests, apply each in the inbox it names with that account's own sign-in,
+// report back. Without a fresh read of that inbox a request stays queued; a
+// request from before accounts were recorded is the first connected inbox's.
 export async function applyInboxActions(
   endpoint: string,
   headers: Record<string, string>,
-  inbox: Inbox | undefined,
-  run: Gws,
+  inboxes: Inbox[] | undefined,
+  login: (account: string) => Gws | null,
   click: OneClick = oneClick,
   work?: { issues: Issue[] | null; repo?: string },
 ) {
@@ -315,8 +318,13 @@ export async function applyInboxActions(
     .parse(await call());
   for (const action of actions.slice(0, 20)) {
     let report: InboxActionReport;
+    const inbox = action.account
+      ? inboxes?.find((i) => sameAccount(i.account, action.account!))
+      : inboxes?.[0];
+    const run = inbox && login(inbox.account);
     try {
-      if (!inbox || inbox.state === "unavailable") throw Error("No inbox read");
+      if (!inbox || !run) throw Error("Not connected here");
+      if (inbox.state === "unavailable") throw Error("No inbox read");
       report =
         action.action === "link"
           ? await linkInboxThread(
@@ -330,7 +338,10 @@ export async function applyInboxActions(
       report = {
         ...action,
         state: "queued",
-        message: "The source was unavailable from this machine; retrying.",
+        message:
+          inbox && run
+            ? "The source was unavailable from this machine; retrying."
+            : "This mailbox is not connected on the machine on duty; retrying.",
       };
     }
     await call({

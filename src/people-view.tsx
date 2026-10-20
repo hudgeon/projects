@@ -42,6 +42,15 @@ export function saveEveryone(everyone: boolean) {
     /* A private window keeps the choice for this visit only. */
   }
 }
+// The choice as the views share it, kept on this device when it changes.
+export function useEveryone() {
+  const [everyone, setEveryone] = useState(savedEveryone);
+  const choose = (value: boolean) => {
+    saveEveryone(value);
+    setEveryone(value);
+  };
+  return [everyone, choose] as const;
+}
 // Settings: the signed-in person's own name.
 export function ProfilePanel() {
   const client = useQueryClient();

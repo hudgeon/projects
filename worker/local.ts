@@ -1,6 +1,6 @@
 // Local emulator only. Production's entrypoint never imports this file.
 import { documentPath, handle, runnerRoutes, secure } from "./index";
-import { authorize } from "./auth";
+import { authorize, deploymentOwner } from "./auth";
 export { Portfolio, Conversation } from "./index";
 export default {
   async fetch(request: Request, env: Env) {
@@ -12,7 +12,9 @@ export default {
         ? null
         : runnerRoutes.has(url.pathname)
           ? await authorize(request, env, false, true)
-          : "local",
+          // The local person: OWNER_EMAIL when the local config sets it, so a
+          // collector's inbox for that address shows here.
+          : deploymentOwner(env) || "local",
     );
     // A document keeps production's isolation here too.
     return documentPath.test(url.pathname) ? secure(response, true) : response;

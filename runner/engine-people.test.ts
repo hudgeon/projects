@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { NativeOptions } from "./native";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { nativeEnv, type NativeOptions } from "./native";
+import type { InboxLogin } from "../collector/config";
 import { executeRun } from "./engine";
 import { makeRun, fixture, complete, dispatch, result, engineOptions } from "./run-fixtures";
 
@@ -23,7 +26,7 @@ async function turns(o: ReturnType<typeof engineOptions>) {
 test("the coordinator and helpers are told whose conversation it is, and every turn carries the author", async () => {
   const dir = await fixture(), o = engineOptions(dir);
   o.person = matt;
-  o.inboxAccount = "owner@example.com";
+  o.inboxes = [{ account: "owner@example.com" }];
   o.browserSignIn = "owner";
   o.browser = async () => ({ endpoint: "wss://projects.example.com/api/browser/x/cdp", capability: "c".repeat(40), outputDir: dir });
   try {
@@ -34,6 +37,7 @@ test("the coordinator and helpers are told whose conversation it is, and every t
     assert.match(helper.prompt, /No mailbox is connected for Matt on this machine/);
     assert.doesNotMatch(helper.prompt, /owner@example\.com/, "another person's mailbox is never named");
     assert.deepEqual([master.person, helper.person], [matt, matt]);
+    assert.deepEqual([master.mailbox, helper.mailbox], [null, null], "no mailbox of Matt's is connected here");
     // A claim from a Worker that hands no person over reads as before.
     const [plainMaster, plainHelper] = await turns(engineOptions(dir));
     assert.doesNotMatch(plainMaster.prompt + plainHelper.prompt, /This conversation is|asked for this work|signed in to Projects as/);
@@ -44,7 +48,7 @@ test("the coordinator and helpers are told whose conversation it is, and every t
 });
 test("the email lane hears whose mailbox it may use", async () => {
   const dir = await fixture(), o = engineOptions(dir, { ...makeRun(), lane: "quick" });
-  o.inboxAccount = "owner@example.com";
+  o.inboxes = [{ account: "owner@example.com" }];
   o.person = matt;
   const prompts: string[] = [];
   o.turn = async (opts) => {
@@ -59,4 +63,27 @@ test("the email lane hears whose mailbox it may use", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+test("a connected mailbox reaches every turn of its owner's conversation as the gws sign-in", async () => {
+  const dir = await fixture(), o = engineOptions(dir);
+  const mine = { account: "Matt.Smith@example.com", configDir: "/Users/owner/.config/gws-matt" };
+  o.person = matt;
+  o.inboxes = [{ account: "owner@example.com" }, mine];
+  try {
+    const [master, helper] = await turns(o);
+    assert.deepEqual([master.mailbox, helper.mailbox], [mine, mine]);
+    assert.match(helper.prompt, /Matt's email is in Matt\.Smith@example\.com; use gws/);
+    assert.doesNotMatch(helper.prompt, /gws-matt|owner@example\.com/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  // The environment carries the sign-in: the person's own directory, the
+  // machine's default for the owner's account, and none at all for a person
+  // whose mailbox is not connected. Without a person, nothing changes.
+  const config = (person?: typeof matt, mailbox?: InboxLogin | null) => nativeEnv(undefined, person, mailbox).GOOGLE_WORKSPACE_CLI_CONFIG_DIR;
+  assert.equal(config(matt, mine), "/Users/owner/.config/gws-matt");
+  assert.equal(config(matt, { account: "matt.smith@example.com" }), undefined);
+  assert.equal(config(matt, null), path.join(tmpdir(), "projects-no-mailbox"));
+  assert.equal(config(undefined, null), undefined);
+  assert.equal(config(matt), undefined);
 });

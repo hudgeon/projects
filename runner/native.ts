@@ -1,12 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScreenshotInput } from "../src/screenshot-model";
 import type { ExecutionEvent, FailureReason } from "../src/telemetry";
 import type { ConnectorAccess } from "./connectors";
 import type { Person } from "../src/people-model";
+import type { InboxLogin } from "../collector/config";
 import type {
   LivePlanStep,
   NativeActivity,
@@ -26,6 +25,8 @@ import {
   type FileTouch,
 } from "./native-events";
 import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
+import { nativeEnv } from "./native-env";
+export { nativeEnv } from "./native-env";
 import { fullAccess, codexPermissions, codexFilesystem } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
 
@@ -80,47 +81,14 @@ export type NativeOptions = {
   onFile?: (file: FileTouch) => void;
   // The user's connectors, for helpers only.
   connectors?: ConnectorAccess;
-  // Whose commits a change turn makes.
+  // Whose commits a change turn makes, and the Gmail sign-in gws uses: their
+  // own mailbox's, or none when no mailbox of theirs is connected here.
   person?: Person;
+  mailbox?: InboxLogin | null;
   binaries?: { codex?: string; claude?: string };
   // First wait before re-running a turn a busy model could not start.
   retryDelayMs?: number;
 };
-// The runner credential, Doppler credentials and provider API keys never reach
-// a coding process; native tools use the machine's own logins.
-export function nativeEnv(browser?: NativeOptions["browser"], person?: Person): NodeJS.ProcessEnv {
-  // Wrangler augments ProcessEnv with the Worker's bindings, which no native
-  // process has.
-  const env = Object.fromEntries(
-    [
-      "HOME",
-      "PATH",
-      "USER",
-      "LOGNAME",
-      "SHELL",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "TERM",
-      "SSH_AUTH_SOCK",
-      "CODEX_HOME",
-    ].flatMap((key) => (process.env[key] ? [[key, process.env[key]!]] : [])),
-  ) as NodeJS.ProcessEnv;
-  // A change sandbox cannot write ~/.cache, so uv (the work repository's
-  // email draft helper, for one) caches in the temporary directory.
-  env.UV_CACHE_DIR = path.join(tmpdir(), "projects-uv-cache");
-  // Commits are authored as the conversation's owner; the committer and push
-  // credentials stay the machine's.
-  if (person) {
-    env.GIT_AUTHOR_NAME = person.name;
-    env.GIT_AUTHOR_EMAIL = person.email;
-  }
-  if (browser) {
-    env.PLAYWRIGHT_MCP_CDP_ENDPOINT = browser.endpoint;
-    env.PLAYWRIGHT_MCP_CDP_HEADERS = `Authorization: Bearer ${browser.capability}`;
-  }
-  return env;
-}
 export function stopProcess(child: ChildProcessWithoutNullStreams) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null)
     return;
@@ -141,8 +109,8 @@ export function stopProcess(child: ChildProcessWithoutNullStreams) {
   timer.unref();
 }
 export class NativeStopError extends Error {}
-// A failure with a known cause, native or the runner's own: its message is what
-// the user reads, its reason the safe category telemetry keeps.
+// A failure with a known cause, native or the runner's own: its message is
+// what the user reads, its reason the safe category telemetry keeps.
 export class Failure extends Error {
   constructor(
     readonly reason: FailureReason,
@@ -363,7 +331,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       "--listen",
       "stdio://",
     ],
-    { cwd: o.cwd, env: nativeEnv(o.browser, o.person), detached: true, stdio: "pipe" },
+    { cwd: o.cwd, env: nativeEnv(o.browser, o.person, o.mailbox), detached: true, stdio: "pipe" },
   );
   let next = 1,
     finalText = "",
@@ -663,9 +631,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
   }
 }
 // A turn ends at its result. Claude keeps its process while a background
-// command the agent left runs, then starts a turn of its own nobody reads when
-// it finishes. Whatever still runs this long after the result is stopped; the
-// result stands.
+// command the agent left runs, then starts a turn of its own that nobody reads.
+// Whatever still runs this long after the result is stopped; the result stands.
 export const RESULT_EXIT_MS = 30_000;
 async function claudeTurn(o: NativeOptions): Promise<unknown> {
   const session = o.sessionId ?? randomUUID();
@@ -732,7 +699,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   ];
   const child = spawn(o.binaries?.claude ?? "claude", args, {
     cwd: o.cwd,
-    env: nativeEnv(o.browser, o.person),
+    env: nativeEnv(o.browser, o.person, o.mailbox),
     detached: true,
     stdio: "pipe",
   });

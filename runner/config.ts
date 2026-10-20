@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { configSchema } from "../collector/collect";
+import { configSchema } from "../collector/config";
 import { helperPolicySchema } from "./connectors";
 import { contextConfigSchema } from "./context";
 import { telemetry } from "../src/telemetry";

@@ -70,8 +70,8 @@ export const worktreeSchema = z
     unpushed: count.nullable().optional(),
     isPrimary: z.boolean(),
     error: text.nullable(),
-    // Git still lists it, but its folder is confirmed gone. Unpushed counts
-    // its last commit; without that count (older collectors) push is unknown.
+    // Git still lists it, but its folder is gone. Unpushed counts its last
+    // commit; without that count (older collectors) push is unknown.
     prunable: z.literal(true).optional(),
   })
   .strict();
@@ -120,8 +120,8 @@ export const projectSchema = z
         github: sourceSchema,
         codex: sourceSchema,
         claude: sourceSchema,
-        // Older collectors also send a placeholder for an app nothing reads;
-        // it is accepted so their snapshots still publish, and never shown.
+        // An older collector's placeholder for an app nothing reads: accepted
+        // so its snapshots still publish, never shown.
         grok: sourceSchema.optional(),
       })
       .strict(),
@@ -135,6 +135,8 @@ export const snapshotSchema = z
     projects: z.array(projectSchema).max(100),
     unassignedSessions: z.array(sessionSchema).max(2000),
     work: workSnapshotSchema.optional(),
+    // One per connected account; `inbox` alone is an older collector's owner's.
+    inboxes: z.array(inboxSchema).max(10).optional(),
     inbox: inboxSchema.optional(),
     quotas: z
       .object({ codex: quotaSchema, claude: quotaSchema })
@@ -176,8 +178,8 @@ export function freshness(at: number, now = Date.now()) {
   return now - at > STALE_AFTER || at > now + 60_000;
 }
 // Machines can share a subscription. Select one observation; never add them.
-// A failed newest read is shown as unavailable rather than hiding it with an
-// older successful value. The source machine remains visible in the UI.
+// A failed newest read shows as unavailable rather than hiding behind an older
+// successful value. The source machine stays visible in the UI.
 export function currentQuota(
   snapshots: Snapshot[],
   provider: "codex" | "claude",
@@ -211,8 +213,8 @@ function worktreeFor(cwd: string, worktrees: Worktree[]) {
 export const IN_PROGRESS_HOURS = 24;
 // Checkouts someone is working in: a session whose folder is inside the
 // worktree and that is mid-turn or moved within IN_PROGRESS_HOURS. An open
-// Claude process or unarchived Codex task with older activity is not evidence
-// of work, and neither is anything in a stale observation (at = when observed).
+// Claude process or unarchived Codex task with older activity is no evidence
+// of work, nor is anything in a stale observation (at = when observed).
 export function attended(project: Project, at: number, now = Date.now()) {
   const paths = new Set<string>();
   if (freshness(at, now)) return paths;
@@ -225,14 +227,14 @@ export function attended(project: Project, at: number, now = Date.now()) {
   }
   return paths;
 }
-// Commits that exist only on this machine; older snapshots fall back to the count
-// ahead of upstream. Null means the push state is unknown, never clean.
+// Commits only this machine has; older snapshots fall back to the count ahead
+// of upstream. Null is unknown push state, never clean.
 export const pushPending = (w: Worktree) =>
   w.unpushed === undefined ? w.ahead : w.unpushed;
 const unsaved = (w: Worktree) =>
   w.changed > 0 || (pushPending(w) ?? 0) > 0;
 // Unreadable or conflicting state always needs a look; uncommitted or unpushed
-// work does when no session is attending it, because that is abandoned work.
+// work does when no session attends it: that is abandoned work.
 function checkoutConcern(w: Worktree, active: Set<string>) {
   return Boolean(w.error || w.conflicts || (unsaved(w) && !active.has(w.path)));
 }
@@ -313,10 +315,9 @@ export function setMachineNames(machines: Pick<MachineView, "id" | "name">[]) {
 export function hostName(host: string) {
   return machineNames.get(host) ?? host;
 }
-// How to reopen a session in its own app, on the machine it lives on. The command
-// is pasted into a shell, so only a plain identifier gets one. The ChatGPT
-// desktop app handles codex://threads links; Claude has no link to an
-// existing session.
+// How to reopen a session in its own app on its machine. The command is pasted
+// into a shell, so only a plain identifier gets one. The ChatGPT desktop app
+// handles codex://threads links; Claude has no link to an existing session.
 export function restart(app: Session["app"], id: string) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,79}$/.test(id)) return null;
   return app === "Codex"
@@ -387,7 +388,7 @@ export function threads(
   return out.sort((a, b) => order[a.kind] - order[b.kind] || b.at - a.at);
 }
 // Ranking uses when work last moved (a session or PR), not when a changed
-// checkout happened to be observed; any thread at all still counts as active.
+// checkout was observed; any thread at all still counts as active.
 export function lastActivity(list: Thread[]) {
   const moved = list
     .filter((t) => t.kind !== "checkout")
@@ -493,10 +494,10 @@ export type HostHealth = {
   verdict: "clean" | "unverified" | "progress" | "cleanup" | "stale";
   problems: HostProblem[];
 };
-// Is this machine clean? Only a fresh snapshot with nothing uncommitted, unpushed,
-// conflicting, cluttered or unreadable qualifies. A checkout whose push state
-// is unknown stays unverified rather than assumed clean. Work a
-// session is attending is in progress: not clean, but not cleanup either.
+// Is this machine clean? Only a fresh snapshot with nothing uncommitted,
+// unpushed, conflicting, cluttered or unreadable qualifies. Unknown push state
+// stays unverified, never clean. Work a session attends is in progress: not
+// clean, not cleanup either.
 export function hostHealth(snapshot: Snapshot, now = Date.now()): HostHealth {
   const h: HostHealth = {
     host: snapshot.host,

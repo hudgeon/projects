@@ -121,10 +121,11 @@ every start logs the `release` it runs. Options:
   `claude,codex`. Conversations never start an app that is not listed.
 - `--work-repo owner/repo` (optional): a repository whose issues labelled
   `work` are your work items. Without it, work items and Mark done are off.
-- `--inbox you@example.com` (optional): a Gmail account read through `gws`.
-  Email replies also expect a `compose-email` skill in the work repository.
-  Conversations of the person whose address this is work in it; anyone else's
-  conversation is told no mailbox is connected for them until theirs is.
+- `--inbox you@example.com` (optional): your own Gmail account, read with the
+  machine's default `gws` sign-in. Email replies also expect a `compose-email`
+  skill in the work repository. Your conversations work in it; another
+  person's work in their own inbox once it is connected (below), and until
+  then are told no mailbox is connected for them.
 - `--collector-label`, `--runner-label` (optional): launchd labels for the two
   services, when they should differ from the defaults. They are kept in
   `machine.json`, so later runs restart the same services.
@@ -139,6 +140,48 @@ token files. The collector runs with only its own token and the GitHub App's
 secrets, and the runner reads its token once at start. A token file that
 already exists, or that `machine.json` names, still takes precedence. Replace
 tokens in Doppler after **Replace tokens**, then restart the runner.
+
+### Connect a person's inbox
+
+Each person's mail is read, archived and drafted with their own Gmail sign-in
+on the machine on duty, kept in a `gws` config directory of its own under your
+macOS user, encrypted with the key in that user's keychain like your own. The
+trust boundary is that macOS user, not Projects: anyone who can act as it on
+the machine can read every connected person's Gmail credentials, so connect
+only people who accept that, on a machine only you use. With that person at
+the keyboard, once, using the OAuth client your `gws` already has:
+
+```bash
+mkdir -p ~/.config/gws-ada && cp ~/.config/gws/client_secret.json ~/.config/gws-ada/
+```
+
+```bash
+GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-ada gws auth login --services gmail
+```
+
+They sign in to their own Google account in the browser that opens. Confirm
+the directory is theirs:
+
+```bash
+GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-ada gws gmail users getProfile --params '{"userId":"me"}'
+```
+
+Then list the account in `machine.json` with that directory, and run the
+installer again so the runner restarts with it (the collector reads the file
+at its next scan):
+
+```json
+"inboxAccounts": [{ "account": "ada@example.com", "configDir": "/Users/you/.config/gws-ada" }]
+```
+
+The collector reads each account with its own directory and refuses one whose
+sign-in belongs to someone else: a wrong sign-in shows as that inbox being
+unavailable, never as another person's mail. Each inbox's text goes only to
+its owner; everyone sees each person's count and the email links on work
+items. That person's conversations run `gws` signed in as their account, so
+the email lane and the work repository's draft helper work in their mailbox;
+until it is connected, their sessions get no `gws` sign-in at all. Your own
+account stays `--inbox`, read with the machine's default sign-in.
 
 Helpers can use the apps' connectors, except to send email. To also let Claude
 helpers use local MCP servers you already run, list their names under

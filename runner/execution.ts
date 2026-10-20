@@ -3,6 +3,7 @@
 import type { Screenshot, ScreenshotInput } from "../src/screenshot-model";
 import type { Agent, BrowserSignIn, Child, Progress, Run, RunMessage, RunnerHost } from "../src/run-model";
 import type { Person } from "../src/people-model";
+import type { InboxLogin } from "../collector/config";
 import type { NativeOptions, nativeProcessStopped } from "./native";
 import type { ProjectDirectory, liveChanges, prepareWorkspace, pruneSaved, saveWorkspace, workspaceEvidence } from "./workspaces";
 import type { ConnectorAccess } from "./connectors";
@@ -41,8 +42,9 @@ export type EngineOptions = {
   host: RunnerHost;
   // The native apps signed in on this machine, preferred first.
   agents?: Agent[];
-  // The email lane's inbox and drafting repository.
-  inboxAccount?: string;
+  // The inboxes connected on this machine, each with its gws sign-in, and
+  // the email lane's drafting repository.
+  inboxes?: InboxLogin[];
   workRepo?: string;
   // Whose conversation this is, as the claim said: named in prompts and the
   // author of helpers' commits; never in receipts or telemetry.

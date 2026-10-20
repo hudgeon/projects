@@ -43,19 +43,63 @@ export const inboxSchema = z
   })
   .strict();
 export type Inbox = z.infer<typeof inboxSchema>;
-// The machine on duty reads Gmail; the
-// newest scan wins.
-export function currentInbox(snapshots: { inbox?: Inbox }[]) {
-  return snapshots
-    .flatMap((s) => (s.inbox ? [s.inbox] : []))
-    .sort((a, b) => b.observedAt - a.observedAt)[0];
-}
 export type InboxThread = z.infer<typeof inboxThreadSchema>;
-// The owner's requests to archive or leave a list. Like Mark done, the Worker only
-// queues a thread ID; the machine on duty applies it with its own Gmail login.
+export const sameAccount = (a: string, b: string) =>
+  a.toLowerCase() === b.toLowerCase();
+type Inboxed = { inbox?: Inbox; inboxes?: Inbox[] };
+// Every inbox a snapshot carries: one per connected account, or the single
+// inbox of a collector from before accounts were listed, which is its owner's.
+export const snapshotInboxes = (s: Inboxed) =>
+  s.inboxes ?? (s.inbox ? [s.inbox] : []);
+// The machine on duty reads Gmail; the newest read of each account wins.
+export function currentInboxes(snapshots: Inboxed[]) {
+  const newest = new Map<string, Inbox>();
+  for (const inbox of snapshots
+    .flatMap(snapshotInboxes)
+    .sort((a, b) => b.observedAt - a.observedAt))
+    if (!newest.has(inbox.account.toLowerCase()))
+      newest.set(inbox.account.toLowerCase(), inbox);
+  return [...newest.values()];
+}
+// A person's inbox is the account that is their address. Without an address,
+// the newest inbox of all: what a collector from before accounts were listed
+// read, which is its owner's.
+export function currentInbox(snapshots: Inboxed[], account?: string) {
+  const inboxes = currentInboxes(snapshots);
+  return account
+    ? inboxes.find((inbox) => sameAccount(inbox.account, account))
+    : inboxes[0];
+}
+// The inbox holding a thread, whoever's it is: a work item's email link.
+export function inboxWithThread(snapshots: Inboxed[], threadId: string) {
+  return currentInboxes(snapshots).find((inbox) =>
+    inbox.threads.some((thread) => thread.id === threadId),
+  );
+}
+// What everyone else sees of a person's inbox: what counts the threads waiting
+// in it and recognises them on work items, never their subject, sender, text
+// or list links.
+export function countsOnly(inbox: Inbox): Inbox {
+  return {
+    ...inbox,
+    threads: inbox.threads.map(
+      ({ body: _body, unsubscribe: _list, ...thread }) => ({
+        ...thread,
+        subject: "",
+        from: "",
+      }),
+    ),
+  };
+}
+// A person's requests to archive or leave a list, in their own inbox. Like
+// Mark done, the Worker only queues a thread ID; the machine on duty applies
+// it with that account's own Gmail sign-in.
 export const inboxActionSchema = z
   .object({
     threadId: id,
+    // The inbox the thread is in. Absent on a request from before accounts
+    // were recorded, which was the owner's.
+    account: z.email().optional(),
     action: z.enum(["archive", "unsubscribe", "link"]),
     issue: z.number().int().positive().optional(),
     requestedAt: z.number().int().positive(),
@@ -82,6 +126,7 @@ export const inboxActionRequestSchema = z
   );
 export const pendingInboxActionSchema = inboxActionSchema.pick({
   threadId: true,
+  account: true,
   action: true,
   requestedAt: true,
   issue: true,
@@ -166,6 +211,10 @@ export function inboxQueue<T extends ThreadConversation>(
   conversations: T[],
   actions: InboxAction[] = [],
 ) {
+  // Another inbox's requests never clear this one's threads.
+  actions = actions.filter(
+    (a) => !a.account || sameAccount(a.account, inbox.account),
+  );
   const latest = new Map<string, T>();
   for (const run of conversations)
     if (

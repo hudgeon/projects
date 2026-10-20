@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
-import { collect, command, configSchema } from "./collect";
+import { collect, gwsFor } from "./collect";
+import { configSchema, inboxLogins } from "./config";
 import { applyCloses } from "./close";
 import { oneClick, applyInboxActions } from "./inbox-actions";
 import { cacheIssues } from "./work";
@@ -90,14 +91,19 @@ async function main() {
         );
         process.exitCode = 1;
       }
-    // Archive and unsubscribe requests use this scan's own inbox read.
-    if (config.inboxAccount)
+    // Archive and unsubscribe requests use this scan's own inbox reads, each
+    // applied with the sign-in of the inbox it names.
+    const logins = inboxLogins(config);
+    if (logins.length)
       try {
         await applyInboxActions(
           config.endpoint,
           headers,
-          snapshot.inbox,
-          (args) => command("gws", args),
+          snapshot.inboxes,
+          (account) => {
+            const login = logins.find((l) => l.account.toLowerCase() === account.toLowerCase());
+            return login ? gwsFor(login) : null;
+          },
           oneClick,
           { issues, repo: config.workRepo },
         );

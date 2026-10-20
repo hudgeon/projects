@@ -9,7 +9,7 @@ import {
 } from "../src/inbox-model";
 import { parseNavigation, workSearch } from "../src/navigation";
 import { workProject } from "../src/work-view";
-import { activityContext } from "../src/inbox-view";
+import { activityContext } from "../src/inbox-row";
 import type { Snapshot } from "../src/model";
 import { issue } from "./work-fixtures";
 const thread = {

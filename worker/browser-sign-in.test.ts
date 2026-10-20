@@ -79,14 +79,14 @@ test("a machine the deployment signs in gets each conversation browser signed in
     const mailed = inboxSnapshot();
     mailed.work.issues = [issue(7, {body: "## Current position\nStatus: open.", emailLinks: emailLinks(linked)})];
     await (await getStore()).publish(snapshotSchema.parse(mailed));
-    await (await getStore()).requestInboxAction("bbbbbbbbbb01", "archive");
+    await (await getStore()).requestInboxAction("bbbbbbbbbb01", "archive", "owner@example.com");
     const fromEmail = await (await getStore()).createRun({requestId: randomUUID(), text: "Email: [Contract](https://mail.google.com/mail/u/0/#inbox/bbbbbbbbbb01)", projectId: null, agent: "auto", workIssue: null, emailThread: "bbbbbbbbbb01"}, "owner@example.com");
     await (await getStore()).cancelRun(fromEmail.id);
     assert.ok((await (await getStore()).listRuns({})).some((run) => run.id === fromEmail.id));
     const seen = await (await mf.dispatchFetch(origin + "/api/overview", {headers: as(cookie.value)})).json() as PortfolioView;
     assert.equal(seen.emailHidden, true);
     assert.deepEqual(seen.inboxActions, []);
-    assert.ok(seen.snapshots.length && seen.snapshots.every((s) => !s.inbox));
+    assert.ok(seen.snapshots.length && seen.snapshots.every((s) => !s.inbox && !s.inboxes));
     assert.match(JSON.stringify(seen), /Status: open\./, "the rest of the work item stays");
     assert.doesNotMatch(JSON.stringify(seen), /Weekly news|news@news|Contract|mail\.google|bbbbbbbbbb01|owner@example\.com/);
     const listing = async (query: string) => (await (await mf.dispatchFetch(`${origin}/api/runs${query}`, {headers: as(cookie.value)})).json() as {runs: {id: string}[]}).runs.map((run) => run.id);

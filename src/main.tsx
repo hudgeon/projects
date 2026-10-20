@@ -59,7 +59,7 @@ import { overviewQueryOptions } from "./overview-query";
 import { NotificationPrompt } from "./notifications";
 import { DocumentViewer } from "./document-view";
 import { SignIn, Topbar, useSignOut } from "./topbar";
-import { ProfilePanel, saveEveryone, savedEveryone, useMe } from "./people-view";
+import { ProfilePanel, useEveryone, useMe } from "./people-view";
 import { yours } from "./people-model";
 
 const quotaReasons = {
@@ -562,16 +562,15 @@ function Dashboard() {
   const query = useQuery(overviewQueryOptions);
   const current = useRuns(),
     email = useEmailConversations();
-  // Whose conversations Today and its count show: the signed-in person's,
-  // or everyone's when they ask.
-  const [everyone, setEveryone] = useState(savedEveryone);
+  // Whose work Today and Inbox show: the signed-in person's, or everyone's.
+  const [everyone, setEveryone] = useEveryone();
   const me = useMe().data?.email;
   const signOut = useSignOut();
   if (query.error?.message === "SIGN_IN")
     return (
       <SignIn
         done={() => {
-          // Conversation lists also failed while signed out; reload them all.
+          // Conversation lists failed while signed out too; reload them all.
           void client.resetQueries();
         }}
       />
@@ -580,9 +579,9 @@ function Dashboard() {
     snapshots = query.data?.snapshots ?? [];
   const archives = query.data?.archives ?? [];
   const inboxActions = query.data?.inboxActions ?? [];
-  const toHandle = inboxCount(snapshots, email.data?.runs, inboxActions, now);
-  // Matches Today's "Your move": finished conversations not yet marked Done,
-  // and running ones only their owner can unblock.
+  const toHandle = inboxCount(snapshots, email.data?.runs, inboxActions, now, me);
+  // Today's "Your move": finished conversations not yet marked Done, and
+  // running ones only their owner can unblock.
   const waiting = yours(
     current.data?.pages.flatMap((page) => page.runs) ?? [],
     me,
@@ -617,7 +616,7 @@ function Dashboard() {
       lastActivity(threads(g, currentGithub(g, now), now)),
     ]),
   );
-  // Overdue updates stay in this view: an unverified project is never fine.
+  // Overdue updates stay here: an unverified project is never fine.
   const attention = new Set(
     currentGroups
       .filter((g) =>
@@ -664,10 +663,7 @@ function Dashboard() {
             now={now}
             me={me}
             everyone={everyone}
-            onEveryone={(value) => {
-              saveEveryone(value);
-              setEveryone(value);
-            }}
+            onEveryone={setEveryone}
           />
         )}
         {view === "inbox" && (
@@ -678,6 +674,8 @@ function Dashboard() {
             selectedEmail={navigation.email}
             emailHidden={query.data?.emailHidden}
             now={now}
+            everyone={everyone}
+            onEveryone={setEveryone}
           />
         )}
         {view === "archive" && (

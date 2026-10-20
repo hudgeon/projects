@@ -12,6 +12,7 @@ import {
   screenshotInputSchema,
 } from "../src/screenshot-model";
 import { machineSecret } from "../collector/collect";
+import { inboxLogins } from "../collector/config";
 import {
   browserSignInSchema,
   laneSchema,
@@ -128,8 +129,7 @@ function client(endpoint: URL, token: string) {
 }
 type Post = ReturnType<typeof client>;
 // Tells the owner a conversation needs a look when its execution could not
-// set up or report, keeping the native identity, phase and pending receipt
-// recovery needs.
+// set up or report, keeping the native identity, phase and pending receipt.
 async function needsInspection(
   config: Config,
   post: Post,
@@ -175,7 +175,7 @@ async function needsInspection(
       await delay(3000);
     }
 }
-// Executes one claimed conversation: its heartbeat, reports, browser and
+// Executes one claimed conversation: heartbeat, reports, browser and
 // screenshots around the engine.
 async function executeClaim(o: {
   config: Config;
@@ -272,7 +272,7 @@ async function executeClaim(o: {
         } catch (error) {
           if (error instanceof Error && /\((400|401|403)\)/.test(error.message))
             throw error;
-          // Worker rollback or disabled binding: ordinary coding still works.
+          // Worker rollback or disabled binding: coding still runs.
           if (error instanceof Error && /\((404|409)\)/.test(error.message))
             break;
           await delay(3000);
@@ -292,7 +292,7 @@ async function executeClaim(o: {
       agents: config.agents,
       connectors: () => connectorAccess(config.helpers),
       fullAccess: config.helpers.fullAccess,
-      inboxAccount: config.inboxAccount,
+      inboxes: inboxLogins(config),
       workRepo: config.workRepo,
       person: personSchema.safeParse(claim.person).data,
       browserSignIn: browserSignInSchema.safeParse(claim.browserSignIn).data,
@@ -352,10 +352,10 @@ async function executeClaim(o: {
     clearInterval(timer);
   }
 }
-// Each conversation runs in an executor process of its own, so an update can
-// restart the runner at once: executors finish their current step on the
-// version they started with, then the new runner continues them. An
-// executor's file names its process, lane and conversation while it runs.
+// Each conversation runs in its own executor process, so an update can restart
+// the runner at once: executors finish their current step on the version they
+// started with, then the new runner continues them. An executor's file names
+// its process, lane and conversation while it runs.
 const executorsDir = (config: Config) => path.join(config.stateDir, "executors");
 const executorFile = (config: Config, runId: string) =>
   path.join(executorsDir(config), `${runId}.json`);
@@ -545,8 +545,8 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
     release: installedRelease(),
   });
   // A conversation settles its own copies when a turn ends; for every other
-  // one this machine ran, copies nothing needs (a landed branch, say) go at
-  // start and then hourly.
+  // one this machine ran, unneeded copies (a landed branch, say) go at start
+  // and then hourly.
   let sweeping = false;
   const sweep = async () => {
     if (sweeping) return;
@@ -657,9 +657,9 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       }
     })();
   };
-  // Claims carry documents; a runner with every slot busy is not claiming,
-  // so it asks for them on its own. This timer also keeps a full runner
-  // running, since its executors are detached.
+  // Claims carry documents; a runner with every slot busy is not claiming, so
+  // it asks for them itself. This timer also keeps a full runner running,
+  // since its executors are detached.
   const busy = setInterval(() => {
     if (stopDocuments.aborted) return clearInterval(busy);
     if (executors.size < config.concurrency + config.quickConcurrency) return;
@@ -694,7 +694,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
         }
         return claim.run ? (claim as ClaimedRun) : null;
       },
-      // Transport failures are logged by post with conversation correlation.
+      // Transport failures are logged by post, correlated by conversation.
       onError: () => {},
       execute: once
         ? (claim, control) =>

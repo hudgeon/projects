@@ -7,7 +7,7 @@ import { build } from "esbuild";
 import { digest, token } from "./auth";
 import type { Portfolio } from "./index";
 import { applyInboxAction, applyInboxActions } from "../collector/inbox-actions";
-import type { Inbox } from "../src/inbox-model";
+import { snapshotInboxes, type Inbox } from "../src/inbox-model";
 import { issue } from "../tests/work-fixtures";
 import { randomUUID } from "node:crypto";
 import { snapshotSchema } from "../src/model";
@@ -83,7 +83,8 @@ test("the Studio applies archive and one-click unsubscribe from its own fresh re
   const dir = await mkdtemp(path.join(tmpdir(), "project-overview-studio-inbox-"));
   const script = path.join(dir, "local.mjs");
   await build({ entryPoints: ["worker/local.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script });
-  const mf = await start(await options(script, dir, { COLLECTOR_TOKEN: "x".repeat(64) }));
+  // The local person is the deployment owner, whose inbox the fixture is.
+  const mf = await start(await options(script, dir, { COLLECTOR_TOKEN: "x".repeat(64), OWNER_EMAIL: "owner@example.com" }));
   try {
     const endpoint = (await mf.ready).href;
     const call = (route: string, init: RequestInit = {}) => fetch(new URL(route, endpoint), init);
@@ -102,10 +103,12 @@ test("the Studio applies archive and one-click unsubscribe from its own fresh re
         ] } });
       return "{}";
     };
+    const pending = (await (await call("/api/inbox/actions")).json()) as { actions: { account?: string }[] };
+    assert.deepEqual(pending.actions.map((a) => a.account), ["owner@example.com", "owner@example.com"], "each request names its inbox");
     // A Gmail outage leaves both requests queued without touching the mailbox.
-    await applyInboxActions(endpoint, {}, undefined, gws, async () => true);
+    await applyInboxActions(endpoint, {}, undefined, () => gws, async () => true);
     assert.equal(calls.length, 0);
-    await applyInboxActions(endpoint, {}, snapshot.inbox as Inbox, gws, async (url) => { clicked.push(url); return true; });
+    await applyInboxActions(endpoint, {}, [snapshot.inbox as Inbox], () => gws, async (url) => { clicked.push(url); return true; });
     assert.deepEqual(clicked, ["https://news.example.com/oneclick/unsubscribe/fresh"], "the link comes from Gmail, not the request");
     const modified = calls.filter((args) => args.includes("modify")).map((args) => JSON.parse(args[args.indexOf("--params") + 1]).id);
     assert.deepEqual(modified.sort(), ["aaaaaaaaaa01", "bbbbbbbbbb01"]);
@@ -132,7 +135,7 @@ test("Done on an activity never queues a mailbox archive, including after the ne
     assert.deepEqual(await store.pendingInboxActions(), []);
     await store.publish(snapshotSchema.parse(inboxSnapshot(at + 1000)));
     assert.deepEqual(await store.pendingInboxActions(), []);
-    await store.requestInboxAction("bbbbbbbbbb01", "archive");
+    await store.requestInboxAction("bbbbbbbbbb01", "archive", "owner@example.com");
     await store.archiveRun(activity.id, false);
     assert.equal((await store.pendingInboxActions()).length, 1, "reopening an activity does not undo an explicit Archive");
   } finally {await mf.dispose(); await rm(dir, {recursive: true, force: true});}
@@ -146,7 +149,10 @@ test("the machine on duty keeps its last inbox read through a scan that could no
   try {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
     const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-    const inboxOf = async (host: string) => (await store.overview()).find((s) => s.host === host)?.inbox;
+    const inboxOf = async (host: string) => {
+      const snapshot = (await store.overview()).find((s) => s.host === host);
+      return snapshot && snapshotInboxes(snapshot)[0];
+    };
     const at = Date.now();
     assert.equal((await ingest(inboxSnapshot(at), studio)).status, 200);
     assert.equal((await ingest(closeSnapshot(at + 1000), studio)).status, 200);

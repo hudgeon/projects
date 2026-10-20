@@ -1,14 +1,14 @@
-import { readInbox } from "./inbox";
+import { readInbox, type Gws } from "./inbox";
 import { readQuotas } from "./quotas";
-import { trackedThreads } from "../src/inbox-model";
+import { trackedThreads, type Inbox } from "../src/inbox-model";
 import { readWork } from "./work";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { mkdir, readdir, readFile, stat, lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
-import { machineIdSchema } from "../src/telemetry";
 import type {
   Project,
   Snapshot,
@@ -16,7 +16,10 @@ import type {
   Source,
   Worktree,
 } from "../src/model";
+import type { Issue } from "../src/work-model";
 import { githubToken } from "./github";
+import { inboxLogins, type Config, type InboxLogin } from "./config";
+export type { Config } from "./config";
 
 const exec = promisify(execFile);
 export function subprocessEnv() {
@@ -36,48 +39,6 @@ export function subprocessEnv() {
     delete env[key];
   return env;
 }
-// One config per machine, for its collector and its runner.
-export const configSchema = z.object({
-  // This machine's id, as the site registered it.
-  host: machineIdSchema,
-  root: z.string().refine(path.isAbsolute),
-  home: z.string().refine(path.isAbsolute),
-  endpoint: z.url().optional(),
-  // An owner-only file holding this machine's collector token. Without one,
-  // the token comes from COLLECTOR_TOKEN in the environment, which the
-  // background service fills from the Doppler config below.
-  collectorTokenFile: z.string().refine(path.isAbsolute).optional(),
-  // A Doppler config holding this machine's secrets: its collector and runner
-  // tokens and, optionally, a read-only GitHub App. They are read with a
-  // read-only service token kept beside this config.
-  doppler: z
-    .object({
-      project: z.string().regex(/^\w[\w.-]*$/),
-      config: z.string().regex(/^\w[\w.-]*$/),
-    })
-    .strict()
-    .optional(),
-  inboxAccount: z.email().optional(),
-  // Work items are the issues labelled `work` in this repository; without it
-  // the overview has no work items or Mark done.
-  workRepo: z
-    .string()
-    .regex(/^[\w.-]+\/[\w.-]+$/)
-    .optional(),
-  // The native coding apps signed in on this machine. Conversations use only
-  // these.
-  agents: z
-    .array(z.enum(["codex", "claude"]))
-    .min(1)
-    .default(["codex", "claude"]),
-  projects: z
-    .record(
-      z.string(),
-      z.object({ name: z.string(), plan: z.string().optional() }),
-    )
-    .default({}),
-  exclude: z.array(z.string()).default(["zarchive", "_archive"]),
-});
 const metadataSchema = z
   .object({
     id: z
@@ -167,7 +128,6 @@ export async function discover(config: Config): Promise<Item[]> {
   await walk(config.root, 0);
   return found;
 }
-export type Config = z.infer<typeof configSchema>;
 // One secret from this machine's Doppler config, read with its read-only
 // service token. The service token goes only to this call, and the value only
 // to the caller: neither enters an environment that outlives it.
@@ -209,7 +169,12 @@ export async function machineSecret(
   });
   return stdout.trim();
 }
-export async function command(bin: string, args: string[], cwd?: string) {
+export async function command(
+  bin: string,
+  args: string[],
+  cwd?: string,
+  env: Record<string, string> = {},
+) {
   const { stdout } = await exec(bin, args, {
     cwd,
     timeout: 20_000,
@@ -219,9 +184,52 @@ export async function command(bin: string, args: string[], cwd?: string) {
       GIT_OPTIONAL_LOCKS: "0",
       GIT_TERMINAL_PROMPT: "0",
       GH_PROMPT_DISABLED: "1",
+      ...env,
     },
   });
   return stdout.trimEnd();
+}
+// gws as one connected account: its own sign-in's config directory, or the
+// machine's default for the owner's.
+export const gwsFor =
+  (login: InboxLogin): Gws =>
+  (args) =>
+    command(
+      "gws",
+      args,
+      undefined,
+      login.configDir
+        ? { GOOGLE_WORKSPACE_CLI_CONFIG_DIR: login.configDir }
+        : {},
+    );
+// The owner's account keeps the cache file it always had; every other account
+// has its own, named without the address. The name only tells a few local
+// files apart (ten accounts at most); it is not meant to be collision-proof.
+export const inboxCacheName = (account: string, config: Pick<Config, "inboxAccount">) =>
+  config.inboxAccount?.toLowerCase() === account.toLowerCase()
+    ? "inbox-cache.json"
+    : `inbox-cache.${createHash("sha256").update(account.toLowerCase()).digest("hex").slice(0, 16)}.json`;
+// Every connected inbox, each read with its own sign-in and checked against
+// it, for the machine on duty. One account's failure is its own.
+export async function readInboxes(
+  config: Config,
+  issues: Issue[] | null | undefined,
+  gws: (login: InboxLogin) => Gws = gwsFor,
+  now = Date.now(),
+): Promise<Inbox[]> {
+  const inboxes: Inbox[] = [];
+  for (const login of inboxLogins(config))
+    inboxes.push(
+      await readInbox(
+        login.account,
+        gws(login),
+        now,
+        config.home,
+        trackedThreads(login.account, issues ?? []),
+        inboxCacheName(login.account, config),
+      ),
+    );
+  return inboxes;
 }
 const source = (
   state: Source["state"],
@@ -872,7 +880,7 @@ async function collectProject(
     sources: { git, github, ...sources },
   };
 }
-// The inbox is read by the machine on duty.
+// The inboxes are read by the machine on duty.
 export async function collect(
   config: Config,
   { inbox = false }: { inbox?: boolean } = {},
@@ -941,16 +949,8 @@ export async function collect(
     projects,
     work,
     quotas,
-    ...(inbox && config.inboxAccount
-      ? {
-          inbox: await readInbox(
-            config.inboxAccount,
-            (args) => command("gws", args),
-            Date.now(),
-            config.home,
-            trackedThreads(config.inboxAccount, work?.issues ?? []),
-          ),
-        }
+    ...(inbox && inboxLogins(config).length
+      ? { inboxes: await readInboxes(config, work?.issues) }
       : {}),
     unassignedSessions: [...c.sessions, ...a.sessions]
       .filter((s) => !assigned.has(`${s.app}:${s.id}`))

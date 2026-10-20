@@ -18,9 +18,10 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
   running but waiting on a step only you can take), follow what is running
   (**Working**) and keep the bigger work in view. On a phone a selected
   conversation takes the screen; on a desktop it opens beside the queue.
-- **Inbox** (optional) lists email waiting on you. Linked work opens directly
-  in Today; unlinked email can be linked to existing work or start a standalone
-  activity. Previewing, linking or starting work never marks a message reviewed.
+- **Inbox** (optional) lists email waiting on you, and how much waits on each
+  other person. Linked work opens directly in Today; unlinked email can be
+  linked to existing work or start a standalone activity. Previewing, linking
+  or starting work never marks a message reviewed.
 - **Settings** holds your name, Codex speed, timing comparisons, machines and repository diagnostics: add a machine, set
   their order, replace tokens or remove one. Existing repository bookmarks work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
@@ -46,7 +47,7 @@ Each connected machine runs two background services:
 
 - the **collector** publishes a snapshot every two minutes: repositories,
   worktrees, native sessions, pull requests, work items (with `workRepo` set)
-  and, on the machine on duty, the inbox;
+  and, on the machine on duty, the connected inboxes;
 - the **runner** claims conversations over outbound HTTPS and runs the native
   sessions for them.
 
@@ -62,17 +63,17 @@ discovery publishes nothing rather than declaring projects gone.
 
 ## Machines
 
-The owner adds a machine in Settings by naming it. The site shows its
-id and two tokens once: a **collector** token, which can only upload that
-machine's snapshot and exchange queued requests, and a **runner** token, which
-can only claim, heartbeat and report conversations. The Worker stores only token
-hashes; **Replace tokens** issues new ones and **Remove** revokes both at once
-and drops the machine's snapshot. Machine tokens never reach a session route,
-and each machine's runner IDs map to conversation owners of its own, so one
-machine can never act on another's claim.
+The owner names a machine in Settings. The site shows its id and two tokens
+once: a **collector** token, which only uploads that machine's snapshot and
+exchanges queued requests, and a **runner** token, which only claims,
+heartbeats and reports conversations. The Worker stores only token hashes;
+**Replace tokens** issues new ones and **Remove** revokes both and drops the
+machine's snapshot. Machine tokens never reach a session route, and each
+machine's runner IDs map to its own conversation owners, so one machine can
+never act on another's claim.
 
 Machines are ordered. The first machine heard from in the last five minutes is
-**on duty**: it reads the inbox and applies Mark done and inbox actions. Every collector asks the Worker whether it is on
+**on duty**: it reads the inboxes and applies Mark done and inbox actions. Every collector asks the Worker whether it is on
 duty before each scan, so exactly one machine applies each request. New
 conversations go to the first machine whose runner called in the last two
 minutes (an idle runner claims every two seconds and a busy one heartbeats
@@ -93,13 +94,13 @@ repositories only**. Every five minutes while a change child works, and when
 each of its turns ends, the runner saves the worktree to the ref
 `refs/projects/wip/<conversation>/<child>` (never a branch, so it starts no
 checks), built in a private index so the agent's own index is untouched. A
-repository GitHub does not confirm as private is never saved, because anyone
-who can read a repository can list and fetch such refs. Ignored files are never
+repository GitHub does not confirm as private is never saved: anyone who can
+read a repository can list and fetch such refs. Ignored files are never
 saved; a changed file over 5 MB or that looks like a credential (`.env*`,
 `.dev.vars`, `.npmrc`, SSH and other keys, names with credential, secret or
 token) keeps its committed version, or stays local when new. Pushes run the
 repository's own hooks. Copies are removed once GitHub has the work or its
-branch has landed, decided from what GitHub lists rather than process memory.
+branch has landed, decided from what GitHub lists, not process memory.
 Continuing a child's workspace on another machine recreates it from the newest
 copy (or the pushed branch, when newer) as uncommitted changes on the same
 branch and tells the new session how recent that copy is.
@@ -115,17 +116,17 @@ collector and runner, written by `scripts/install-machine.mjs`:
 | `agents` | The apps signed in on this machine (`claude`, `codex`); conversations never start another. |
 | `collectorTokenFile`, `tokenFile` | Owner-only files holding the two tokens, for a machine without `doppler`. With `doppler` and neither file, the tokens come from that config. |
 | `workRepo` | Optional: the repository whose issues labelled `work` are work items. |
-| `inboxAccount` | Optional: the Gmail account read through `gws`. |
+| `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's, each `{account, configDir}` naming their own `gws` config directory. |
 | `helpers` | Optional: `localServers` (local MCP servers Claude helpers may use) and `deniedTools` (tools to hide from them). |
-| `doppler` | Optional: a Doppler `project`/`config` holding the machine's `COLLECTOR_TOKEN` and `RUNNER_TOKEN` and, optionally, a read-only GitHub App, read with the read-only service token in `doppler-token` (mode 600). The collector runs with only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
+| `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App, read with the read-only service token in `doppler-token` (mode 600). The collector runs with only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
 | `concurrency`, `quickConcurrency` | Standard conversations at once (1–5, default 3) and extra quick-work slots (0–5, default 5). |
 
 ## Conversations
 
-The top of each signed-in view shows the weekly subscription allowance left
-for Codex and Claude, with the reported reset time: provider-reported
-percentages, not estimated token balances, read by each collector from its
-native login without starting a model turn. The newest machine's report is
+Each signed-in view shows the weekly subscription allowance left for Codex
+and Claude, with the reported reset time: provider-reported percentages, not
+token estimates, read by each collector from its native login without starting
+a model turn. The newest machine's report is
 used once, never added across machines; its source and read time are on the
 indicator. A missing or failed read is unavailable, a read older than five
 minutes is overdue, and an elapsed reset waits for a new read.
@@ -136,14 +137,14 @@ OAuth usage endpoint. Credentials stay on the machine and in memory for that
 HTTPS read; only allowlisted percentages and timestamps leave it. The collector
 refreshes no expired credentials, changes no login and enables no extra usage.
 A missing, expired or inaccessible login shows unavailable, as does an upstream
-change to the Claude endpoint, a native-client interface rather than a public
-API contract, until the reader is updated.
+change to the Claude endpoint (a native-client interface, not a public API)
+until the reader is updated.
 
 Each conversation gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
 Codex it is Claude. When its app declines the conversation, reaches its usage
 limit, is signed out or fails twice in a row, the other app takes over for the
-rest of the conversation, and its details say why. It is read-only and makes one structured decision at a
+rest of it, and its details say why. It is read-only and makes one structured decision at a
 time: dispatch a child, finish, or ask you for a material decision. A child is
 a native Claude Code or Codex session: **change** children work in their own
 Git worktree from current `origin/main`; **read** children answer questions and
@@ -174,9 +175,9 @@ file for read-only reference: a short approval is checked against the original
 request before acting, not guessed from a handoff. Helper briefs carry the
 current objective, applicable constraints and approvals, source evidence, open
 questions and acceptance checks. Repository instructions and canonical plans
-stay in their files and are read when relevant. This applies the task-scoped
+stay in their files, read when relevant. This applies the task-scoped
 handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
-without discarding saved work, approval boundaries or recovery journals.
+without discarding saved work, approvals or recovery journals.
 
 Optional Jev context selection (off by default) runs in the conversation's
 executor: it trims older detail from fresh coordinator handovers and ranks
@@ -194,9 +195,9 @@ visual verification and required machine sync for the **current request**. Each
 gate has specific evidence or a reason it does not apply; missing or pending
 gates go back to the master without replaying work. Draft-only
 requests end at a verified saved draft. The final delivery record stays in the
-private local journal, not telemetry or portfolio snapshots. This makes the master's
-assessment explicit without attesting external systems or replacing the
-repository's release gates.
+private local journal, never telemetry or snapshots. This makes the master's
+assessment explicit without attesting external systems or replacing release
+gates.
 
 The master checks evidence before declaring anything complete: a native turn
 ending proves no tests, merge or deployment, and nothing here invents progress
@@ -317,26 +318,26 @@ optional **Current position** block in the issue body.
 splitting existing outcomes. **Discuss this work** on a work item keeps that
 issue selected and defaults to the registered work repository. People have
 roles and next actions; commitments name what is due, its date and its owner.
-Unknown dates and owners remain explicit. The current overview stays concise;
-supporting updates and earlier activities remain available below it.
+Unknown dates and owners stay explicit. The current overview stays concise;
+supporting updates and earlier activities sit below it.
 
 The existing native change helper maintains the canonical issue at meaningful
 checkpoints and before finishing linked work, respecting read-only requests and
-the owner's corrections. A standard coordinator with a configured work repository
-must account for the record as updated, unchanged (with a reason), or pending.
-Pending or missing assessments prevent completion. This is the coordinator's
-readback assessment, not independent GitHub certification or background monitoring.
-Collectors publish the saved record on their next scan; source timestamps remain
-visible. No new GitHub credential or issue-writing access is added to the Worker.
+the owner's corrections. A standard coordinator with a work repository must
+account for the record as updated, unchanged (with a reason) or pending; a
+pending or missing assessment prevents completion. This is the coordinator's
+readback assessment, not GitHub certification or monitoring. Collectors
+publish the saved record on their next scan, source timestamps visible. The
+Worker gains no GitHub credential or issue-writing access.
 
 Combining produces one continuing issue with a shared outcome, preserving
 clients, people, commitments, source links and prior history. Only after the
 continuing record and reciprocal links are verified are predecessors closed as
 superseded, not delivered. Splitting allocates those facts to distinct outcomes
 and retains links to the source. Conversations keep their original association;
-earlier activities are shown as history, not silently assigned to a new outcome.
-Older issues outside the collector's window remain accessible through their
-GitHub links. The human-editable section format is in [agents.md](public/agents.md).
+earlier activities show as history, never silently assigned to a new outcome.
+Older issues outside the collector's window stay reachable through their GitHub
+links; the human-editable section format is in [agents.md](public/agents.md).
 
 **Mark done** stores only the issue number; the machine on duty closes the
 issue with its signed-in GitHub CLI on its next run and reports back. The
@@ -351,23 +352,25 @@ once.
 
 ## Inbox (optional)
 
-With `inboxAccount` set, the machine on duty reads up to 200 inbox threads as
-metadata through its existing `gws` login, and the latest non-draft message of
-each as bounded plain text (quoted history removed, at most 4,000 characters).
-Text lives only in the latest snapshot, is stripped from the overview and is
-read one thread at a time; it never enters telemetry or prompts. If the machine on duty cannot confirm its duty before a scan, its last
-read stays for up to fifteen minutes, with its age shown. Linked work opens
-inside Today, where **Start activity** preselects that work item. Unlinked
-email can be linked to open work or start a standalone activity. Only a source
+Each person's Gmail is read on the machine on duty with their own `gws`
+sign-in (`inboxAccount` with the machine's default one; each of
+`inboxAccounts` with its own config directory, docs/self-host.md), refused
+when it is someone else's. An inbox
+is up to 200 threads as metadata plus each one's latest non-draft message
+as bounded plain text (quoted history removed, at most 4,000 characters),
+which lives only in the latest snapshot, is read by the inbox's owner one
+thread at a time and never enters the overview, telemetry or prompts.
+Everyone else sees its count and links on work items, never subjects,
+senders or text. A machine on duty that cannot confirm its duty keeps its last
+reads for up to fifteen minutes, with their age shown. **Start activity** on an email preselects its work item; only a source
 link enters the request, never the email text. **Done** finishes the activity;
-archiving its source email is a separate explicit action. **Archive** and
-**Unsubscribe** follow the Mark done pattern; unsubscribe uses RFC 8058
-one-click only, to a public HTTPS host checked on the connection's own DNS
-lookup, and otherwise starts a conversation. A conversation's email lane uses
-its owner's mailbox only when that is this `inboxAccount`; anyone else's is
-told no mailbox is connected for them yet.
-
-The retired daily brief returns Gone without sending mail; its records stay.
+archiving its source email is a separate action. **Archive**,
+**Unsubscribe** and linking are the inbox
+owner's requests, applied with that account's sign-in like Mark done;
+unsubscribe uses RFC 8058 one-click only, to a public HTTPS host checked on
+the connection's own DNS lookup, else starts a conversation. A
+conversation runs `gws` signed in as its owner's connected mailbox, for its
+email lane and helpers; a person without one is told so and gets no sign-in.
 
 ## Notifications
 
@@ -429,27 +432,27 @@ finding the matching log. The runner journals a bounded window of timing events
 (`native_started`/`native_finished` sharing a `turnId`, workspace preparation,
 recovery, master decisions) and reports them with its receipts; they correlate
 by conversation, generation and event id. Logs are diagnostic, not an execution
-ledger. Logs are kept at 100%, traces sampled at 10%, and routine successful
-polls at 1%.
+ledger, and kept at 100%; traces are sampled at 10%, routine successful polls
+at 1%.
 
 Settings has an owner-wide **Codex fast mode** switch, initially off. Every
-Projects Codex coordinator/helper reads it before its next turn, including
-resumes and recovery; an active turn is not interrupted. The native app-server
-receives explicit `fast` or `default` service tiers, without changing model or
-reasoning. Claude and sessions outside Projects are unaffected. Fast mode uses
-more allowance; see [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
+Projects Codex coordinator/helper reads it before its next turn, resumes and
+recovery included; an active turn is not interrupted. The app-server receives
+explicit `fast` or `default` service tiers, with model and reasoning unchanged.
+Claude and sessions outside Projects are unaffected. Fast mode uses more
+allowance; see [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
 
-The same page compares labelled Codex turns from the last 30 days (up to 10,000).
-The portfolio retains deduplicated canonical completion receipts independently
-of the conversation's bounded event window. It records requested speed, resolved
+The same page compares labelled Codex turns from the last 30 days (up to
+10,000): deduplicated completion receipts the portfolio keeps apart from the
+conversation's bounded event window, with requested speed, resolved
 model/effort, attempts, token counts, elapsed time and first text latency when
-observed. Comparisons match role, read/change, new/continued, machine, input/output
-token bands and cache share. At least three completed single-attempt turns per
-mode are required for a median percentage; failures, missing measurements and
-earlier unlabelled turns do not become a standard-mode baseline. Total time
-includes native startup and tool work; first output can include reasoning/tool
-waits. These are workload observations, not a controlled benchmark or proof of
-the provider's actual processing tier. No synthetic timings enter production.
+observed. Comparisons match role, read/change, new/continued, machine, token
+bands and cache share, and need at least three completed single-attempt turns
+per mode for a median percentage; failures, missing measurements and earlier
+unlabelled turns never become a standard-mode baseline. Total time includes
+native startup and tool work; first output can include reasoning/tool waits.
+These are workload observations, not a benchmark or proof of the provider's
+processing tier. No synthetic timings enter production.
 
 ## Development
 
