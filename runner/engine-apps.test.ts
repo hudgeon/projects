@@ -156,25 +156,25 @@ test("a coordinator that cannot go on stops plainly when no other app can take o
   }
 });
 
-test("every Codex coordinator and helper reads speed at the turn boundary", async () => {
-  const dir = await fixture(), o = engineOptions(dir), speeds: (boolean|undefined)[] = [];
-  let setting = true, calls = 0;
-  o.codexFast = async () => setting;
+test("Codex coordinators and helpers carry no speed setting, and still say whether their token usage was observed", async () => {
+  const dir = await fixture(), o = engineOptions(dir);
+  let calls = 0;
   o.turn = async opts => {
-    speeds.push(opts.codexFast); calls++;
+    calls++;
+    assert.equal("codexFast" in opts, false);
     await opts.onSession(randomUUID());
     opts.onTiming?.({model:"model-a",effort:"high",attempts:1,firstOutputMs:12});
     opts.onUsage?.({fresh:200,cached:0,output:30,context:200});
     if(calls===1) { const d=dispatch(); return {...d,task:{...d.task!,agent:"codex"}}; }
-    if(calls===2) { setting=false; return result; }
-    return complete;
+    return calls===2 ? result : complete;
   };
   try {
     await executeRun(o);
-    assert.deepEqual(speeds,[true,true,false]);
     const journal=JSON.parse(await readFile(path.join(dir,"runs",`${o.run.id}.json`),"utf8"));
-    const events=journal.progress.telemetry.filter((e:{event:string})=>e.event==="native_finished");
-    assert.deepEqual(events.map((e:{codexFast:boolean})=>e.codexFast),[true,true,false]);
-    assert.ok(events.every((e:{model:string;tokenUsageObserved:boolean})=>e.model==="model-a"&&e.tokenUsageObserved));
+    const events=journal.progress.telemetry.filter((e:{event:string})=>e.event.startsWith("native_"));
+    assert.equal(events.length,6);
+    assert.ok(events.every((e:Record<string,unknown>)=>!("codexFast" in e)));
+    const finished=events.filter((e:{event:string})=>e.event==="native_finished");
+    assert.ok(finished.every((e:{model:string;tokenUsageObserved:boolean})=>e.model==="model-a"&&e.tokenUsageObserved));
   } finally { await rm(dir,{recursive:true,force:true}); }
 });

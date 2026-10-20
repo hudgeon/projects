@@ -70,7 +70,7 @@ test("a machine the deployment signs in gets each conversation browser signed in
     const machines = await (await mf.dispatchFetch(origin + "/api/machines", {headers: as(cookie.value)})).json() as {machines: {id: string; browserSignIn?: boolean}[]};
     assert.deepEqual(machines.machines.map((m) => [m.id, m.browserSignIn]), [["studio", true], ["laptop", false]]);
     // What outlives the browser or reaches beyond it stays with the owner's own sign-in.
-    for (const [route, body] of [["/api/machines", {name: "Spare"}], ["/api/machines/laptop/tokens", {}], ["/api/machines/laptop/remove", {}], ["/api/execution-settings", {fast: true}], [`/api/runs/${first.id}/browser/view`, {readonly: false}], ["/api/inbox/act", {}], ["/api/push/subscribe", {endpoint: "https://fcm.googleapis.com/x"}]] as const)
+    for (const [route, body] of [["/api/machines", {name: "Spare"}], ["/api/machines/laptop/tokens", {}], ["/api/machines/laptop/remove", {}], ["/api/upkeep", {}], [`/api/runs/${first.id}/browser/view`, {readonly: false}], ["/api/inbox/act", {}], ["/api/push/subscribe", {endpoint: "https://fcm.googleapis.com/x"}]] as const)
       assert.equal((await post(route, body, as(cookie.value))).status, 403, route);
     assert.equal((await mf.dispatchFetch(origin + "/api/inbox/threads/abcdef1234", {headers: as(cookie.value)})).status, 403, "email text never reaches it");
     // Nor do the inbox's subjects, senders or queued actions, a work item's

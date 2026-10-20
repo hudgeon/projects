@@ -27,7 +27,7 @@ import {
 import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
 import { nativeEnv } from "./native-env";
 export { nativeEnv } from "./native-env";
-import { fullAccess, codexPermissions, codexFilesystem, claudeTools } from "./native-access";
+import { fullAccess, codexPermissions, codexFilesystem, claudeTools, CODEX_TIER, claudePermissions } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
@@ -55,7 +55,6 @@ export type NativeOptions = {
   fullAccess?: boolean;
   // Hosts a read-only Claude turn may fetch, and no other (native-access.ts).
   web?: string[];
-  codexFast?: boolean;
   onTiming?: (fields: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs">) => void;
   writableRoots?: string[];
   signal: AbortSignal;
@@ -304,8 +303,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
     o.binaries?.codex ?? "codex",
     [
       ...(o.connectors?.codex ?? []),
-      "-c", "features.fast_mode=true",
-      "-c", `service_tier=${JSON.stringify(o.codexFast ? "fast" : "default")}`,
+      "-c", `service_tier=${JSON.stringify(CODEX_TIER)}`,
       ...(o.browser
         ? Object.entries({
             command: "npx",
@@ -554,7 +552,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       {
         ...(o.sessionId ? { threadId: o.sessionId } : {}),
         cwd: o.cwd,
-        serviceTier: o.codexFast ? "fast" : "default",
+        serviceTier: CODEX_TIER,
         approvalPolicy: "never",
         ...codexPermissions(o, true),
       },
@@ -588,8 +586,8 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
         threadId,
         input: userContent({ text: o.prompt, screenshots: o.screenshots }, "codex"),
         cwd: o.cwd,
-        serviceTier: o.codexFast ? "fast" : "default",
-        serviceTierForTurn: o.codexFast ? "fast" : "default",
+        serviceTier: CODEX_TIER,
+        serviceTierForTurn: CODEX_TIER,
         approvalPolicy: "never",
         ...codexPermissions(o),
         outputSchema: o.schema,
@@ -656,8 +654,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     "stream-json",
     "--json-schema",
     JSON.stringify(o.schema),
-    "--permission-mode",
-    unrestricted ? "bypassPermissions" : "dontAsk",
+    ...claudePermissions(o),
     // TodoWrite keeps only the session's plan; it changes nothing.
     "--tools",
     claude.enabled,

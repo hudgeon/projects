@@ -22,9 +22,8 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
   other person. Linked work opens directly in Today; unlinked email can be
   linked to existing work or start a standalone activity. Previewing, linking
   or starting work never marks a message reviewed.
-- **Settings** holds your name, Codex speed and its timing comparisons, upkeep,
-  machines (add, order, replace tokens, remove) and repository diagnostics;
-  older repository bookmarks still work.
+- **Settings** holds your name, upkeep, machines (add, order, replace tokens,
+  remove) and repository diagnostics; older repository bookmarks still work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
 
 Bigger work has bookmarkable details with its position, source emails and
@@ -436,9 +435,6 @@ starts an **upkeep** conversation for the deployment owner (or **Run upkeep
 now** in Settings does): its master reads those totals and versions and makes
 at most one guarded change to the agent setup, or reports that none is needed;
 see [Upkeep](docs/upkeep.md).
-
-Settings has an owner-wide **Codex fast mode** switch and compares labelled
-Codex turns by mode; see [Codex speed](docs/codex-speed.md).
 
 ## Development
 

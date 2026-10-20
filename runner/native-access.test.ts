@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {readFile, writeFile, rm} from "node:fs/promises";
 import path from "node:path";
 import {nativeTurn} from "./native";
+import {CODEX_TIER} from "./native-access";
 import {fixture, engineOptions, dispatch, result, complete} from "./run-fixtures";
 import {executeRun} from "./engine";
 import {fakeBinary} from "./native-fixtures";
@@ -22,6 +23,8 @@ test("machine full access reaches native launch and both Codex RPC permission bo
       const args: string[] = JSON.parse(await readFile(capture,"utf8"));
       if (agent === "claude") {
         assert.equal(args[args.indexOf("--permission-mode")+1],readOnly?"dontAsk":"bypassPermissions");
+        // Unattended in either mode: a prompt nobody can answer is denied, not retried.
+        assert.equal(args[args.indexOf("--permission-prompts")+1],"none");
         assert.equal(args[args.indexOf("--tools")+1],readOnly?"Read,Glob,Grep,TodoWrite":"default");
         assert.equal(args.includes("--strict-mcp-config"),readOnly);
         assert.equal(args.includes("--allowedTools"),readOnly);
@@ -67,4 +70,31 @@ test("the executor gives full access only to change turns, never its coordinator
   };
   try {await executeRun(o); assert.deepEqual(access,[false,true,false]);}
   finally {await rm(dir,{recursive:true,force:true});}
+});
+test("Codex always runs at standard speed on new and resumed threads, whatever the machine's own config says", async () => {
+  const dir = await fixture();
+  try {
+    for (const sessionId of [undefined, "test-session"]) {
+      const binary = await fakeBinary(dir,"codex","success"), log = path.join(dir,"speed.log"), argv = path.join(dir,"argv.json");
+      await writeFile(log, "");
+      let source = await readFile(binary,"utf8");
+      source = source.replace("import readline", `import {appendFileSync,writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(argv)},JSON.stringify(process.argv.slice(2)));\nimport readline`)
+        .replace("const m=JSON.parse(line);", `const m=JSON.parse(line);appendFileSync(${JSON.stringify(log)},JSON.stringify(m)+'\\n');`)
+        .replace("result:{thread:{id:'test-session',status:{type:'idle'}}}", "result:{model:'model-a',reasoningEffort:'high',thread:{id:'test-session',status:{type:'idle'}}}")
+        .replace("if(mode==='exit')", "send({method:'item/agentMessage/delta',params:{threadId:'test-session',delta:'x'}});if(mode==='exit')");
+      await writeFile(binary,source);
+      const timing: Record<string,unknown> = {};
+      await nativeTurn({agent:"codex",cwd:dir,prompt:"Inspect",schema:{type:"object"},readOnly:true,sessionId,signal:AbortSignal.timeout(5000),binaries:{codex:binary},onSession:async()=>{},onTiming:fields=>Object.assign(timing,fields)});
+      const args: string[] = JSON.parse(await readFile(argv,"utf8"));
+      assert.equal(CODEX_TIER,"default");
+      assert.equal(args[args.indexOf('service_tier="default"')-1],"-c");
+      assert.ok(!args.some(a=>a.includes("fast")),"no fast mode flag or tier");
+      const requests = (await readFile(log,"utf8")).trim().split("\n").map(s=>JSON.parse(s));
+      assert.equal(requests.find(r=>r.method===(sessionId?"thread/resume":"thread/start")).params.serviceTier,"default");
+      const start = requests.find(r=>r.method==="turn/start");
+      assert.deepEqual([start.params.serviceTier,start.params.serviceTierForTurn],["default","default"]);
+      assert.equal(timing.model,"model-a"); assert.equal(timing.effort,"high"); assert.equal(timing.attempts,1);
+      assert.equal(typeof timing.firstOutputMs,"number");
+    }
+  } finally { await rm(dir,{recursive:true,force:true}); }
 });

@@ -1,6 +1,5 @@
 import { InboxView, inboxCount } from "./inbox-view";
 import { Machines } from "./machines-view";
-import { ExecutionSettingsPanel } from "./execution-settings-view";
 import { UpkeepPanel } from "./upkeep-view";
 import { Restart } from "./restart";
 import {
@@ -734,7 +733,6 @@ function Dashboard() {
           <>
             <h1 className="page-title">Settings</h1>
             <ProfilePanel />
-            <ExecutionSettingsPanel />
             <UpkeepPanel />
             <Machines
               snapshots={snapshots}

@@ -111,7 +111,7 @@ test("a conversation browser's sign-in is the owner's, marked with its machine a
   for (const [path, method] of [
     ["/api/machines", "POST"],
     ["/api/machines/studio/tokens", "POST"],
-    ["/api/execution-settings", "POST"],
+    ["/api/upkeep", "POST"],
     ["/api/runs/00000000-0000-4000-8000-000000000000/browser/view", "POST"],
     ["/api/inbox/threads/abcdef1234", "GET"],
     ["/api/inbox/act", "POST"],

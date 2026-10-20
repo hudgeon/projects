@@ -4,6 +4,16 @@ import type { NativeOptions } from "./native";
 
 export const fullAccess = (o: Pick<NativeOptions, "readOnly" | "fullAccess">) =>
   !o.readOnly && o.fullAccess === true;
+// Codex runs at standard speed only, whatever the machine's own config says:
+// Projects never uses fast mode. "default" is Codex's name for that tier.
+export const CODEX_TIER = "default";
+// A Claude turn's permission mode. Nobody answers a prompt in an unattended
+// turn: whatever would ask is denied, Claude is told not to retry it, and the
+// tools that ask a person are removed.
+export const claudePermissions = (o: Pick<NativeOptions, "readOnly" | "fullAccess">) => [
+  "--permission-mode", fullAccess(o) ? "bypassPermissions" : "dontAsk",
+  "--permission-prompts", "none",
+];
 
 // The built-in tools a Claude turn gets, and the rules that allow them. A
 // read turn given the web fetches the named hosts: WebFetch is enabled, and
@@ -14,7 +24,7 @@ export const fullAccess = (o: Pick<NativeOptions, "readOnly" | "fullAccess">) =>
 export function claudeTools(o: Pick<NativeOptions, "readOnly" | "fullAccess" | "web">) {
   const enabled = fullAccess(o) ? "default" : o.readOnly
     ? "Read,Glob,Grep,TodoWrite"
-    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskOutput,TaskStop,Monitor";
+    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor";
   const web = o.readOnly && o.web?.length ? o.web : [];
   return {
     enabled: [enabled, ...(web.length ? ["WebFetch"] : [])].join(","),

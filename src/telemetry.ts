@@ -153,8 +153,11 @@ export const executionEventSchema = z
     mode: z.enum(["read", "change"]).optional(),
     resumed: z.boolean().optional(),
     durationMs: ms.optional(),
-    // Requested speed and resolved session configuration, never prompt text.
+    // An older runner's requested Codex speed: accepted, never stored or
+    // shown. Codex runs at standard speed only; this field goes once no
+    // runner older than that release reports, with the Worker's cleanup.
     codexFast: z.boolean().optional(),
+    // The resolved session configuration, never prompt text.
     model: z
       .string()
       .regex(/^[a-zA-Z0-9._:-]{1,100}$/)
@@ -184,7 +187,6 @@ export const routeSchema = z.enum([
   "/api/auth/verify",
   "/api/auth/logout",
   "/api/overview",
-  "/api/execution-settings",
   "/api/upkeep",
   "/api/archive",
   "/api/ingest",

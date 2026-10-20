@@ -1,15 +1,12 @@
-// Settings' routes: Codex speed, shared with every runner, and the upkeep
-// lane's Run upkeep now. Only a signed-in person reaches these; a
-// conversation browser's sign-in may read them (worker/auth.ts).
-import { executionSettingsSchema } from "../src/codex-metrics";
+// Settings' routes: the upkeep lane's Run upkeep now. Only a signed-in
+// person reaches it; a conversation browser's sign-in may read it
+// (worker/auth.ts).
 import { UPKEEP_SCHEDULE } from "../src/upkeep-model";
-import { readJson } from "./auth";
 import { trace } from "./telemetry";
 import { startUpkeep, type UpkeepStore } from "./upkeep";
 import type { Portfolio } from "./index";
 
-type SettingsStore = UpkeepStore &
-  Pick<DurableObjectStub<Portfolio>, "executionSettingsView" | "setExecutionSettings" | "rate">;
+type SettingsStore = UpkeepStore & Pick<DurableObjectStub<Portfolio>, "rate">;
 export async function settingsRoutes(
   request: Request,
   store: SettingsStore,
@@ -17,18 +14,6 @@ export async function settingsRoutes(
   caller: string,
 ): Promise<Response | null> {
   const { pathname } = new URL(request.url);
-  if (pathname === "/api/execution-settings") {
-    if (request.method === "GET") return Response.json(await store.executionSettingsView());
-    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-    let input;
-    try {
-      input = executionSettingsSchema.parse(await readJson(request, 1024));
-    } catch {
-      return Response.json({ error: "Invalid execution settings" }, { status: 400 });
-    }
-    await store.setExecutionSettings(input);
-    return Response.json(await store.executionSettingsView());
-  }
   if (pathname !== "/api/upkeep") return null;
   const view = async () => ({ latest: await store.latestRun("upkeep"), schedule: UPKEEP_SCHEDULE });
   if (request.method === "GET") return Response.json(await view());

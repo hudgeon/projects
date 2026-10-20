@@ -19,7 +19,6 @@ export { Conversation } from "./runs";
 import { startInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
 import { archiveInputSchema, archiveKey, type ArchiveEntry, type ArchiveTarget } from "../src/archive-model";
 import { telemetry } from "../src/telemetry";
-import { codexComparison, executionSettingsSchema, METRIC_LIMIT, METRIC_WINDOW_MS, type CodexSample, type ExecutionSettings } from "../src/codex-metrics";
 import { z } from "zod";
 import {
   authorize,
@@ -65,8 +64,11 @@ export class Portfolio extends DurableObject<Env> {
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
-    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS codex_metrics (id TEXT PRIMARY KEY, at INTEGER NOT NULL, payload TEXT NOT NULL)");
-    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS codex_metrics_at ON codex_metrics(at)");
+    // Codex runs at standard speed only: the former speed setting and its
+    // timing samples are dropped, synchronously and as a no-op once gone.
+    // Both lines leave with older runners' speed field (src/telemetry.ts).
+    ctx.storage.sql.exec("DROP TABLE IF EXISTS codex_metrics");
+    ctx.storage.kv.delete("execution-settings");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });
@@ -152,30 +154,8 @@ export class Portfolio extends DurableObject<Env> {
   deliverDocument(owner: string, id: string, lease: string, result: { bytes: Uint8Array } | { failure: "not_found" | "too_large" | "not_html" | "unavailable" }) { return this.documents.deliver(owner, id, lease, result); }
   documentContent(id: string) { return this.documents.content(id); }
   heartbeatRun(owner: string, id: string, generation: number, host: RunnerHost) { return this.runs.heartbeat(owner, id, generation, host); }
-  async reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) {
-    return this.runs.report(owner, id, generation, progress, host, recorded => {
-      // Use the canonical receipt, not an older/replayed request body.
-      for (const event of recorded.telemetry ?? [])
-        if (event.event === "native_finished" && (event.agent ?? event.actor) === "codex" && event.codexFast !== undefined && event.at <= Date.now() && event.at >= Date.now() - METRIC_WINDOW_MS)
-          this.ctx.storage.sql.exec("INSERT OR IGNORE INTO codex_metrics(id,at,payload) VALUES(?,?,?)", `${id}:${event.id}`, event.at, JSON.stringify({...event, host}));
-      this.pruneCodexMetrics();
-    });
-  }
-  executionSettings(): Promise<ExecutionSettings> {
-    return this.ctx.storage.get<ExecutionSettings>("execution-settings").then(value => value ?? {codexFast: false});
-  }
-  async setExecutionSettings(input: ExecutionSettings) {
-    await this.ctx.storage.put("execution-settings", executionSettingsSchema.parse(input));
-    return this.executionSettings();
-  }
-  private pruneCodexMetrics() {
-    this.ctx.storage.sql.exec("DELETE FROM codex_metrics WHERE at < ?", Date.now() - METRIC_WINDOW_MS);
-    this.ctx.storage.sql.exec("DELETE FROM codex_metrics WHERE id IN (SELECT id FROM codex_metrics ORDER BY at DESC,id DESC LIMIT -1 OFFSET ?)", METRIC_LIMIT);
-  }
-  async executionSettingsView() {
-    this.pruneCodexMetrics();
-    const samples = this.ctx.storage.sql.exec<{payload: string}>("SELECT payload FROM codex_metrics ORDER BY at DESC,id DESC").toArray().map(row => JSON.parse(row.payload) as CodexSample);
-    return {...await this.executionSettings(), metrics: codexComparison(samples)};
+  reportRun(owner: string, id: string, generation: number, progress: Progress, host: RunnerHost) {
+    return this.runs.report(owner, id, generation, progress, host);
   }
   rate(key: string, max: number, window: number) {
     return this.sessions.rate(key, max, window);
@@ -466,7 +446,7 @@ export async function handle(
         attributes({ runId: input.id, generation: input.generation });
         const result = await trace("heartbeat", { runId: input.id, generation: input.generation }, () => store.heartbeatRun(owner, input.id, input.generation, host));
         const body = result ? z.object({cancel: z.boolean(), messages: z.array(z.unknown())}).parse(result) : null;
-        return Response.json(body ? {...body, settings: await store.executionSettings()} : { error: "Claim no longer active" }, {
+        return Response.json(body ?? { error: "Claim no longer active" }, {
           status: result ? 200 : 409,
         });
       }

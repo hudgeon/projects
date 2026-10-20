@@ -27,12 +27,10 @@ Helpers are told how to wait (`runner/instructions.ts`):
 - run anything over two minutes, such as a review, a test suite, a deploy or
   CI, in the background with its input closed (`< /dev/null`), and check on it
   with short commands that show its progress;
-- use the installed Claude version's background status and stop tools when
-  available (such as Monitor and TaskStop); otherwise check the exact task
-  or remote run directly;
+- follow a Claude background task with Monitor or by reading its output
+  file, and stop it with TaskStop;
 - query the exact CI/deploy run directly, with bounded polling and network
-  requests, and stop at success, failure or cancellation; never wait for an
-  output file to become nonempty as proof a task is still running;
+  requests, and stop at success, failure or cancellation;
 - wait on the process ID they started, never a name search: `pgrep -f`
   matches the waiting loop's own command line, so that loop never ends;
 - inspect local commands with no new output or CPU use for five minutes;

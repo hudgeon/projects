@@ -24,9 +24,6 @@ export async function runTurn(
     o, checks, j, event, failureReason, persist, publish, turn, ranHere, delivery, lastSaved,
     overran, screenshots,
   } = x;
-  // Read the shared preference at each turn boundary, including resumes and
-  // recovery. An in-flight turn keeps the mode it started with.
-  const codexFast = options.agent === "codex" ? await o.codexFast?.() ?? false : undefined;
   let timing: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs"> = {};
   const control = new AbortController();
   const started = performance.now();
@@ -37,7 +34,6 @@ export async function runTurn(
     ...(child ? {} : { agent: options.agent }),
     mode: options.readOnly ? ("read" as const) : ("change" as const),
     resumed: !!options.sessionId,
-    ...(codexFast === undefined ? {} : {codexFast}),
   };
   event("native_started", turnFields);
   // The turn's tokens add to its child's, or to the coordinator's, totals.
@@ -235,7 +231,6 @@ export async function runTurn(
     await persist();
     const value = await turn({
       ...options,
-      codexFast,
       fullAccess: o.fullAccess && !options.readOnly,
       onTiming: fields => { timing = {...timing, ...fields}; },
       person: o.person,
@@ -304,7 +299,7 @@ export async function runTurn(
     event("native_finished", {
       ...turnFields,
       ...timing,
-      ...(codexFast === undefined ? {} : {tokenUsageObserved}),
+      ...(options.agent === "codex" ? {tokenUsageObserved} : {}),
       durationMs: Math.round(performance.now() - started),
       ...tokens(),
       outcome: "completed",
@@ -328,7 +323,7 @@ export async function runTurn(
       event("native_finished", {
         ...turnFields,
         ...timing,
-        ...(codexFast === undefined ? {} : {tokenUsageObserved}),
+        ...(options.agent === "codex" ? {tokenUsageObserved} : {}),
         durationMs: Math.round(performance.now() - started),
         ...tokens(),
         outcome:

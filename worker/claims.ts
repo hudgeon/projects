@@ -1,6 +1,6 @@
 // What a runner is handed when it claims: the conversation, whose it is, how
-// that machine's conversation browser signs in, the repositories' activity,
-// the execution settings and a document waiting to be read.
+// that machine's conversation browser signs in, the repositories' activity
+// and a document waiting to be read.
 import { allowed, signsIn } from "./auth";
 import { attributes, trace } from "./telemetry";
 import type { BrowserSignIn, Lane, RunnerHost } from "../src/run-model";
@@ -8,7 +8,7 @@ import type { Portfolio } from "./index";
 
 type ClaimStore = Pick<
   DurableObjectStub<Portfolio>,
-  "claimRun" | "personNamed" | "overview" | "leaseDocument" | "executionSettings"
+  "claimRun" | "personNamed" | "overview" | "leaseDocument"
 >;
 export async function claimed(
   store: ClaimStore,
@@ -56,7 +56,6 @@ export async function claimed(
     run,
     ...(run ? { person, browserSignIn } : {}),
     activity,
-    settings: await store.executionSettings(),
     ...(document ? { document } : {}),
   };
 }

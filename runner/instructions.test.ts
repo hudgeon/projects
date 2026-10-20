@@ -48,3 +48,8 @@ test("a browser's instructions say how it signs in to Projects", () => {
     assert.match(text, /Open browser \/ sign in/);
   }
 });
+test("helpers follow a Claude background task with Monitor or its output file, with no polling workaround left", () => {
+  const text = helperInstructions("claude");
+  assert.match(text, /For Claude background tasks, follow output with Monitor or by reading the task's output file, and stop a task with TaskStop\./);
+  assert.doesNotMatch(text, /TaskOutput|empty output file|If no status tool is offered/);
+});

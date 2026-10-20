@@ -28,7 +28,6 @@ export type EngineOptions = {
   messages?: () => Promise<RunMessage[]>;
   screenshot?: (image: Screenshot) => Promise<ScreenshotInput>;
   browser?: () => Promise<NativeOptions["browser"]>;
-  codexFast?: () => Promise<boolean>;
   fullAccess?: boolean;
   contextSelector?: Selector;
   turn?: (options: NativeOptions) => Promise<unknown>;

@@ -21,8 +21,8 @@ Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
   conversation instead of starting another (`worker/upkeep.ts`). A week whose
   previous cycle is still active waits for it.
 - **Run upkeep now** in Settings (`src/upkeep-view.tsx`, `POST /api/upkeep`)
-  starts a cycle of its own at once. Any signed-in person may ask, like
-  changing Codex speed; the cycle is the deployment's and runs as its owner.
+  starts a cycle of its own at once. Any signed-in person may ask; the cycle
+  is the deployment's and runs as its owner.
   While a cycle is active it shows that one instead. Nobody starts an upkeep
   conversation from the composer, and machine tokens never reach the route.
 - The conversation belongs to the deployment owner (`OWNER_EMAIL`), and is

@@ -429,7 +429,6 @@ export class Runs {
     generation: number,
     progress: Progress,
     host: RunnerHost,
-    recorded?: (progress: Progress) => void,
   ) {
     this.contact(host);
     if (!(await this.get(id))) return false;
@@ -439,8 +438,7 @@ export class Runs {
       generation,
       progress,
     );
-    const current = await this.get(id);
-    if (accepted && current?.progress) recorded?.(current.progress);
+    await this.get(id);
     return accepted;
   }
 }

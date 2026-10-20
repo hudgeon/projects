@@ -66,10 +66,13 @@ test("native browser credentials travel through environment and read sessions ca
       if (agent === "claude") {
         const enabled = launch.args[launch.args.indexOf("--tools") + 1].split(",");
         const allowed = toolConfiguration.split(",");
-        for (const tool of ["Bash", "TaskOutput", "TaskStop"]) {
+        for (const tool of ["Bash", "TaskStop", "Monitor"]) {
           assert.equal(enabled.includes(tool), !readOnly, tool);
           assert.equal(allowed.includes(tool), !readOnly, tool);
         }
+        // Claude Code removed TaskOutput; a task's output file is read instead.
+        assert.ok(!enabled.includes("TaskOutput") && !allowed.includes("TaskOutput"));
+        assert.equal(launch.args[launch.args.indexOf("--permission-prompts") + 1], "none");
         assert.ok(launch.args.includes("--strict-mcp-config"), `strict MCP when readOnly=${readOnly}`);
         assert.deepEqual(Object.keys(JSON.parse(launch.args[launch.args.indexOf("--mcp-config") + 1]).mcpServers), ["projects_browser"]);
       }
@@ -247,31 +250,6 @@ test("a resumed Claude session's stale zero-turn result is neither the turn's re
     assert.ok(reports.every((usage) => (usage as {cached: number}).cached <= 1000), "the session's earlier turns are never counted");
     assert.deepEqual(reports.at(-1), {fresh: 1215, cached: 1000, output: 95, context: 1205});
   } finally { await rm(dir, {recursive: true, force: true}); }
-});
-
-test("Codex fast mode explicitly overrides new and resumed threads, including off", async () => {
-  const dir = await fixture();
-  try {
-    for (const fast of [true, false]) for (const sessionId of [undefined, "test-session"]) {
-      const binary = await fakeBinary(dir,"codex","success"), log = path.join(dir,"speed.log");
-      await writeFile(log, "");
-      let source = await readFile(binary,"utf8");
-      source = source.replace("import readline", "import {appendFileSync} from 'node:fs';\nimport readline")
-        .replace("const m=JSON.parse(line);", `const m=JSON.parse(line);appendFileSync(${JSON.stringify(log)},JSON.stringify(m)+'\\n');`)
-        .replace("result:{thread:{id:'test-session',status:{type:'idle'}}}", "result:{model:'model-a',reasoningEffort:'high',thread:{id:'test-session',status:{type:'idle'}}}")
-        .replace("if(mode==='exit')", "send({method:'item/agentMessage/delta',params:{threadId:'test-session',delta:'x'}});if(mode==='exit')");
-      await writeFile(binary,source);
-      const timing: Record<string,unknown> = {};
-      await nativeTurn({agent:"codex",cwd:dir,prompt:"Inspect",schema:{type:"object"},readOnly:true,sessionId,codexFast:fast,signal:AbortSignal.timeout(5000),binaries:{codex:binary},onSession:async()=>{},onTiming:fields=>Object.assign(timing,fields)});
-      const requests = (await readFile(log,"utf8")).trim().split("\n").map(s=>JSON.parse(s));
-      assert.equal(requests.find(r=>r.method===(sessionId?"thread/resume":"thread/start")).params.serviceTier,fast?"fast":"default");
-      const start = requests.find(r=>r.method==="turn/start");
-      assert.equal(start.params.serviceTier,fast?"fast":"default");
-      assert.equal(start.params.serviceTierForTurn,fast?"fast":"default");
-      assert.equal(timing.model,"model-a"); assert.equal(timing.effort,"high"); assert.equal(timing.attempts,1);
-      assert.equal(typeof timing.firstOutputMs,"number");
-    }
-  } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
 test("a Claude turn whose process runs on after its result is stopped with what it left running, and keeps that result", async () => {

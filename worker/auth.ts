@@ -107,7 +107,6 @@ export function browserMay(pathname: string, method: string) {
   const read = method === "GET" || method === "HEAD";
   if (
     /^\/api\/machines(?:\/|$)/.test(pathname) ||
-    pathname === "/api/execution-settings" ||
     pathname === "/api/upkeep" ||
     pathname === "/api/me"
   )

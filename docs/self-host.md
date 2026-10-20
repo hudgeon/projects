@@ -242,7 +242,7 @@ allowed. The session belongs to that browser alone: only its hash is kept, it
 ends when the browser closes or the provider ends it (checked every five
 minutes), on Sign out, when the machine is removed or a Deploy drops it from
 the list, or when the conversation continues on another machine, and it cannot
-connect or change machines, change execution settings, open Live View, read or
+connect or change machines, start upkeep, open Live View, read or
 act on email, or subscribe to notifications. The machine's runner drives that
 browser, so while it lives the runner can act through it, and could read its
 cookie over CDP, within those limits: narrower than signing the browser in by
