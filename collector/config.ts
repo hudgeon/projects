@@ -1,5 +1,6 @@
-// One config per machine, for its collector and its runner: what it observes,
-// where its tokens are, and how the Gmail accounts its inboxes are read with.
+// One config per machine, for its collector, chat watcher and runner: what it
+// observes, where its tokens are, and how the Gmail accounts its inboxes and
+// the people whose Slack it reads are signed in.
 import path from "node:path";
 import { z } from "zod";
 import { machineIdSchema } from "../src/telemetry";
@@ -50,6 +51,17 @@ export const configSchema = z.object({
         new Set(list.map((login) => login.account.toLowerCase())).size ===
         list.length,
       "Each inbox account is listed once.",
+    )
+    .default([]),
+  // Whose Slack this machine's chat watcher reads (collector/chats.ts), each
+  // with their own user token from SLACK_USER_TOKENS in the Doppler config
+  // above, and the app's SLACK_APP_TOKEN for Socket Mode.
+  slack: z
+    .array(z.email())
+    .max(10)
+    .refine(
+      (list) => new Set(list.map((email) => email.toLowerCase())).size === list.length,
+      "Each person is listed once.",
     )
     .default([]),
   // Work items are the issues labelled `work` in this repository; without it

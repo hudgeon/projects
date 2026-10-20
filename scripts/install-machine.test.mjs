@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const BUNDLES = ["collector", "service", "chats", "runner", "work-item"];
 // Each test installs a release into a home of its own, with stand-ins for the
 // commands the installer runs placed first on PATH: a git that answers for the
 // checkout, an npm whose build writes the bundles (stale ones are there
@@ -24,8 +25,9 @@ async function machine(t) {
   await mkdir(base, { recursive: true });
   await mkdir(bin);
   await mkdir(state);
-  await copyFile(path.join(import.meta.dirname, "install-machine.mjs"), path.join(release, "scripts/install-machine.mjs"));
-  for (const bundle of ["collector", "service", "runner", "work-item"])
+  for (const script of ["install-machine.mjs", "launchd.mjs"])
+    await copyFile(path.join(import.meta.dirname, script), path.join(release, "scripts", script));
+  for (const bundle of BUNDLES)
     await writeFile(path.join(release, ".local", `${bundle}.mjs`), "// stale bundle\n");
   await writeFile(path.join(bin, "git"), `#!/bin/sh
 case "$*" in
@@ -38,7 +40,7 @@ esac
 printf '%s\\n' "$PWD $*" >> "${root}/npm.log"
 [ "\${BUILD_FAILS:-}" = 1 ] && exit 1
 mkdir -p .local
-for bundle in collector service runner work-item; do printf '// built %s\\n' "\${BUILD_STAMP:-fresh}" > ".local/$bundle.mjs"; done
+for bundle in ${BUNDLES.join(" ")}; do printf '// built %s\\n' "\${BUILD_STAMP:-fresh}" > ".local/$bundle.mjs"; done
 `, { mode: 0o755 });
   await writeFile(path.join(bin, "launchctl"), `#!/bin/sh
 printf '%s\\n' "$*" >> "${log}"
@@ -72,7 +74,7 @@ test("the installer builds the bundles from the checkout, records its commit, an
   const { root, base, release, install, connect } = await machine(t);
   const { stdout } = await install([...connect, "--no-services"], tokens);
   assert.deepEqual((await readFile(path.join(root, "npm.log"), "utf8")).trim().split("\n"), [`${await realpath(release)} run collector:build`], "built in the checkout the installer came from");
-  for (const bundle of ["collector", "service", "runner", "work-item"])
+  for (const bundle of BUNDLES)
     assert.equal(await readFile(path.join(base, `${bundle}.mjs`), "utf8"), "// built fresh\n", `${bundle} comes from this build, not the stale one`);
   const recorded = JSON.parse(await readFile(path.join(base, "release.json"), "utf8"));
   assert.equal(recorded.commit, COMMIT);
@@ -195,4 +197,38 @@ test("--add-inbox connects a person's gws directory, existing and readable by yo
   assert.match(removed.stdout, /^Inboxes: you@example\.com \(default gws sign-in\)\.$/m);
   await assert.rejects(install(["--no-services", "--remove-inbox", "ada@example.com"], tokens), (e) => e.stderr.includes("No inbox is connected for ada@example.com on this machine."));
   assert.deepEqual({ ...(await config()), inboxAccounts: undefined }, { ...before, inboxAccounts: undefined });
+});
+
+test("--slack runs the chat watcher from the machine's Doppler config, restarts it with each release, and --no-slack stops it", { timeout: 30000 }, async (t) => {
+  const { base, bin, home, install, config, calls, connect } = await machine(t);
+  await writeFile(path.join(bin, "doppler"), `#!/bin/sh\nprintf '%s' "$NAMES"\n`, { mode: 0o755 });
+  await writeFile(path.join(base, "doppler-token"), "dp.st.example", { mode: 0o600 });
+  await writeFile(path.join(base, "machine.json"), JSON.stringify({ doppler: { project: "projects", config: "laptop" } }), { mode: 0o600 });
+  const names = (...list) => JSON.stringify(Object.fromEntries(list.map((name) => [name, {}])));
+  const machineTokens = ["COLLECTOR_TOKEN", "RUNNER_TOKEN"], all = names(...machineTokens, "SLACK_APP_TOKEN", "SLACK_USER_TOKENS");
+  const people = ["--slack", "Owner@example.com,colleague@example.com"];
+  await assert.rejects(install([...connect, ...people], { NAMES: names(...machineTokens) }, mac), (e) => e.stderr.includes("Add SLACK_APP_TOKEN and SLACK_USER_TOKENS to the Doppler config projects/laptop first."));
+  const { stdout } = await install([...connect, ...people], { NAMES: all }, mac);
+  assert.deepEqual((await config()).slack, ["owner@example.com", "colleague@example.com"]);
+  const job = path.join(home, "Library/LaunchAgents/local.projects.chats.plist");
+  const definition = await readFile(job, "utf8");
+  assert.match(definition, /<string>--chats<\/string>/);
+  assert.match(definition, /<key>KeepAlive<\/key><true\/>/);
+  assert.match(stdout, /^Chat watcher: /m);
+  assert.match(stdout, /^Slack: owner@example\.com, colleague@example\.com\.$/m);
+  // A release restarts the watcher on its new bundle.
+  let before = (await calls()).length;
+  await install([], { NAMES: all }, mac);
+  assert.ok((await calls()).slice(before).includes(`kickstart -k ${domain}/local.projects.chats`));
+  // --no-slack stops it and removes its job; the rest is untouched.
+  before = (await calls()).length;
+  const stopped = await install(["--no-slack"], { NAMES: names(...machineTokens) }, mac);
+  assert.deepEqual((await config()).slack, []);
+  assert.equal(existsSync(job), false);
+  assert.ok((await calls()).slice(before).includes(`bootout ${domain}/local.projects.chats`));
+  assert.match(stopped.stdout, /^Slack: none read\.$/m);
+  // Slack's tokens live in a Doppler config, and people are addresses.
+  await writeFile(path.join(base, "machine.json"), "{}", { mode: 0o600 });
+  await assert.rejects(install([...connect, "--no-services", "--slack", "owner@example.com"], tokens), (e) => e.stderr.includes("give the machine one first"));
+  await assert.rejects(install([...connect, "--no-services", "--slack", "owner"], tokens), (e) => e.stderr.includes("Give --slack as person@example.com"));
 });

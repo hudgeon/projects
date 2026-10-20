@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { siteHeaders } from "./upload";
 import { collect } from "./collect";
 import { configSchema, inboxLogins } from "./config";
 import { GMAIL_MODIFY_SCOPE } from "./delegation";
@@ -25,32 +26,13 @@ async function main() {
     console.log(JSON.stringify(snapshot));
     return;
   }
-  if (!config.endpoint) throw new Error("Missing endpoint");
-  const url = new URL("/api/ingest", config.endpoint);
-  const local = ["127.0.0.1", "localhost"].includes(url.hostname);
-  if (!local && url.protocol !== "https:")
-    throw new Error("Publishing requires HTTPS");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (!local) {
-    // Each machine has its own upload token, so the Worker knows which is
-    // calling.
-    const file = config.collectorTokenFile;
-    if (file && (await stat(file)).mode & 0o077)
-      throw new Error("Collector token must be readable only by its owner");
-    const token = file
-      ? (await readFile(file, "utf8")).trim()
-      : process.env.COLLECTOR_TOKEN;
-    if (!token || token.length < 32)
-      throw new Error("Collector upload token is not configured");
-    headers.Authorization = `Bearer ${token}`;
-  }
+  const { endpoint, headers } = await siteHeaders(config);
+  const url = new URL("/api/ingest", endpoint);
   // The Worker says which machine is on duty: that one reads the inbox and
   // applies Mark done and inbox requests.
   let duties = false;
   try {
-    const response = await fetch(new URL("/api/collector/duties", config.endpoint), {
+    const response = await fetch(new URL("/api/collector/duties", endpoint), {
       headers,
       redirect: "error",
       signal: AbortSignal.timeout(20_000),
@@ -89,7 +71,7 @@ async function main() {
   if (duties && args.includes("--closes")) {
     if (config.workRepo)
       try {
-        await applyCloses(config.endpoint, headers, issues, config.workRepo);
+        await applyCloses(endpoint, headers, issues, config.workRepo);
       } catch {
         console.error(
           "Mark done requests unavailable; they stay queued for the next run.",
@@ -102,7 +84,7 @@ async function main() {
     if (logins.length)
       try {
         await applyInboxActions(
-          config.endpoint,
+          endpoint,
           headers,
           snapshot.inboxes,
           (account) => {

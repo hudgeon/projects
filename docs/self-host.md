@@ -234,6 +234,12 @@ scope, customer/financial approvals and required release checks still apply.
 Set it back to false and restart the runner to restore restricted sessions;
 existing executors finish their current step before adopting the change.
 
+### Connect Slack
+
+The always-on machine can read each person's Slack as them, with a Slack app
+made for your workspace and its tokens in that machine's Doppler config:
+[Slack in Projects](slack.md) has the setup and the installer's `--slack`.
+
 ### Browser sign-in sessions
 
 On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new conversation

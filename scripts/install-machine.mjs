@@ -9,9 +9,11 @@
 // inboxes are connected one at a time with --add-inbox: the address alone
 // reads by delegation (the Workspace service account key in that Doppler
 // config), or with the gws config directory that person signed in to on this
-// machine; --remove-inbox drops one. Every run ends by listing the inboxes.
+// machine; --remove-inbox drops one. --slack names the people whose Slack this
+// machine's chat watcher reads, each with a user token in that Doppler config
+// (docs/slack.md); --no-slack stops it. Every run ends by listing both.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -19,6 +21,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -26,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { launchd, pause } from "./launchd.mjs";
 
 const home = homedir();
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,7 +45,7 @@ const fail = (message) => {
   console.error(message);
   process.exit(1);
 };
-const bundles = ["collector", "service", "runner", "work-item"];
+const bundles = ["collector", "service", "chats", "runner", "work-item"];
 // The bundles are built here, from the checkout as it is, so a release can
 // never install ones left by an earlier build. The checkout's commit is kept
 // beside them (release.json) and the runner logs it when it starts.
@@ -122,6 +126,13 @@ for (const account of flags("remove-inbox")) {
 }
 if (inboxes.length > 10) fail("At most ten inboxes can be connected on one machine.");
 if (flags("add-inbox").length || flags("remove-inbox").length) config.inboxAccounts = inboxes;
+// The people whose Slack the chat watcher reads: --slack sets the list,
+// --no-slack empties it, and otherwise it stays as it was.
+const slack = flags("slack").flatMap((value) => (value ?? "").split(",")).map((e) => e.trim().toLowerCase()).filter(Boolean);
+if (slack.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) fail("Give --slack as person@example.com, or several separated by commas.");
+if (slack.length) config.slack = [...new Set(slack)];
+if (args.includes("--no-slack")) config.slack = [];
+if (config.slack?.length && !config.doppler) fail("The chat watcher reads Slack's tokens from the machine's Doppler config; give the machine one first.");
 // Labels given once are kept, so a later run restarts the same launchd jobs
 // rather than starting a second collector and runner beside them.
 set("collectorLabel", flag("collector-label"));
@@ -178,7 +189,10 @@ const tokens = [
   ["collector", config.collectorTokenFile],
   ["runner", config.doppler && !config.tokenFile && !existsSync(runnerFile) ? undefined : runnerFile],
 ];
-const inDoppler = tokens.filter(([, target]) => !target).map(([role]) => `${role.toUpperCase()}_TOKEN`);
+const inDoppler = [
+  ...tokens.filter(([, target]) => !target).map(([role]) => `${role.toUpperCase()}_TOKEN`),
+  ...(config.slack?.length ? ["SLACK_APP_TOKEN", "SLACK_USER_TOKENS"] : []),
+];
 if (inDoppler.length) {
   const where = `${config.doppler.project}/${config.doppler.config}`;
   let names = [];
@@ -230,14 +244,14 @@ const logins = [
   ...(config.inboxAccount && !inboxes.some((known) => same(known.account, config.inboxAccount)) ? [`${config.inboxAccount} (default gws sign-in)`] : []),
   ...inboxes.map((known) => `${known.account} (${known.configDir ?? "delegated"})`),
 ];
-const connected = `Inboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
+const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",
   });
 if (process.platform !== "darwin" || args.includes("--no-services")) {
   console.log(
-    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file} running with your service manager.\n${connected}`,
+    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file}${config.slack?.length ? " and service.mjs --chats" : ""} running with your service manager.\n${connected}`,
   );
   process.exit(0);
 }
@@ -247,23 +261,9 @@ const node =
   keg && existsSync(path.join(keg[1], "opt", keg[2], keg[3]))
     ? path.join(keg[1], "opt", keg[2], keg[3])
     : process.execPath;
-const xml = (value) =>
-  String(value).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
 const searchPath = [path.join(home, ".local/bin"), path.dirname(node), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
-const plist = (label, program, extra, log) => `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${xml(label)}</string>
-  <key>ProgramArguments</key><array>
-${program.map((p) => `    <string>${xml(p)}</string>`).join("\n")}
-  </array>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml([...new Set(searchPath)].join(":"))}</string></dict>
-${extra}
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>${xml(path.join(base, `${log}.log`))}</string>
-  <key>StandardErrorPath</key><string>${xml(path.join(base, `${log}-error.log`))}</string>
-</dict></plist>
-`;
+const domain = `gui/${process.getuid()}`;
+const { plist, status, loaded, start, stop, restart } = launchd({ base, searchPath, domain });
 const services = [
   {
     label: config.collectorLabel ?? "local.projects.collector",
@@ -286,41 +286,20 @@ const services = [
     runner: true,
   },
 ];
-const domain = `gui/${process.getuid()}`;
-// What launchd knows of a job: whether it is loaded and, when a process is
-// running, its pid. A loaded job with no pid has exited (or never started)
-// and launchd is between retries.
-const status = (label) => {
-  try {
-    const print = execFileSync("launchctl", ["print", `${domain}/${label}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    return {
-      loaded: true,
-      pid: Number(/^\s*pid = (\d+)$/m.exec(print)?.[1]) || null,
-      exit: /^\s*last exit code = (.+)$/m.exec(print)?.[1] ?? null,
-    };
-  } catch {
-    return { loaded: false, pid: null, exit: null };
-  }
-};
-const loaded = (label) => status(label).loaded;
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-// launchd refuses a bootstrap ("5: Input/output error") while a job it was
-// told to boot out is still exiting, so wait for it to go, then retry briefly.
-const start = (target) => {
-  for (let attempt = 1; ; attempt++)
-    try {
-      execFileSync("launchctl", ["bootstrap", domain, target], { stdio: "pipe" });
-      return;
-    } catch (error) {
-      if (attempt === 10) throw error;
-      pause(1000);
-    }
-};
-const restart = (label, target) => {
-  execFileSync("launchctl", ["bootout", `${domain}/${label}`], { stdio: "inherit" });
-  for (let waited = 0; loaded(label) && waited < 15_000; waited += 500) pause(500);
-  start(target);
-};
+// The chat watcher stays running, and a release restarts it on the new bundle.
+const watcher = config.collectorLabel ? `${config.collectorLabel}-chats` : "local.projects.chats";
+if (config.slack?.length)
+  services.push({
+    label: watcher,
+    content: plist(
+      watcher,
+      [node, path.join(base, "service.mjs"), "--chats"],
+      "  <key>KeepAlive</key><true/>\n  <key>RunAtLoad</key><true/>\n  <key>ThrottleInterval</key><integer>30</integer>",
+      "chats",
+    ),
+    runner: false,
+    watcher: true,
+  });
 const agents = path.join(home, "Library/LaunchAgents");
 mkdirSync(agents, { recursive: true });
 // The runner's state once launchd has acted: a process started after the
@@ -352,6 +331,7 @@ for (const service of services) {
   const before = status(service.label);
   if (!before.loaded) start(target);
   else if (!service.runner && changed) restart(service.label, target);
+  else if (service.watcher) execFileSync("launchctl", ["kickstart", "-k", `${domain}/${service.label}`], { stdio: "inherit" });
   else if (service.runner && before.pid === null) {
     // Nothing is running, so there is nothing to drain: a changed definition
     // can be reloaded at once, and otherwise a kickstart runs the new bundle
@@ -370,7 +350,14 @@ for (const service of services) {
   }
   if (service.runner) runnerState = settled(service.label, before);
 }
-console.log(`${installed}\nRunner: ${runnerState}.\n${connected}`);
+// Nobody's Slack is read any more: the watcher stops and its job goes.
+const unused = path.join(agents, `${watcher}.plist`);
+if (!config.slack?.length && existsSync(unused)) {
+  if (loaded(watcher)) stop(watcher);
+  rmSync(unused);
+}
+const watching = config.slack?.length ? `\nChat watcher: ${status(watcher).pid ? "running" : "not running yet; launchd retries every 30 seconds"}. Its log is ${path.join(base, "chats.log")}.` : "";
+console.log(`${installed}\nRunner: ${runnerState}.${watching}\n${connected}`);
 console.log(
   `${config.host} is connected: its collector reports every two minutes and its runner picks up conversations. It needs you logged in after a restart.`,
 );
