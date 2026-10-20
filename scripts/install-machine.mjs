@@ -76,6 +76,9 @@ for (const bundle of bundles)
 
 // The config: what was there before, with any new values given.
 mkdirSync(base, { recursive: true, mode: 0o700 });
+// A directory made before this mode was set is narrowed too: it holds tokens
+// and the chat watcher's saved messages.
+chmodSync(base, 0o700);
 const file = path.join(base, "machine.json");
 const config = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 const set = (key, value) => value !== undefined && (config[key] = value);

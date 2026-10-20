@@ -15,7 +15,7 @@ on the `epic/upkeep` branch; the evidence it reads is described in
 Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
 
 - The Worker's cron (`wrangler.jsonc`, `triggers.crons`; `src/upkeep-model.ts`
-  names the same schedule) fires on Mondays at 06:00 UTC and starts one
+  names the same schedule) fires on Fridays at 18:00 UTC and starts one
   conversation per ISO week: its id is derived from the portfolio and the
   week, so a trigger that fires twice, or a retry, finds the week's
   conversation instead of starting another (`worker/upkeep.ts`). A week whose
@@ -37,7 +37,7 @@ Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
   like any other conversation.
 
 Locally, `wrangler dev` runs the trigger from
-`curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+6+*+*+1"`.
+`curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+18+*+*+5"`.
 
 ## The brief
 

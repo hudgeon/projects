@@ -19,8 +19,8 @@
     "SITE_URL": "http://127.0.0.1:8798",
     "TIME_ZONE": "UTC",
   },
-  // Weekly upkeep; run it by hand with curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+6+*+*+1".
-  "triggers": { "crons": ["0 6 * * 1"] },
+  // Weekly upkeep; run it by hand with curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+18+*+*+5".
+  "triggers": { "crons": ["0 18 * * 5"] },
   "durable_objects": {
     "bindings": [
       { "name": "PORTFOLIOS", "class_name": "Portfolio" },

@@ -76,6 +76,7 @@ test("the installer builds the bundles from the checkout, records its commit, an
   assert.deepEqual((await readFile(path.join(root, "npm.log"), "utf8")).trim().split("\n"), [`${await realpath(release)} run collector:build`], "built in the checkout the installer came from");
   for (const bundle of BUNDLES)
     assert.equal(await readFile(path.join(base, `${bundle}.mjs`), "utf8"), "// built fresh\n", `${bundle} comes from this build, not the stale one`);
+  assert.equal((await stat(base)).mode & 0o777, 0o700, "an existing directory is made yours alone");
   const recorded = JSON.parse(await readFile(path.join(base, "release.json"), "utf8"));
   assert.equal(recorded.commit, COMMIT);
   assert.equal(recorded.dirty, false);

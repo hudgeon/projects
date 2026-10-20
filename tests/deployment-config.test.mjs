@@ -26,7 +26,7 @@ test("the deployment keeps the weekly upkeep trigger beside the identity it fill
       },
     );
     const config = JSON.parse(await readFile(path.join(directory, "wrangler.jsonc"), "utf8"));
-    assert.deepEqual(config.triggers, { crons: ["0 6 * * 1"] });
+    assert.deepEqual(config.triggers, { crons: ["0 18 * * 5"] });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

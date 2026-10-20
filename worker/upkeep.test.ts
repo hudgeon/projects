@@ -18,17 +18,17 @@ import { start, options } from "./miniflare-fixtures";
 import { startUpkeep, type UpkeepStore } from "./upkeep";
 
 const DAY = 86400_000;
-// Monday 26 October 2026, 06:00 UTC, when the cron fires.
-const monday = Date.UTC(2026, 9, 26, 6);
+// Friday 30 October 2026, 18:00 UTC, when the cron fires.
+const friday = Date.UTC(2026, 9, 30, 18);
 const bundle = async (dir: string) => {
   const script = path.join(dir, "worker.mjs");
   await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script });
   return script;
 };
 const friction = {
-  observedAt: monday - 60_000,
+  observedAt: friday - 60_000,
   versions: { claude: "2.1.0" },
-  days: [{ date: "2026-10-25", app: "Claude" as const, sessions: 2, counts: { ...emptyCounts(), prompts: 4, toolCalls: 9, commandFailed: 1 } }],
+  days: [{ date: "2026-10-29", app: "Claude" as const, sessions: 2, counts: { ...emptyCounts(), prompts: 4, toolCalls: 9, commandFailed: 1 } }],
   state: "ok" as const,
   message: "Receipts for 2 sessions.",
 };
@@ -49,31 +49,31 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
     assert.equal(await db.reportRun(owner, run.id, generation, { seq: 1, state: "completed", summary: "No change needed this cycle.", children: [], masterSessionId: randomUUID() }, "studio"), true);
   try {
     // Nothing to run for until a machine has published.
-    await scheduled(monday);
+    await scheduled(friday);
     assert.deepEqual(await cycles(), []);
-    await db.publish({ ...closeSnapshot(monday - 60_000), work: { issues: [issue(7), issue(10, { upkeep: true, open: false }), issue(9, { title: "Agent upkeep", upkeep: true })], associations: [], associationsState: "ok" }, friction } as Parameters<Portfolio["publish"]>[0]);
-    await scheduled(monday);
+    await db.publish({ ...closeSnapshot(friday - 60_000), work: { issues: [issue(7), issue(10, { upkeep: true, open: false }), issue(9, { title: "Agent upkeep", upkeep: true })], associations: [], associationsState: "ok" }, friction } as Parameters<Portfolio["publish"]>[0]);
+    await scheduled(friday);
     const [first] = await cycles();
     assert.equal(first.owner, "owner@example.com", "the deployment owner's, as nobody asked for it");
     assert.equal(first.workIssue, 9, "linked to the open standing issue labelled upkeep");
-    assert.equal(first.id, await upkeepRequestId("test", upkeepWeek(monday)));
+    assert.equal(first.id, await upkeepRequestId("test", upkeepWeek(friday)));
     const run = (await db.getRun(first.id))!;
     assert.equal(run.lane, "upkeep");
     assert.match(run.messages[0].text, /^Weekly upkeep cycle: /);
     // The same week again (a retry, a second firing) finds it; a cron this
     // Worker does not know starts nothing.
-    await scheduled(monday + DAY);
-    await scheduled(monday + 6 * DAY, "0 7 * * 2");
+    await scheduled(friday + DAY);
+    await scheduled(friday + 2 * DAY, "0 7 * * 2");
     assert.equal((await cycles()).length, 1);
     // The next week waits while a cycle is still active, then starts its own.
-    await scheduled(monday + 7 * DAY);
+    await scheduled(friday + 7 * DAY);
     assert.equal((await cycles()).length, 1);
     const owner = randomUUID();
     assert.equal((await db.claimRun(owner, [], ["upkeep"], "studio"))!.id, first.id);
     await finish(owner, first);
-    await scheduled(monday + 7 * DAY);
+    await scheduled(friday + 7 * DAY);
     const second = (await cycles())[1];
-    assert.equal(second.id, await upkeepRequestId("test", upkeepWeek(monday + 7 * DAY)));
+    assert.equal(second.id, await upkeepRequestId("test", upkeepWeek(friday + 7 * DAY)));
     await finish(owner, (await db.claimRun(owner, [], ["upkeep"], "studio"))!);
     // Run upkeep now: a cycle of its own for the deployment owner, whoever asks.
     const salt = token(), cookie = token();
@@ -96,7 +96,7 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
     view = (await (await post("/api/upkeep", {})).json()) as View;
     assert.equal(view.started, "active");
     assert.equal(view.latest!.id, now.id);
-    await scheduled(monday + 14 * DAY);
+    await scheduled(friday + 14 * DAY);
     assert.equal((await cycles()).length, 3);
     view = (await (await mf.dispatchFetch(origin + "/api/upkeep", { headers: user })).json()) as View;
     assert.equal(view.latest!.id, now.id);

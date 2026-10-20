@@ -6,8 +6,8 @@
 import { z } from "zod";
 import { FRICTION_CATEGORIES, FRICTION_DAYS, FRICTION_SIGNS, frictionAppSchema, type FrictionCategory } from "./friction-model";
 import { machineIdSchema } from "./telemetry";
-export const UPKEEP_CRON = "0 6 * * 1";
-export const UPKEEP_SCHEDULE = "Mondays at 06:00 UTC";
+export const UPKEEP_CRON = "0 18 * * 5";
+export const UPKEEP_SCHEDULE = "Fridays at 18:00 UTC";
 // Active upkeep conversations at once: the week's, and a follow-up to an
 // earlier one.
 export const UPKEEP_ACTIVE_LIMIT = 2;
