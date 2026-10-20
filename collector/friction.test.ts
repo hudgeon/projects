@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { emptyCounts, frictionLine, frictionTotals, utcDate } from "../src/friction-model";
 import { snapshotSchema } from "../src/model";
-import { claudeTranscripts, codexTranscripts, collectFriction, frictionDays, frictionVersions, newer } from "./friction";
+import { claudeTranscripts, codexTranscripts, collectFriction, frictionDays, frictionVersions } from "./friction";
+import { newer } from "../src/friction-model";
 import type { Receipt } from "./friction-store";
 
 const now = Date.parse("2026-10-20T10:00:00.000Z");

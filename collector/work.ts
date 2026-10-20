@@ -20,6 +20,7 @@ import {
   type WorkAssociation,
   type WorkSnapshot,
 } from "../src/work-model";
+import { reviewedVersions } from "../src/upkeep-model";
 // Runs GitHub CLI and returns stdout.
 export type Gh = (args: string[]) => Promise<string>;
 export const workDirectory = (home: string) =>
@@ -113,6 +114,8 @@ export async function readIssues(
     }
   }
   return rows.map((raw) => {
+    const upkeep = raw.labels.some((l) => l.name === "upkeep");
+    const reviewed = upkeep ? reviewedVersions(raw.body) : null;
     const tagged = (prefix: string) =>
       raw.labels
         .filter((l) => l.name.startsWith(prefix))
@@ -133,7 +136,7 @@ export async function readIssues(
         capability: raw.milestone.description.slice(0, 400),
       },
       customers: tagged("customer:"),
-      ...(raw.labels.some((l) => l.name === "upkeep") ? { upkeep: true } : {}),
+      ...(upkeep ? { upkeep: true, ...(reviewed ? { reviewed } : {}) } : {}),
       repos: tagged("repo:")
         .filter((name) => /^[\w.-]+$/.test(name))
         .map((name) => `${owner}/${name}`),

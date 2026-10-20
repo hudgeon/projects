@@ -287,3 +287,24 @@ test("a Claude turn whose process runs on after its result is stopped with what 
     assert.equal(running(), false, "the command it left in the background was stopped with it");
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
+
+test("a Claude read turn given the web fetches the named hosts only, through domain rules; without it, or in a change turn, there is no web tool", async () => {
+  const dir = await fixture();
+  try {
+    for (const [readOnly, web] of [[true, ["code.claude.com", "learn.chatgpt.com"]], [true, undefined], [false, ["code.claude.com"]]] as const) {
+      const binary = await fakeBinary(dir, "claude", "success");
+      const capture = path.join(dir, "launch.json");
+      const source = await readFile(binary, "utf8");
+      await writeFile(binary, source.replace("import readline", `import {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(capture)}, JSON.stringify({args:process.argv.slice(2)}));\nimport readline`));
+      await nativeTurn({agent: "claude", cwd: dir, prompt: "Research", schema: {type: "object"}, readOnly, web: web && [...web], signal: AbortSignal.timeout(5000), binaries: {claude: binary}, onSession: async () => {}});
+      const launch = JSON.parse(await readFile(capture, "utf8"));
+      const tools = launch.args[launch.args.indexOf("--tools") + 1].split(",");
+      const allowed = launch.args[launch.args.indexOf("--allowedTools") + 1].split(",");
+      const given = readOnly && web ? [...web] : [];
+      assert.equal(tools.includes("WebFetch"), given.length > 0, `tools when readOnly=${readOnly}, web=${web}`);
+      assert.ok(!tools.includes("WebSearch") && !allowed.includes("WebFetch") && !allowed.includes("WebSearch"), "a bare rule would allow every host");
+      assert.deepEqual(allowed.filter((rule: string) => rule.startsWith("WebFetch(")), given.map((host) => `WebFetch(domain:${host})`));
+      assert.equal(tools.includes("Bash"), !readOnly);
+    }
+  } finally {await rm(dir, {recursive: true, force: true});}
+});

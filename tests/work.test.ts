@@ -223,13 +223,21 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
           repository: {
             i1: { comments: { nodes: [] } },
             i2: { comments: { nodes: [] } },
+            i3: { comments: { nodes: [] } },
           },
         },
       });
     return JSON.stringify(
       args.includes("closed")
         ? [raw(2, { state: "CLOSED", issueType: null, milestone: null })]
-        : [raw(1)],
+        : [
+            raw(1),
+            // The standing upkeep issue records the harness versions its research last reviewed.
+            raw(3, {
+              labels: [{ name: "work" }, { name: "upkeep" }],
+              body: `Agent upkeep.\n\n## Upkeep\nReviewed versions: Claude Code 2.1.303, Codex 0.162.1 (2026-10-26)\n${"x".repeat(900)}`,
+            }),
+          ],
     );
   };
   const now = Date.parse("2026-09-17T12:00:00Z");
@@ -252,8 +260,13 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
     repos: ["acme/widgets"],
     updatedAt: Date.parse("2026-09-17T00:00:00Z"),
   });
+  assert.equal(issues[1].upkeep, true);
+  assert.deepEqual(issues[1].reviewed, { claude: "2.1.303", codex: "0.162.1", on: "2026-10-26" });
+  assert.equal(issues[1].area, "unassigned");
+  assert.equal(issues[0].upkeep, undefined);
+  assert.equal(issues[0].reviewed, undefined);
   assert.deepEqual(
-    [issues[1].open, issues[1].kind, issues[1].initiative],
+    [issues[2].open, issues[2].kind, issues[2].initiative],
     [false, null, null],
   );
   assert.ok(
@@ -277,7 +290,7 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
   const home = await mkdtemp(path.join(tmpdir(), "work-read-"));
   try {
     assert.equal((await readWork(home, unavailable, "acme/work")).issues, null);
-    assert.equal((await readWork(home, gh, "acme/work")).issues?.length, 2);
+    assert.equal((await readWork(home, gh, "acme/work")).issues?.length, 3);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

@@ -5,6 +5,22 @@ import type { NativeOptions } from "./native";
 export const fullAccess = (o: Pick<NativeOptions, "readOnly" | "fullAccess">) =>
   !o.readOnly && o.fullAccess === true;
 
+// The built-in tools a Claude turn gets, and the rules that allow them. A
+// read turn given the web fetches the named hosts: WebFetch is enabled, and
+// only domain rules allow it, never a bare one. Claude Code also fetches the
+// documentation domains it preapproves itself without asking, and refuses
+// every other host in its unattended mode; a deny rule cannot carve those
+// out without denying the named hosts too.
+export function claudeTools(o: Pick<NativeOptions, "readOnly" | "fullAccess" | "web">) {
+  const enabled = fullAccess(o) ? "default" : o.readOnly
+    ? "Read,Glob,Grep,TodoWrite"
+    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskOutput,TaskStop,Monitor";
+  const web = o.readOnly && o.web?.length ? o.web : [];
+  return {
+    enabled: [enabled, ...(web.length ? ["WebFetch"] : [])].join(","),
+    allowed: [enabled, ...web.map((host) => `WebFetch(domain:${host})`)],
+  };
+}
 export function codexPermissions(o: NativeOptions, thread = false) {
   if (o.readOnly) return thread
     ? { sandbox: "read-only" }

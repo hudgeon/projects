@@ -50,9 +50,10 @@ export type EngineOptions = {
   mailboxToken?: (account: string) => Promise<string>;
   workRepo?: string;
   // The upkeep lane's sources on this machine: the configuration repository
-  // its changes go to, and where the collector keeps friction receipts.
+  // its changes go to, and the home folder where the collector keeps the
+  // friction receipts and the work item cache the brief reads.
   configRepo?: string;
-  frictionDir?: string;
+  home?: string;
   // Whose conversation this is, as the claim said: named in prompts and the
   // author of helpers' commits; never in receipts or telemetry.
   person?: Person;

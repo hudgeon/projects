@@ -13,7 +13,7 @@ import { activityBrief } from "./activity-brief";
 import type { EngineOptions, RunState } from "./execution";
 import { savePrivate, type Journal } from "./journal";
 import { masterInstructions, movedInstructions, personInstructions, quickInstructions } from "./master-instructions";
-import { upkeepInstructions } from "./upkeep-instructions";
+import { upkeepBrief } from "./upkeep-instructions";
 
 // The coordinator's brief and session record for one execution, read once,
 // and the first prompt of a turn that resumes its session.
@@ -60,7 +60,8 @@ export async function openCoordinator(
   };
   const workContext =
     o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue, o.person);
-  const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : o.run.lane === "upkeep" ? `\n${upkeepInstructions(o)}` : ""}`;
+  const upkeep = o.run.lane === "upkeep" ? `\n${await upkeepBrief(o)}` : "";
+  const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : upkeep}`;
   const briefHash = createHash("sha256")
     .update(stableBrief)
     .digest("hex")

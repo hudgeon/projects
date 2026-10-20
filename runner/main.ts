@@ -13,7 +13,6 @@ import {
 } from "../src/screenshot-model";
 import { machineSecret } from "../collector/collect";
 import { mailboxes } from "../collector/inbox-logins";
-import { frictionDirectory } from "../collector/friction-store";
 import {
   browserSignInSchema,
   laneSchema,
@@ -290,7 +289,7 @@ async function executeClaim(o: {
       ...mailboxes(config),
       workRepo: config.workRepo,
       configRepo: config.configRepo,
-      frictionDir: frictionDirectory(config.home),
+      home: config.home,
       person: personSchema.safeParse(claim.person).data,
       browserSignIn: browserSignInSchema.safeParse(claim.browserSignIn).data,
       latestMessages: () => messages,

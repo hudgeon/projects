@@ -81,6 +81,16 @@ export const frictionSnapshotSchema = z
   .strict();
 export type FrictionSnapshot = z.infer<typeof frictionSnapshotSchema>;
 export const utcDate = (at: number) => new Date(at).toISOString().slice(0, 10);
+// Whether one version is newer than another, numeric part by part; a
+// pre-release label sorts below a number.
+export function newer(release: string, than: string) {
+  const parts = (v: string) => v.split(/[.+-]/).map((n) => (/^\d+$/.test(n) ? Number(n) : -1));
+  const a = parts(release),
+    b = parts(than);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1)
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  return false;
+}
 // Totals over the days since a date, each app's sessions and counts added.
 export function frictionTotals(days: FrictionDay[], since: string) {
   const total = { sessions: 0, counts: emptyCounts() };

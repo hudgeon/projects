@@ -27,7 +27,7 @@ import {
 import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
 import { nativeEnv } from "./native-env";
 export { nativeEnv } from "./native-env";
-import { fullAccess, codexPermissions, codexFilesystem } from "./native-access";
+import { fullAccess, codexPermissions, codexFilesystem, claudeTools } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
@@ -53,6 +53,8 @@ export type NativeOptions = {
   schema: Record<string, unknown>;
   readOnly: boolean;
   fullAccess?: boolean;
+  // Hosts a read-only Claude turn may fetch, and no other (native-access.ts).
+  web?: string[];
   codexFast?: boolean;
   onTiming?: (fields: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs">) => void;
   writableRoots?: string[];
@@ -643,9 +645,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   o.signal.throwIfAborted();
   const connectors = o.connectors?.claude;
   const unrestricted = fullAccess(o);
-  const enabledTools = unrestricted ? "default" : o.readOnly
-    ? "Read,Glob,Grep,TodoWrite"
-    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskOutput,TaskStop,Monitor";
+  const claude = claudeTools(o);
   const args = [
     "-p",
     "--output-format",
@@ -660,11 +660,11 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     unrestricted ? "bypassPermissions" : "dontAsk",
     // TodoWrite keeps only the session's plan; it changes nothing.
     "--tools",
-    enabledTools,
+    claude.enabled,
     ...(unrestricted ? [] : [
     "--allowedTools",
     [
-      enabledTools,
+      ...claude.allowed,
       ...(o.browser
         ? browserTools(o.readOnly).map(
             (tool) => `mcp__projects_browser__${tool}`,

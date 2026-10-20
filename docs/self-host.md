@@ -123,7 +123,8 @@ every start logs the `release` it runs. Options:
 - `--work-repo owner/repo` (optional): a repository whose issues labelled
   `work` are your work items. Without it, work items and Mark done are off.
   An open one labelled `upkeep` as well is the standing record of the weekly
-  [upkeep](upkeep.md) cycle.
+  [upkeep](upkeep.md) cycle; the `Reviewed versions:` line under its
+  `## Upkeep` heading is where each cycle's harness research starts.
 - `--config-repo owner/repo` (optional): the shared repository of your global
   agent rules, skills, hooks and repository templates. The upkeep cycle
   dispatches its changes there when that repository is also registered as a

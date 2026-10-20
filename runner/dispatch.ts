@@ -11,6 +11,7 @@ import { HELPER_FAILURES } from "./turn-limits";
 import type { Execution } from "./execution";
 import type { Journal } from "./journal";
 import { outputSchema } from "./decisions";
+import { UPKEEP_SOURCE_HOSTS } from "../src/upkeep-model";
 
 export async function dispatch(
   x: Execution,
@@ -161,6 +162,9 @@ export async function dispatch(
           prompt: `${workLine}${workContext ? `${workContext}\n\n` : ""}${projectContext.prompt}\n${handoff}${restored ? `This worktree was recreated on this machine from another machine's copy on GitHub${savedAt ? `, which holds its work as of ${new Date(savedAt).toISOString()}` : ""}; its uncommitted changes are present. Work after that may be missing and the earlier session's memory is not available: review git status, the branch and its pull request before continuing, and never repeat a change that already landed.\n\n` : ""}${task.prompt}\n\n${requesterInstructions(o.person, o.inboxes)}${s.messages.some((message) => message.screenshots?.length) ? "The attached screenshots are user-provided evidence, ordered by these messages: " + JSON.stringify(s.messages.filter((message) => message.screenshots?.length)) + "\n\n" : ""}Work only on this assigned task. Read repository instructions and the relevant plan. Preserve other sessions. Use this worktree for changes. Carry this assigned outcome through its authorized checks, required review, merge, deployment, visual verification and required machine sync before returning; a draft-only request ends at the verified saved draft. Keep working through routine fixable failures and delivery stages in this same session. Report actual gate evidence and remaining steps; a green open PR or a native turn ending is not release completion. Stop for missing authority or a failed gate you cannot fix within scope. Return the required structured result with actual check evidence and GitHub links; no secrets or raw tool output.\n\n${helperInstructions(task.agent, o.fullAccess, o.person)}`,
           schema: outputSchema(childResultSchema),
           readOnly: task.mode === "read",
+          // An upkeep read child researches the harnesses on their official
+          // sites (docs/upkeep.md); no other child is given the web this way.
+          ...(o.run.lane === "upkeep" && task.mode === "read" ? { web: UPKEEP_SOURCE_HOSTS } : {}),
           connectors: await (o.connectors ?? connectorAccess)(),
           // A Git worktree's index/objects live in its repository's common Git
           // directory. Grant that exact directory, never the primary worktree.

@@ -7,6 +7,7 @@ import {
   utcDate,
   type FrictionDay,
   type FrictionSnapshot,
+  newer,
 } from "../src/friction-model";
 import { claudeRecord, emptyClaudeState, type ClaudeState } from "./friction-claude";
 import { codexRecord, emptyCodexState, type CodexState } from "./friction-codex";
@@ -109,15 +110,6 @@ export function frictionDays(receipts: Receipt[], now: number): FrictionDay[] {
 }
 const versionText = (value: unknown) =>
   typeof value === "string" && /^[\w.+-]{1,40}$/.test(value) ? value : undefined;
-// Is a release newer than another, by its dotted numbers.
-export function newer(release: string, than: string) {
-  const parts = (v: string) => v.split(/[.+-]/).map((n) => (/^\d+$/.test(n) ? Number(n) : -1));
-  const a = parts(release),
-    b = parts(than);
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1)
-    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
-  return false;
-}
 // The version the newest session of each app ran with, and a newer Codex
 // release the app has seen; its record of one can be older than the install.
 export function frictionVersions(receipts: Receipt[], codexLatest?: unknown) {
