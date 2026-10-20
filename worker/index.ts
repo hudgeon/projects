@@ -64,11 +64,6 @@ export class Portfolio extends DurableObject<Env> {
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
-    // Codex runs at standard speed only: the former speed setting and its
-    // timing samples are dropped, synchronously and as a no-op once gone.
-    // Both lines leave with older runners' speed field (src/telemetry.ts).
-    ctx.storage.sql.exec("DROP TABLE IF EXISTS codex_metrics");
-    ctx.storage.kv.delete("execution-settings");
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });

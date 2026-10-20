@@ -127,6 +127,11 @@ test("runner receipt telemetry is bounded, typed and excludes native payloads", 
     masterSessionId: null,
   };
   assert.ok(progressSchema.safeParse(progress).success); // deployed older runners remain compatible
+  // A conversation stored by an older runner keeps its requested Codex speed
+  // on events: the event still reads, without it.
+  const stored = progressSchema.parse({ ...progress, telemetry: [{ ...event, codexFast: true }] });
+  assert.equal("codexFast" in stored.telemetry![0], false);
+  assert.equal(executionEventSchema.safeParse({ ...event, codexFast: true }).success, false, "no runner sends it now");
   assert.ok(
     progressSchema.safeParse({
       ...progress,

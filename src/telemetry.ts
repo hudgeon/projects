@@ -153,10 +153,6 @@ export const executionEventSchema = z
     mode: z.enum(["read", "change"]).optional(),
     resumed: z.boolean().optional(),
     durationMs: ms.optional(),
-    // An older runner's requested Codex speed: accepted, never stored or
-    // shown. Codex runs at standard speed only; this field goes once no
-    // runner older than that release reports, with the Worker's cleanup.
-    codexFast: z.boolean().optional(),
     // The resolved session configuration, never prompt text.
     model: z
       .string()
@@ -179,6 +175,14 @@ export const executionEventSchema = z
   })
   .strict();
 export type ExecutionEvent = z.infer<typeof executionEventSchema>;
+// An event as stored in a conversation's progress or a runner's journal.
+// Runners from before Codex ran at standard speed only recorded the speed
+// they asked for; it is dropped when read, so it is neither kept nor shown.
+export const storedExecutionEventSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object" || !("codexFast" in value)) return value;
+  const { codexFast: _speed, ...event } = value as Record<string, unknown>;
+  return event;
+}, executionEventSchema);
 // Bounded receipts travel through the existing authenticated report/journal path.
 // They contain categories and timings, never model text or native identifiers.
 export const TELEMETRY_LIMIT = 40;

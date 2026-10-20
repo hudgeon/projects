@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
-  executionEventSchema,
   machineIdSchema,
+  storedExecutionEventSchema,
   TELEMETRY_LIMIT,
 } from "./telemetry";
 import { screenshotInputsSchema, type Screenshot } from "./screenshot-model";
@@ -316,7 +316,7 @@ export const progressSchema = z
     // reviews it at its next decision.
     steeredMessageIds: z.array(uuid).max(40).optional(),
     live: liveSchema.optional(),
-    telemetry: z.array(executionEventSchema).max(TELEMETRY_LIMIT).optional(),
+    telemetry: z.array(storedExecutionEventSchema).max(TELEMETRY_LIMIT).optional(),
     notes: z.array(progressNoteSchema).max(PROGRESS_NOTE_LIMIT).optional(),
   })
   .strict();
