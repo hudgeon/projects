@@ -1,17 +1,19 @@
 // The chat watcher: a background service on a machine whose config names
-// people's Slack (`slack` in machine.json). It stays connected, so a message
-// reaches Projects within seconds. Slack arrives over Socket Mode, an
-// outbound WebSocket, so the machine needs no public address. The app token
-// and each person's user token come from the machine's Doppler config through
-// the service (collector/service.ts) and stay in memory. Each person's read
-// goes to the Worker with this machine's collector token. What waits is kept
-// in an owner-only file beside the config, so a restart loses nothing; logs
-// carry counts, never names or text.
+// people's Slack (`slack`) or Teams (`teams`) in machine.json. It stays
+// connected, so a message reaches Projects within seconds. Slack arrives over
+// Socket Mode, an outbound WebSocket; Teams is read from a signed-in Chrome
+// profile over the DevTools protocol (collector/teams-chrome.ts). Tokens and
+// profiles come from the machine through the service (collector/service.ts)
+// and stay in memory. Each person's read goes to the Worker with this
+// machine's collector token. What waits is kept in owner-only files beside
+// the config, so a restart loses nothing; logs carry counts, never names or
+// text.
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { configSchema } from "./config";
 import { siteHeaders } from "./upload";
+import { startTeams } from "./teams-chrome";
 import { chatItemSchema, type ChatItem, type ChatRead } from "../src/chat-model";
 import {
   applyEdit,
@@ -78,6 +80,10 @@ async function main() {
   if (!file) throw new Error("Usage: chats.mjs machine.json");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   const site = await siteHeaders(config);
+  // Teams runs its own browser-backed loop per person, beside Slack.
+  const stopTeams = config.teams.map((t) =>
+    startTeams({ account: t.account, profileDir: t.profileDir, site, stateDir: path.dirname(file) }),
+  );
   const stateFile = path.join(path.dirname(file), "chats-slack.json");
   const saved = savedSchema.safeParse(JSON.parse(await readFile(stateFile, "utf8").catch(() => "{}")));
   const kept = saved.success ? saved.data : { people: {}, names: {} };
@@ -323,7 +329,9 @@ async function main() {
         await post(person);
       })();
   }, TICK_MS);
-  process.on("SIGTERM", () => void save().finally(() => process.exit(0)));
+  process.on("SIGTERM", () => {
+    void Promise.allSettled([save(), ...stopTeams.map((stop) => stop())]).finally(() => process.exit(0));
+  });
   if (connectable) await listen(appToken);
 }
 main().catch(() => {

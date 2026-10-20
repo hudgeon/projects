@@ -240,6 +240,13 @@ The always-on machine can read each person's Slack as them, with a Slack app
 made for your workspace and its tokens in that machine's Doppler config:
 [Slack in Projects](slack.md) has the setup and the installer's `--slack`.
 
+### Connect Teams
+
+For a person with a Teams account in a customer's tenant but no API access,
+the always-on machine can read their Teams in a signed-in Chrome profile:
+[Microsoft Teams in Projects](teams.md) has the setup and the installer's
+`--teams`. Confirm it is allowed under the customer agreement first.
+
 ### Browser sign-in sessions
 
 On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new conversation

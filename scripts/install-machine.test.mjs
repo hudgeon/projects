@@ -25,7 +25,7 @@ async function machine(t) {
   await mkdir(base, { recursive: true });
   await mkdir(bin);
   await mkdir(state);
-  for (const script of ["install-machine.mjs", "launchd.mjs"])
+  for (const script of ["install-machine.mjs", "launchd.mjs", "connections.mjs"])
     await copyFile(path.join(import.meta.dirname, script), path.join(release, "scripts", script));
   for (const bundle of BUNDLES)
     await writeFile(path.join(release, ".local", `${bundle}.mjs`), "// stale bundle\n");
@@ -232,4 +232,39 @@ test("--slack runs the chat watcher from the machine's Doppler config, restarts 
   await writeFile(path.join(base, "machine.json"), "{}", { mode: 0o600 });
   await assert.rejects(install([...connect, "--no-services", "--slack", "owner@example.com"], tokens), (e) => e.stderr.includes("give the machine one first"));
   await assert.rejects(install([...connect, "--no-services", "--slack", "owner"], tokens), (e) => e.stderr.includes("Give --slack as person@example.com"));
+});
+
+test("--teams runs the chat watcher from a signed-in Chrome profile, needs no Doppler, and --no-teams stops it", { timeout: 30000 }, async (t) => {
+  const { root, home, base, install, config, calls, connect } = await machine(t);
+  const profile = path.join(home, "Projects-Teams");
+  await mkdir(profile, { mode: 0o700 });
+  // Teams needs no Doppler config: the profile is local. One run connects it.
+  const { stdout } = await install([...connect, "--teams", `owner@example.com=${profile}`], tokens, mac);
+  assert.deepEqual((await config()).teams, [{ account: "owner@example.com", profileDir: profile }]);
+  const job = path.join(home, "Library/LaunchAgents/local.projects.chats.plist");
+  assert.match(await readFile(job, "utf8"), /<string>--chats<\/string>/);
+  assert.match(stdout, /^Chat watcher: /m);
+  assert.match(stdout, /^Teams: owner@example\.com\.$/m);
+  // A later run restarts the watcher on its new bundle.
+  let before = (await calls()).length;
+  await install([], tokens, mac);
+  assert.ok((await calls()).slice(before).includes(`kickstart -k ${domain}/local.projects.chats`));
+  // --no-teams stops it and removes its job (no Slack either).
+  before = (await calls()).length;
+  const stopped = await install(["--no-teams"], tokens, mac);
+  assert.deepEqual((await config()).teams, []);
+  assert.equal(existsSync(job), false);
+  assert.ok((await calls()).slice(before).includes(`bootout ${domain}/local.projects.chats`));
+  assert.match(stopped.stdout, /^Teams: none read\.$/m);
+  // Refused, changing nothing: a world-readable profile, a relative path, a malformed entry.
+  const openDir = path.join(root, "open-teams");
+  await mkdir(openDir, { mode: 0o755 });
+  for (const [entry, message] of [
+    [`colleague@example.com=${openDir}`, `readable by you alone: chmod 700 ${openDir}`],
+    ["colleague@example.com=relative/path", "as an absolute path"],
+    ["bogus", "Give --teams as person@example.com="],
+  ]) {
+    await assert.rejects(install([...connect, "--no-services", "--teams", entry], tokens), (e) => e.stderr.includes(message), entry);
+    assert.deepEqual((await config()).teams, [], entry);
+  }
 });

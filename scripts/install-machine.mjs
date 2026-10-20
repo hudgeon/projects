@@ -11,9 +11,11 @@
 // config), or with the gws config directory that person signed in to on this
 // machine; --remove-inbox drops one. --slack names the people whose Slack this
 // machine's chat watcher reads, each with a user token in that Doppler config
-// (docs/slack.md); --no-slack stops it. Every run ends by listing both.
+// (docs/slack.md); --no-slack stops it. --teams names the people whose Microsoft
+// Teams it reads, each in a Chrome profile on this machine they signed in to
+// (docs/teams.md); --no-teams stops it. Every run ends by listing them.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--teams person@example.com=~/Library/Projects-Teams] [--no-teams] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -22,7 +24,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -30,6 +31,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchd, pause } from "./launchd.mjs";
+import { applyConnections } from "./connections.mjs";
 
 const home = homedir();
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -89,53 +91,10 @@ set("agents", flag("agents")?.split(",").map((a) => a.trim()));
 set("workRepo", flag("work-repo"));
 set("configRepo", flag("config-repo"));
 set("inboxAccount", flag("inbox"));
-// Other people's inboxes: each a Gmail account read by delegation (the address
-// alone) or with the gws config directory that person signed in to on this
-// machine, which must be theirs to read and yours alone to see, like gws's
-// own. --add-inbox lists an account or changes how it is read; --remove-inbox
-// drops it. Nothing else in the config changes, and nothing is written until
-// every entry is valid.
+// Inbox, Slack and Teams connection flags, in their own module to keep this
+// file small. It mutates config and returns the inbox list for the summary.
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
-const inboxes = Array.isArray(config.inboxAccounts) ? [...config.inboxAccounts] : [];
-const connect = (login) => {
-  const i = inboxes.findIndex((known) => same(known.account, login.account));
-  if (i === -1) inboxes.push(login);
-  else inboxes[i] = login;
-};
-for (const entry of flags("add-inbox")) {
-  const [, account, dir] = /^([^\s@=]+@[^\s@=]+\.[^\s@=]+)(?:=(.+))?$/.exec(entry ?? "") ?? [];
-  if (!account) fail("Give --add-inbox as person@example.com (read by delegation) or person@example.com=/path/to/their/gws/config/directory.");
-  if (dir === undefined) {
-    connect({ account });
-    continue;
-  }
-  const configDir = expand(dir);
-  if (!path.isAbsolute(configDir)) fail(`Give ${account}'s gws config directory as an absolute path (or under ~).`);
-  let info;
-  try {
-    info = statSync(configDir);
-  } catch {
-    fail(`${configDir} does not exist. ${account} signs gws in there first: see docs/self-host.md, Connect a person's inbox.`);
-  }
-  if (!info.isDirectory()) fail(`${configDir} is not a directory.`);
-  if (info.uid !== process.getuid() || info.mode & 0o077)
-    fail(`${configDir} must be yours and readable by you alone, like gws's own config directory: chmod 700 ${configDir}`);
-  connect({ account, configDir: path.resolve(configDir) });
-}
-for (const account of flags("remove-inbox")) {
-  const i = inboxes.findIndex((known) => account && same(known.account, account));
-  if (i === -1) fail(`No inbox is connected for ${account ?? "that account"} on this machine.`);
-  inboxes.splice(i, 1);
-}
-if (inboxes.length > 10) fail("At most ten inboxes can be connected on one machine.");
-if (flags("add-inbox").length || flags("remove-inbox").length) config.inboxAccounts = inboxes;
-// The people whose Slack the chat watcher reads: --slack sets the list,
-// --no-slack empties it, and otherwise it stays as it was.
-const slack = flags("slack").flatMap((value) => (value ?? "").split(",")).map((e) => e.trim().toLowerCase()).filter(Boolean);
-if (slack.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) fail("Give --slack as person@example.com, or several separated by commas.");
-if (slack.length) config.slack = [...new Set(slack)];
-if (args.includes("--no-slack")) config.slack = [];
-if (config.slack?.length && !config.doppler) fail("The chat watcher reads Slack's tokens from the machine's Doppler config; give the machine one first.");
+const { inboxes } = applyConnections(config, { args, flags, expand, fail });
 // Labels given once are kept, so a later run restarts the same launchd jobs
 // rather than starting a second collector and runner beside them.
 set("collectorLabel", flag("collector-label"));
@@ -247,14 +206,14 @@ const logins = [
   ...(config.inboxAccount && !inboxes.some((known) => same(known.account, config.inboxAccount)) ? [`${config.inboxAccount} (default gws sign-in)`] : []),
   ...inboxes.map((known) => `${known.account} (${known.configDir ?? "delegated"})`),
 ];
-const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
+const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${config.teams?.length ? config.teams.map((t) => t.account).join(", ") : "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",
   });
 if (process.platform !== "darwin" || args.includes("--no-services")) {
   console.log(
-    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file}${config.slack?.length ? " and service.mjs --chats" : ""} running with your service manager.\n${connected}`,
+    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file}${config.slack?.length || config.teams?.length ? " and service.mjs --chats" : ""} running with your service manager.\n${connected}`,
   );
   process.exit(0);
 }
@@ -291,7 +250,7 @@ const services = [
 ];
 // The chat watcher stays running, and a release restarts it on the new bundle.
 const watcher = config.collectorLabel ? `${config.collectorLabel}-chats` : "local.projects.chats";
-if (config.slack?.length)
+if (config.slack?.length || config.teams?.length)
   services.push({
     label: watcher,
     content: plist(
@@ -355,11 +314,11 @@ for (const service of services) {
 }
 // Nobody's Slack is read any more: the watcher stops and its job goes.
 const unused = path.join(agents, `${watcher}.plist`);
-if (!config.slack?.length && existsSync(unused)) {
+if (!config.slack?.length && !config.teams?.length && existsSync(unused)) {
   if (loaded(watcher)) stop(watcher);
   rmSync(unused);
 }
-const watching = config.slack?.length ? `\nChat watcher: ${status(watcher).pid ? "running" : "not running yet; launchd retries every 30 seconds"}. Its log is ${path.join(base, "chats.log")}.` : "";
+const watching = (config.slack?.length || config.teams?.length) ? `\nChat watcher: ${status(watcher).pid ? "running" : "not running yet; launchd retries every 30 seconds"}. Its log is ${path.join(base, "chats.log")}.` : "";
 console.log(`${installed}\nRunner: ${runnerState}.${watching}\n${connected}`);
 console.log(
   `${config.host} is connected: its collector reports every two minutes and its runner picks up conversations. It needs you logged in after a restart.`,

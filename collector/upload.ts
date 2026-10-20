@@ -1,7 +1,10 @@
 // How this machine reaches its Projects site: HTTPS unless local, with its
 // own collector token, so the Worker knows which machine is calling.
 import { readFile, stat } from "node:fs/promises";
+import { chatItemSchema, type ChatRead } from "../src/chat-model";
 import type { Config } from "./config";
+
+export type Site = { endpoint: string; headers: Record<string, string> };
 
 export async function siteHeaders(config: Pick<Config, "endpoint" | "collectorTokenFile">) {
   if (!config.endpoint) throw new Error("Missing endpoint");
@@ -21,5 +24,23 @@ export async function siteHeaders(config: Pick<Config, "endpoint" | "collectorTo
       throw new Error("Collector upload token is not configured");
     headers.Authorization = `Bearer ${token}`;
   }
-  return { endpoint: config.endpoint, headers };
+  return { endpoint: config.endpoint, headers } satisfies Site;
+}
+// Post one person's chat read for a source, dropping any item that does not
+// fit the contract rather than failing the whole read. Returns the HTTP
+// status, or null if the request could not be made.
+export async function postChatRead(site: Site, read: ChatRead): Promise<number | null> {
+  const safe = { ...read, items: read.items.filter((item) => chatItemSchema.safeParse(item).success) };
+  try {
+    const response = await fetch(new URL("/api/chats/read", site.endpoint), {
+      method: "POST",
+      headers: site.headers,
+      body: JSON.stringify(safe),
+      redirect: "error",
+      signal: AbortSignal.timeout(20_000),
+    });
+    return response.status;
+  } catch {
+    return null;
+  }
 }

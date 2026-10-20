@@ -64,6 +64,17 @@ export const configSchema = z.object({
       "Each person is listed once.",
     )
     .default([]),
+  // Whose Microsoft Teams this machine's chat watcher reads, each in a Chrome
+  // profile on this machine they signed in to once (collector/teams-chrome.ts).
+  // Only the list is read; no chat is opened, so no read receipt is sent.
+  teams: z
+    .array(z.object({ account: z.email(), profileDir: absolute }).strict())
+    .max(10)
+    .refine(
+      (list) => new Set(list.map((t) => t.account.toLowerCase())).size === list.length,
+      "Each person is listed once.",
+    )
+    .default([]),
   // Work items are the issues labelled `work` in this repository; without it
   // the overview has no work items or Mark done.
   workRepo: z
