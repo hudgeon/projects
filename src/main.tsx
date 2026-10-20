@@ -1,6 +1,7 @@
 import { InboxView, inboxCount } from "./inbox-view";
 import { Machines } from "./machines-view";
 import { ExecutionSettingsPanel } from "./execution-settings-view";
+import { UpkeepPanel } from "./upkeep-view";
 import { Restart } from "./restart";
 import {
   ProjectConversations,
@@ -688,16 +689,11 @@ function Dashboard() {
         {view === "project" && navigation.project && (
           <section className="project-page" aria-label="Project details">
             <nav className="breadcrumbs" aria-label="Project navigation">
-              <Link to="/" search={{ view: "health" }}>
-                ← Settings
-              </Link>
+              <Link to="/" search={{ view: "health" }}>← Settings</Link>
               {navigation.run && (
                 <Link
                   to="/"
-                  search={conversationSearch(
-                    navigation.run,
-                    navigation.project,
-                  )}
+                  search={conversationSearch(navigation.run, navigation.project)}
                 >
                   ← Back to conversation
                 </Link>
@@ -739,6 +735,7 @@ function Dashboard() {
             <h1 className="page-title">Settings</h1>
             <ProfilePanel />
             <ExecutionSettingsPanel />
+            <UpkeepPanel />
             <Machines
               snapshots={snapshots}
               machines={query.data?.machines ?? []}

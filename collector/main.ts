@@ -1,6 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
-import { collect, gwsFor } from "./collect";
+import { collect } from "./collect";
 import { configSchema, inboxLogins } from "./config";
+import { GMAIL_MODIFY_SCOPE } from "./delegation";
+import { inboxGws } from "./inbox-logins";
 import { applyCloses } from "./close";
 import { oneClick, applyInboxActions } from "./inbox-actions";
 import { cacheIssues } from "./work";
@@ -95,7 +97,7 @@ async function main() {
         process.exitCode = 1;
       }
     // Archive and unsubscribe requests use this scan's own inbox reads, each
-    // applied with the sign-in of the inbox it names.
+    // applied with the sign-in or delegated token of the inbox it names.
     const logins = inboxLogins(config);
     if (logins.length)
       try {
@@ -105,7 +107,7 @@ async function main() {
           snapshot.inboxes,
           (account) => {
             const login = logins.find((l) => l.account.toLowerCase() === account.toLowerCase());
-            return login ? gwsFor(login) : null;
+            return login ? inboxGws(config, login, GMAIL_MODIFY_SCOPE) : null;
           },
           oneClick,
           { issues, repo: config.workRepo },

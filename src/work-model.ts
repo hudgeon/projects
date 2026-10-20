@@ -256,6 +256,9 @@ export const issueSchema = z
       .nullable(),
     customers: z.array(label).max(20),
     repos: z.array(repo).max(20),
+    // The standing upkeep issue, labelled `upkeep`: the record of every
+    // upkeep change with its measures (docs/upkeep.md).
+    upkeep: z.boolean().optional(),
     updatedAt: z.number().int().nonnegative(),
     position: positionSchema.nullable().optional(),
     details: workDetailsSchema.nullable().optional(),

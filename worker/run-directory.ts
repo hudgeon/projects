@@ -14,6 +14,7 @@ import {
   type MessageInput,
 } from "../src/run-model";
 import { decodeScreenshots, type ScreenshotInput } from "../src/screenshot-model";
+import { UPKEEP_ACTIVE_LIMIT } from "../src/upkeep-model";
 import { latestPlan, runTitle, statusLine } from "../src/run-text";
 import type { ConversationRecord } from "./runs";
 import type { Machines } from "./machines";
@@ -214,6 +215,21 @@ export class Runs {
       .toArray()
       .map((row) => withOwner(JSON.parse(row.payload) as RunSummary, this.deploymentOwner));
   }
+  // The newest conversation in a lane, or its newest active one.
+  async latest(lane: Lane, active = false): Promise<RunSummary | null> {
+    await this.migrate();
+    await this.refreshActive();
+    const row = this.storage.sql
+      .exec<{ payload: string }>(
+        `SELECT payload FROM conversation_index WHERE COALESCE(json_extract(payload,'$.lane'),'standard')=?
+      AND (?=0 OR json_extract(payload,'$.state') IN ('queued','running','cancelling'))
+      ORDER BY json_extract(payload,'$.createdAt') DESC,id DESC LIMIT 1`,
+        lane,
+        active ? 1 : 0,
+      )
+      .toArray()[0];
+    return row ? withOwner(JSON.parse(row.payload) as RunSummary, this.deploymentOwner) : null;
+  }
   private async refreshActive() {
     const rows = this.storage.sql
       .exec<{ id: string }>(
@@ -231,7 +247,8 @@ export class Runs {
         lane,
       )
       .one().n;
-    if (count >= (lane === "quick" ? QUICK_ACTIVE_LIMIT : STANDARD_ACTIVE_LIMIT))
+    const limit = lane === "quick" ? QUICK_ACTIVE_LIMIT : lane === "upkeep" ? UPKEEP_ACTIVE_LIMIT : STANDARD_ACTIVE_LIMIT;
+    if (count >= limit)
       throw Error("Too many conversations are already queued or running.");
   }
   create(input: RunInput, owner: string) {
@@ -250,7 +267,7 @@ export class Runs {
         ...(input.masterAgent ? { masterAgent: input.masterAgent } : {}),
         workIssue: input.workIssue,
         ...(input.emailThread ? { emailThread: input.emailThread } : {}),
-        ...(input.lane === "quick" ? { lane: "quick" as const } : {}),
+        ...(input.lane && input.lane !== "standard" ? { lane: input.lane } : {}),
         owner,
         generation: 1,
         state: "queued",

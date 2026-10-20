@@ -10,6 +10,9 @@ export type ClaimedRun = { run: Run; activity: unknown[]; person?: unknown; brow
 // journal, master/child IDs, browser capability and completion receipt.
 // Standard work uses at most `concurrency` slots. Quick work can use those
 // when free, plus `quickConcurrency` slots that standard work never takes.
+// Upkeep has one slot of its own, so the weekly cycle neither waits behind
+// long work nor takes a slot from it.
+export const UPKEEP_SLOTS = 1;
 export async function runPool(options: {
   concurrency: number;
   quickConcurrency?: number;
@@ -66,15 +69,17 @@ export async function runPool(options: {
   let failure: unknown;
   try {
     while (!waiting.aborted) {
-      const standard = [...active.values()].filter(
-        (item) => item.lane === "standard",
-      ).length;
+      const count = (lane: Lane) =>
+        [...active.values()].filter((item) => item.lane === lane).length;
+      const standard = count("standard"),
+        upkeep = count("upkeep");
       const lanes: Lane[] =
-        active.size >= options.concurrency + quick
+        active.size - upkeep >= options.concurrency + quick
           ? []
           : standard < options.concurrency
             ? ["standard", "quick"]
             : ["quick"];
+      if (upkeep < UPKEEP_SLOTS) lanes.push("upkeep");
       if (!lanes.length) {
         await Promise.race([
           ...[...active.values()].map((item) => item.task),

@@ -12,7 +12,10 @@ test("the pool overlaps conversations, bounds capacity and isolates cancellation
   const entered = runs.map(() => deferred());
   const pool = runPool({
     concurrency: 2, signal: shutdown.signal, pollMs: 1,
-    claim: async active => {
+    claim: async (active, lanes) => {
+      // The upkeep slot is polled while the standard slots are full; this
+      // queue holds standard work, so only claims offering it count.
+      if (!lanes.includes("standard")) return null;
       claims.push(active);
       const run = queue.shift();
       return run ? {run, activity: []} : null;
@@ -64,7 +67,7 @@ test("quick work has its own slots and never waits behind standard work", {timeo
   });
   try {
     await Promise.all([started.get(standard[0].id)!.promise, started.get(quick.id)!.promise]);
-    assert.deepEqual(asked.slice(0, 2), [["standard", "quick"], ["quick"]], "a busy standard slot leaves the quick slot open");
+    assert.deepEqual(asked.slice(0, 2), [["standard", "quick", "upkeep"], ["quick", "upkeep"]], "a busy standard slot leaves the quick slot open");
     assert.equal(controls.has(standard[1].id), false, "the second standard task waits for a standard slot");
     controls.get(standard[0].id)!.abort("cancelled");
     await started.get(standard[1].id)!.promise;
@@ -110,16 +113,18 @@ test("executions a previous runner left running hold their slots until they fini
   const pool = runPool({
     concurrency: 1, quickConcurrency: 0, signal: shutdown.signal, pollMs: 5,
     adopted: [{id: "earlier", lane: "standard", done: earlier.promise}],
-    claim: async (active, lanes) => { asked.push([active, lanes]); return started ? null : {run: makeRun(), activity: []}; },
+    // Only the free upkeep slot is polled meanwhile; it takes no standard work.
+    claim: async (active, lanes) => { asked.push([active, lanes]); return started || !lanes.includes("standard") ? null : {run: makeRun(), activity: []}; },
     execute: async () => { started++; },
     onError: assert.ifError,
   });
   try {
     await new Promise((r) => setTimeout(r, 50));
-    assert.deepEqual([started, asked.length], [0, 0], "a full runner claims nothing");
+    assert.equal(started, 0, "a full runner claims no standard work");
+    assert.ok(asked.length && asked.every(([, lanes]) => JSON.stringify(lanes) === JSON.stringify(["upkeep"])), "only the upkeep slot is offered");
     earlier.resolve();
     await waitFor(() => started === 1);
-    assert.deepEqual(asked[0], [[], ["standard", "quick"]]);
+    assert.deepEqual(asked.find(([, lanes]) => lanes.includes("standard")), [[], ["standard", "quick", "upkeep"]]);
   } finally { shutdown.abort(); await pool; }
 });
 
@@ -139,4 +144,38 @@ test("an updating runner leaves executions running and returns even when full", 
   release.resolve();
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(finished, 1);
+});
+
+test("upkeep has one slot of its own: it never waits behind standard work and never takes a standard slot", {timeout: 5000}, async () => {
+  const standard = [makeRun(), makeRun()], cycles = [{...makeRun(), lane: "upkeep" as const}, {...makeRun(), lane: "upkeep" as const}];
+  const queue = [...standard, ...cycles];
+  const shutdown = new AbortController();
+  const asked: string[][] = [];
+  const controls = new Map<string, AbortController>();
+  const started = new Map<string, ReturnType<typeof deferred>>(queue.map(run => [run.id, deferred()]));
+  const pool = runPool({
+    concurrency: 1, quickConcurrency: 0, signal: shutdown.signal, pollMs: 1,
+    claim: async (_active, lanes) => {
+      asked.push(lanes);
+      const index = queue.findIndex(run => lanes.includes(run.lane ?? "standard"));
+      return index < 0 ? null : {run: queue.splice(index, 1)[0], activity: []};
+    },
+    execute: async ({run}, control) => {
+      controls.set(run.id, control);
+      started.get(run.id)!.resolve();
+      await new Promise<void>(resolve => control.signal.addEventListener("abort", () => resolve(), {once: true}));
+    },
+    onError: () => {},
+  });
+  try {
+    await Promise.all([started.get(standard[0].id)!.promise, started.get(cycles[0].id)!.promise]);
+    assert.deepEqual(asked, [["standard", "quick", "upkeep"], ["upkeep"]], "with the standard slot taken, only the upkeep slot is offered");
+    assert.ok(!controls.has(standard[1].id) && !controls.has(cycles[1].id), "one standard slot and one upkeep slot");
+    controls.get(cycles[0].id)!.abort("cancelled");
+    await started.get(cycles[1].id)!.promise;
+    assert.ok(!controls.has(standard[1].id), "standard work still waits for the standard slot");
+    controls.get(standard[0].id)!.abort("cancelled");
+    await started.get(standard[1].id)!.promise;
+    assert.deepEqual(queue, []);
+  } finally { shutdown.abort(); await pool; }
 });

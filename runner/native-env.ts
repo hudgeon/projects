@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Person } from "../src/people-model";
 import type { InboxLogin } from "../collector/config";
+import { NO_MAILBOX_DIR, delegatedEnv } from "../collector/delegation";
 import type { NativeOptions } from "./native";
 
 // The runner credential, Doppler credentials and provider API keys never reach
-// a coding process; native tools use the machine's own logins.
-export function nativeEnv(browser?: NativeOptions["browser"], person?: Person, mailbox?: InboxLogin | null): NodeJS.ProcessEnv {
+// a coding process; native tools use the machine's own logins. A delegated
+// mailbox reaches it as an hour's Gmail token for its owner alone.
+export function nativeEnv(browser?: NativeOptions["browser"], person?: Person, mailbox?: InboxLogin | null, mailboxToken?: string): NodeJS.ProcessEnv {
   // Wrangler adds the Worker's bindings to ProcessEnv; no native process has them.
   const env = Object.fromEntries(
     [
@@ -34,12 +36,14 @@ export function nativeEnv(browser?: NativeOptions["browser"], person?: Person, m
     env.GIT_AUTHOR_NAME = person.name;
     env.GIT_AUTHOR_EMAIL = person.email;
   }
-  // gws runs as the owner's own Gmail sign-in: the directory it lives in, or
-  // an empty one when no mailbox of theirs is connected here, so nobody's
+  // gws runs as the owner's own Gmail account: the directory their sign-in
+  // lives in, or their delegated token with no sign-in beside it; and an
+  // empty directory when no mailbox of theirs reaches this turn, so nobody's
   // email is handled from another person's account.
   if (mailbox?.configDir) env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = mailbox.configDir;
-  else if (person && mailbox === null)
-    env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = path.join(tmpdir(), "projects-no-mailbox");
+  else if (mailbox?.delegated && mailboxToken) Object.assign(env, delegatedEnv(mailboxToken));
+  else if (person && (mailbox === null || mailbox?.delegated))
+    env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = NO_MAILBOX_DIR;
   if (browser) {
     env.PLAYWRIGHT_MCP_CDP_ENDPOINT = browser.endpoint;
     env.PLAYWRIGHT_MCP_CDP_HEADERS = `Authorization: Bearer ${browser.capability}`;

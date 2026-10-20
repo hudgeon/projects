@@ -38,6 +38,8 @@ export async function claimed(
     ? (await store.overview()).map((s) => ({
         host: s.host,
         observedAt: s.collectedAt,
+        // Daily friction totals and harness versions, for the upkeep lane.
+        ...(s.friction ? { friction: s.friction } : {}),
         unassignedSessions: s.unassignedSessions,
         projects: s.projects.map((p) => ({
           id: p.id,

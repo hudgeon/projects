@@ -90,7 +90,7 @@ test("a runner fetches documents the owner opened through claims, and on its own
   const job = (n: number) => ({id: String(n).repeat(64), lease: randomUUID(), repo: "acme/fixture", commit: "0123456789abcdef0123456789abcdef01234567", path: "mockups/screens.html"});
   const first = job(1), second = job(2);
   const hold = deferred();
-  const claims: {documents?: boolean}[] = [], polls: unknown[] = [], delivered: {id: string; lease: string; content?: string}[] = [];
+  const claims: {documents?: boolean; lanes?: string[]}[] = [], polls: unknown[] = [], delivered: {id: string; lease: string; content?: string}[] = [];
   let claimed = false, offered = false;
   const server = createServer(async (req, res) => {
     let body = "";
@@ -121,7 +121,8 @@ test("a runner fetches documents the owner opened through claims, and on its own
     assert.deepEqual(delivered.map((d) => [d.id, d.lease]), [[first.id, first.lease], [second.id, second.lease]]);
     for (const d of delivered) assert.equal(Buffer.from(d.content!, "base64").toString(), "<!doctype html><p>Page</p>");
     assert.ok(polls.length >= 1, "a full runner asked on its own");
-    assert.equal(claims.length, 1, "it did not claim while full");
+    // Its standard and quick slots full, it claims only for the upkeep slot.
+    assert.ok(claims.slice(1).every((c) => JSON.stringify(c.lanes) === JSON.stringify(["upkeep"])), "it claimed no standard or quick work while full");
     assert.equal(runner.exitCode, null, "a full runner keeps running");
   } finally {
     hold.resolve();

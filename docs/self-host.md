@@ -72,7 +72,8 @@ machine's signed-in `gh`. To use a read-only GitHub App instead, put
 `"doppler": {"project": "…", "config": "…"}` to the machine's `machine.json`,
 and store a read-only service token for that config in
 `~/.local/share/project-overview/doppler-token` (mode 600). The same config
-can also hold the machine's tokens (step 5).
+can also hold the machine's tokens (step 5) and the Gmail delegation key
+(Connect a person's inbox).
 
 ## 4. Deploy from GitHub
 
@@ -121,17 +122,24 @@ every start logs the `release` it runs. Options:
   `claude,codex`. Conversations never start an app that is not listed.
 - `--work-repo owner/repo` (optional): a repository whose issues labelled
   `work` are your work items. Without it, work items and Mark done are off.
+  An open one labelled `upkeep` as well is the standing record of the weekly
+  [upkeep](upkeep.md) cycle.
+- `--config-repo owner/repo` (optional): the shared repository of your global
+  agent rules, skills, hooks and repository templates. The upkeep cycle
+  dispatches its changes there when that repository is also registered as a
+  project under `--root`; without it, those changes are out of its reach.
 - `--inbox you@example.com` (optional): your own Gmail account, read with the
   machine's default `gws` sign-in. Email replies also expect a `compose-email`
   skill in the work repository. Your conversations work in it; another
   person's work in their own inbox once it is connected (below), and until
   then are told no mailbox is connected for them.
-- `--add-inbox person@example.com=~/.config/gws-person`,
+- `--add-inbox person@example.com` or
+  `--add-inbox person@example.com=~/.config/gws-person`,
   `--remove-inbox person@example.com` (optional): connect another person's
-  Gmail account with the `gws` config directory they signed in to on this
-  machine (below), or disconnect it. The directory must exist and be yours
-  alone to read; nothing else in `machine.json` changes, and every run ends
-  by listing the connected inboxes.
+  Gmail account, read by delegation or with the `gws` config directory they
+  signed in to on this machine (below), or disconnect it. A directory must
+  exist and be yours alone to read; nothing else in `machine.json` changes,
+  and every run ends by listing the connected inboxes.
 - `--collector-label`, `--runner-label` (optional): launchd labels for the two
   services, when they should differ from the defaults. They are kept in
   `machine.json`, so later runs restart the same services.
@@ -149,11 +157,38 @@ tokens in Doppler after **Replace tokens**, then restart the runner.
 
 ### Connect a person's inbox
 
-Each person's mail is read, archived and drafted with their own Gmail sign-in
-on the machine on duty, kept in a `gws` config directory of its own under your
-macOS user, encrypted with the key in that user's keychain like your own. The
-trust boundary is that macOS user, not Projects: anyone who can act as it on
-the machine can read every connected person's Gmail credentials, so connect
+Each person's mail is read, archived and drafted as that person on the machine
+on duty, by delegation or with their own sign-in. Either way the collector
+checks the Gmail profile it reaches against the listed address and shows a
+mismatch as that inbox being unavailable, never as another person's mail; each
+inbox's text goes only to its owner, everyone sees each person's count and the
+email links on work items, and that person's conversations run `gws` as their
+account, so the email lane and the work repository's draft helper work in
+their mailbox. Until an inbox is connected, that person's sessions get no
+`gws` sign-in at all. Your own account stays `--inbox`, read with the
+machine's default sign-in.
+
+**By delegation (for a team).** A Google Workspace service account with
+domain-wide delegation stands in for each person, so connecting someone is
+adding their address: nobody signs in anywhere. Its key can read and change
+every mailbox in your Workspace domain for the scopes you grant, so it lives
+only in the machine's Doppler config (step 3) and is read into memory for an
+hour's token at a time, never into `machine.json`, a snapshot, a log or a
+prompt. [Gmail delegation](inbox-delegation.md) has the one-time Google
+Cloud, Admin console and Doppler steps, with the points that need your
+approval. Then connect each person by address; the installer lists it under
+`inboxAccounts` with no directory and restarts the runner (the collector
+reads the file at its next scan):
+
+```bash
+node scripts/install-machine.mjs --add-inbox ada@example.com
+```
+
+**With their own sign-in.** For a person outside your domain, or a machine
+without Doppler, their own `gws` sign-in works instead, kept in a config
+directory of its own under your macOS user and encrypted with the key in that
+user's keychain like yours. The trust boundary is that macOS user: anyone who
+can act as it can read every connected person's Gmail credentials, so connect
 only people who accept that, on a machine only you use. With that person at
 the keyboard, once, using the OAuth client your `gws` already has:
 
@@ -166,30 +201,18 @@ GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-ada gws auth login --services gmai
 ```
 
 They sign in to their own Google account in the browser that opens. Confirm
-the directory is theirs:
+the directory is theirs, then connect the account with it:
 
 ```bash
 GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-ada gws gmail users getProfile --params '{"userId":"me"}'
 ```
 
-Then connect the account. The installer lists it with that directory under
-`inboxAccounts` in `machine.json`, leaves the rest as it is, and restarts the
-runner with it (the collector reads the file at its next scan):
-
 ```bash
 node scripts/install-machine.mjs --add-inbox ada@example.com=~/.config/gws-ada
 ```
 
-The collector reads each account with its own directory and refuses one whose
-sign-in belongs to someone else: a wrong sign-in shows as that inbox being
-unavailable, never as another person's mail. Each inbox's text goes only to
-its owner; everyone sees each person's count and the email links on work
-items. That person's conversations run `gws` signed in as their account, so
-the email lane and the work repository's draft helper work in their mailbox;
-until it is connected, their sessions get no `gws` sign-in at all. Your own
-account stays `--inbox`, read with the machine's default sign-in. To
-disconnect a person, run the installer with `--remove-inbox ada@example.com`,
-then delete their directory.
+To disconnect a person either way, run the installer with
+`--remove-inbox ada@example.com`, then delete their directory if they had one.
 
 Helpers can use the apps' connectors, except to send email. To also let Claude
 helpers use local MCP servers you already run, list their names under
@@ -208,6 +231,20 @@ owner's explicit message approval; connector send tools stay withheld. Task
 scope, customer/financial approvals and required release checks still apply.
 Set it back to false and restart the runner to restore restricted sessions;
 existing executors finish their current step before adopting the change.
+
+### Browser sign-in sessions
+
+On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new conversation
+browser starts signed in as the conversation's owner while their address is
+allowed. The session belongs to that browser alone: only its hash is kept, it
+ends when the browser closes or the provider ends it (checked every five
+minutes), on Sign out, when the machine is removed or a Deploy drops it from
+the list, or when the conversation continues on another machine, and it cannot
+connect or change machines, change execution settings, open Live View, read or
+act on email, or subscribe to notifications. The machine's runner drives that
+browser, so while it lives the runner can act through it, and could read its
+cookie over CDP, within those limits: narrower than signing the browser in by
+hand, which leaves it a seven-day session without them.
 
 Repositories under `--root` opt in with a `.project-overview.json` file (see
 `public/agents.md`), or by name under `projects` in `machine.json`. Machines
@@ -270,13 +307,14 @@ machines stay yours, and whatever they run for anyone runs with your logins.
    for their conversations only. The Inbox tab shows their own mail once it
    is connected and, until then, only everyone's counts; nobody reads another
    person's threads.
-4. **Connect their inbox** (optional), with them at the machine once:
+4. **Connect their inbox** (optional): by address once the delegation is set
+   up, needing nothing from them, or with them at the machine once:
    [Connect a person's inbox](#connect-a-persons-inbox).
 
 When someone leaves, remove their address from `ALLOWED_EMAILS` and run
 Deploy again: their sessions end at once, conversation browsers no longer
 sign in as them, and no more codes are sent to them. On each machine that
 read their inbox, run the installer with `--remove-inbox` for their account
-and delete their `gws` directory. Their profile, name and the conversations
+and delete their `gws` directory if they had one. Their profile, name and the conversations
 and commits attributed to them stay, so the history still says who did what;
 nothing is reassigned.

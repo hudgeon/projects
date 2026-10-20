@@ -177,11 +177,19 @@ test("--add-inbox connects a person's gws directory, existing and readable by yo
     [`bob@example.com=${shared}`, `readable by you alone, like gws's own config directory: chmod 700 ${shared}`],
     [`bob@example.com=${path.join(root, "missing")}`, "does not exist. bob@example.com signs gws in there first"],
     ["bob@example.com=gws-bob", "as an absolute path"],
-    [`bob=${moved}`, "Give --add-inbox as person@example.com=/path"],
+    [`bob=${moved}`, "Give --add-inbox as person@example.com (read by delegation) or person@example.com=/path"],
   ]) {
     await assert.rejects(install(["--no-services", "--add-inbox", entry], tokens), (e) => e.stderr.includes(message), entry);
     assert.deepEqual((await config()).inboxAccounts, [{ account: "Ada@Example.com", configDir: moved }], entry);
   }
+  // The address alone connects an account by delegation; either form replaces the other.
+  const delegated = await install(["--no-services", "--add-inbox", "bob@example.com"], tokens);
+  assert.deepEqual((await config()).inboxAccounts, [{ account: "Ada@Example.com", configDir: moved }, { account: "bob@example.com" }]);
+  assert.equal(delegated.stdout.trim().split("\n").at(-1), `Inboxes: you@example.com (default gws sign-in); Ada@Example.com (${moved}); bob@example.com (delegated).`);
+  await install(["--no-services", "--add-inbox", "ada@example.com"], tokens);
+  assert.deepEqual((await config()).inboxAccounts, [{ account: "ada@example.com" }, { account: "bob@example.com" }]);
+  await install(["--no-services", "--add-inbox", `ada@example.com=${moved}`, "--remove-inbox", "bob@example.com"], tokens);
+  assert.deepEqual((await config()).inboxAccounts, [{ account: "ada@example.com", configDir: moved }]);
   const removed = await install(["--no-services", "--remove-inbox", "ada@example.com"], tokens);
   assert.deepEqual((await config()).inboxAccounts, []);
   assert.match(removed.stdout, /^Inboxes: you@example\.com \(default gws sign-in\)\.$/m);

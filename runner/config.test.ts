@@ -39,3 +39,10 @@ test("the installed release is read from the record beside the bundle, and is no
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("configRepo names the shared configuration repository the way workRepo names the work repository", () => {
+  const base = { host: "studio", root: "/srv/code", home: "/Users/owner", endpoint: "https://projects.example.com" };
+  assert.equal(schema.parse({ ...base, configRepo: "acme/agent-config" }).configRepo, "acme/agent-config");
+  assert.equal(schema.parse(base).configRepo, undefined);
+  assert.deepEqual(invalidKeys(schema.safeParse({ ...base, configRepo: "not a repository" }).error!.issues), ["configRepo"]);
+});

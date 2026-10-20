@@ -24,8 +24,10 @@ export const runStateSchema = z.enum([
   "cancelled",
 ]);
 // Quick work (such as an unsubscribe) has its own runner capacity and a
-// lighter master turn, so it never waits behind long-running work.
-export const laneSchema = z.enum(["standard", "quick"]);
+// lighter master turn, so it never waits behind long-running work. Upkeep is
+// the weekly cycle that keeps the agent setup improving (docs/upkeep.md): its
+// own slot and brief, started by the Worker's cron or from Settings.
+export const laneSchema = z.enum(["standard", "quick", "upkeep"]);
 export type Lane = z.infer<typeof laneSchema>;
 export const QUICK_ACTIVE_LIMIT = 30;
 export const STANDARD_ACTIVE_LIMIT = 10;
@@ -52,6 +54,11 @@ export const runInputSchema = messageInputSchema
       .optional(),
     lane: laneSchema.optional(),
   })
+  .strict();
+// What a person starts from the composer: the upkeep lane starts only from
+// its schedule or Settings.
+export const startInputSchema = runInputSchema
+  .extend({ lane: laneSchema.exclude(["upkeep"]).optional() })
   .strict();
 export const runListSchema = z.object({
   archived: z
@@ -317,8 +324,9 @@ const runnerIdentitySchema = z.object({ runnerId: uuid }).strict();
 export const runnerClaimSchema = runnerIdentitySchema
   .extend({
     activeRunIds: z.array(uuid).max(20).default([]),
-    // Lanes with a free slot; an older runner omits it and takes either.
-    lanes: z.array(laneSchema).min(1).max(2).optional(),
+    // Lanes with a free slot; an older runner omits it and takes standard or
+    // quick work.
+    lanes: z.array(laneSchema).min(1).max(3).optional(),
     // It can fetch an HTML edition the owner opened; an older runner cannot.
     documents: z.boolean().optional(),
   })

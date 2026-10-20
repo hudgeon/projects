@@ -272,11 +272,14 @@ function move(run: Pick<RunSummary, "state" | "needsYou" | "stuck">) {
   return null;
 }
 // A notification to a conversation's owner when it newly becomes their move.
-// New conversations, Done and Reopen never notify.
+// New conversations, Done and Reopen never notify, nor does a finished upkeep
+// cycle: its result waits in Today and the standing issue, and only a cycle
+// that needs a decision or failed is news.
 export function notice(previous: RunSummary | null, next: RunSummary) {
   const kind = move(next);
   if (!previous || !kind || next.archivedAt || kind === move(previous))
     return null;
+  if (next.lane === "upkeep" && kind === "Ready") return null;
   return {
     to: next.owner,
     title: `${kind}: ${clip(next.title, 80)}`,

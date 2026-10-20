@@ -65,13 +65,13 @@ export type NativeOptions = {
   // The working agent's plan, as it changes.
   onPlan?: (steps: LivePlanStep[]) => void;
   // Once the turn runs: delivers the user's feedback into it; rejects once
-  // the turn has finished or takes no more input.
+  // it has finished or takes no more input.
   onSteer?: (steer: (input: SteerInput) => Promise<void>) => void;
-  // Requests the runner refused during a turn that still returned its result:
+  // Requests the runner refused in a turn that still returned its result:
   // categories, never tool names or arguments.
   onRefused?: (categories: string[]) => void;
-  // The process ran on after the turn's result and was stopped with whatever
-  // it left running; the result stands.
+  // The process ran on after its result and was stopped with whatever it
+  // left running; the result stands.
   onOverran?: () => void;
   // How long a Claude process may run on past its result.
   resultExitMs?: number;
@@ -81,10 +81,11 @@ export type NativeOptions = {
   onFile?: (file: FileTouch) => void;
   // The user's connectors, for helpers only.
   connectors?: ConnectorAccess;
-  // Whose commits a change turn makes, and the Gmail sign-in gws uses: their
-  // own mailbox's, or none when no mailbox of theirs is connected here.
+  // Whose commits a change turn makes, and the Gmail account gws uses (its
+  // sign-in or a token; see native-env.ts).
   person?: Person;
   mailbox?: InboxLogin | null;
+  mailboxToken?: string;
   binaries?: { codex?: string; claude?: string };
   // First wait before re-running a turn a busy model could not start.
   retryDelayMs?: number;
@@ -110,7 +111,7 @@ export function stopProcess(child: ChildProcessWithoutNullStreams) {
 }
 export class NativeStopError extends Error {}
 // A failure with a known cause, native or the runner's own: its message is
-// what the user reads, its reason the safe category telemetry keeps.
+// what the user reads, its reason the category telemetry keeps.
 export class Failure extends Error {
   constructor(
     readonly reason: FailureReason,
@@ -120,7 +121,7 @@ export class Failure extends Error {
   }
 }
 // The model was at capacity or its connection dropped; `acted` says whether
-// the turn had already run a command or tool, which makes a retry unsafe.
+// the turn had already run a command or tool, so a retry is unsafe.
 export class NativeBusyError extends Error {
   constructor(readonly acted: boolean) {
     super(
@@ -201,7 +202,7 @@ const rejected: Record<string, [FailureReason, string]> = {
 // What a refused request would have done, never its tool, command or text.
 export function nativeProcessStopped(pid: number | null): boolean {
   if (!pid || pid <= 1) return false;
-  // Check the detached process group too: a shell or tool can outlive it.
+  // The detached process group too: a shell or tool can outlive it.
   for (const target of [pid, -pid]) {
     try {
       process.kill(target, 0);
@@ -243,7 +244,7 @@ const userContent = (input: SteerInput, kind: "codex" | "claude") => [
         },
   ),
 ];
-// Only native protocol events are parsed; tool output is drained, not uploaded.
+// Only native protocol events are parsed; tool output is drained, never sent.
 function readLines(
   child: ChildProcessWithoutNullStreams,
   receive: (line: Record<string, unknown>) => void,
@@ -331,7 +332,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
       "--listen",
       "stdio://",
     ],
-    { cwd: o.cwd, env: nativeEnv(o.browser, o.person, o.mailbox), detached: true, stdio: "pipe" },
+    { cwd: o.cwd, env: nativeEnv(o.browser, o.person, o.mailbox, o.mailboxToken), detached: true, stdio: "pipe" },
   );
   let next = 1,
     finalText = "",
@@ -631,7 +632,7 @@ async function codexTurn(o: NativeOptions): Promise<unknown> {
   }
 }
 // A turn ends at its result. Claude keeps its process while a background
-// command the agent left runs, then starts a turn of its own that nobody reads.
+// command the agent left runs, then starts a turn of its own nobody reads.
 // Whatever still runs this long after the result is stopped; the result stands.
 export const RESULT_EXIT_MS = 30_000;
 async function claudeTurn(o: NativeOptions): Promise<unknown> {
@@ -699,7 +700,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   ];
   const child = spawn(o.binaries?.claude ?? "claude", args, {
     cwd: o.cwd,
-    env: nativeEnv(o.browser, o.person, o.mailbox),
+    env: nativeEnv(o.browser, o.person, o.mailbox, o.mailboxToken),
     detached: true,
     stdio: "pipe",
   });
@@ -724,11 +725,11 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     child.stdin.end();
   };
   const tools = new Map<string, NativeActivity["kind"]>();
-  // Each request's usage, by message: one streamed in parts repeats it.
+  // Each request's usage by message: one streamed in parts repeats it.
   const requests = new Map<string, Record<string, unknown>>();
   let context = 0;
   // While the turn runs, its requests so far; once it reports, the result's
-  // own count. Never the per-model totals: on a resumed session they include
+  // own count. Never the per-model totals, which on a resumed session include
   // every earlier turn.
   const usage = (turn?: Record<string, unknown>) => {
     const counted =

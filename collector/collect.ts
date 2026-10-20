@@ -1,11 +1,6 @@
-import { readInbox, type Gws } from "./inbox";
 import { readQuotas } from "./quotas";
-import { trackedThreads, type Inbox } from "../src/inbox-model";
 import { readWork } from "./work";
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { promisify } from "node:util";
-import { mkdir, readdir, readFile, stat, lstat, open } from "node:fs/promises";
+import { readdir, readFile, stat, lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -16,29 +11,13 @@ import type {
   Source,
   Worktree,
 } from "../src/model";
-import type { Issue } from "../src/work-model";
 import { githubToken } from "./github";
-import { inboxLogins, type Config, type InboxLogin } from "./config";
+import { command, subprocessEnv } from "./command";
+import { inboxLogins, type Config } from "./config";
+import { readInboxes } from "./inbox-logins";
 export type { Config } from "./config";
+export { command, machineSecret, subprocessEnv } from "./command";
 
-const exec = promisify(execFile);
-export function subprocessEnv() {
-  const env = { ...process.env };
-  for (const key of [
-    "GITHUB_APP_PRIVATE_KEY",
-    "DOPPLER_TOKEN",
-    "COLLECTOR_TOKEN",
-    "RUNNER_TOKEN",
-    "CLOUDFLARE_API_TOKEN",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "JEV_API_KEY",
-    "TYPESAFE_API_KEY",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-  ])
-    delete env[key];
-  return env;
-}
 const metadataSchema = z
   .object({
     id: z
@@ -127,109 +106,6 @@ export async function discover(config: Config): Promise<Item[]> {
   }
   await walk(config.root, 0);
   return found;
-}
-// One secret from this machine's Doppler config, read with its read-only
-// service token. The service token goes only to this call, and the value only
-// to the caller: neither enters an environment that outlives it.
-export async function machineSecret(
-  config: Pick<Config, "home" | "doppler">,
-  name: string,
-  doppler = "doppler",
-) {
-  if (!config.doppler) throw Error("This machine names no Doppler config.");
-  const base = path.join(config.home, ".local/share/project-overview");
-  const file = path.join(base, "doppler-token");
-  if ((await stat(file)).mode & 0o077)
-    throw Error("The Doppler service token must be readable only by its owner.");
-  const token = (await readFile(file, "utf8")).trim();
-  if (!token.startsWith("dp.st."))
-    throw Error("The Doppler service token is missing.");
-  await mkdir(path.join(base, "doppler"), { recursive: true, mode: 0o700 });
-  const { stdout } = await exec(
-    doppler,
-    [
-      "secrets",
-      "get",
-      name,
-      "--plain",
-      "--config-dir",
-      path.join(base, "doppler"),
-      "--project",
-      config.doppler.project,
-      "--config",
-      config.doppler.config,
-    ],
-    {
-      timeout: 30_000,
-      maxBuffer: 100_000,
-      env: { ...subprocessEnv(), DOPPLER_TOKEN: token },
-    },
-  ).catch(() => {
-    throw Error(`${name} could not be read from this machine's Doppler config.`);
-  });
-  return stdout.trim();
-}
-export async function command(
-  bin: string,
-  args: string[],
-  cwd?: string,
-  env: Record<string, string> = {},
-) {
-  const { stdout } = await exec(bin, args, {
-    cwd,
-    timeout: 20_000,
-    maxBuffer: 4_000_000,
-    env: {
-      ...subprocessEnv(),
-      GIT_OPTIONAL_LOCKS: "0",
-      GIT_TERMINAL_PROMPT: "0",
-      GH_PROMPT_DISABLED: "1",
-      ...env,
-    },
-  });
-  return stdout.trimEnd();
-}
-// gws as one connected account: its own sign-in's config directory, or the
-// machine's default for the owner's.
-export const gwsFor =
-  (login: InboxLogin): Gws =>
-  (args) =>
-    command(
-      "gws",
-      args,
-      undefined,
-      login.configDir
-        ? { GOOGLE_WORKSPACE_CLI_CONFIG_DIR: login.configDir }
-        : {},
-    );
-// The owner's account keeps the cache file it always had; every other account
-// has its own, named without the address. The name only tells a few local
-// files apart (ten accounts at most); it is not meant to be collision-proof.
-export const inboxCacheName = (account: string, config: Pick<Config, "inboxAccount">) =>
-  config.inboxAccount?.toLowerCase() === account.toLowerCase()
-    ? "inbox-cache.json"
-    : `inbox-cache.${createHash("sha256").update(account.toLowerCase()).digest("hex").slice(0, 16)}.json`;
-// Every connected inbox, each read with its own sign-in and checked against
-// it, for the machine on duty. One account's failure is its own.
-export async function readInboxes(
-  config: Config,
-  issues: Issue[] | null | undefined,
-  gws: (login: InboxLogin) => Gws = gwsFor,
-  now = Date.now(),
-): Promise<Inbox[]> {
-  const inboxes: Inbox[] = [];
-  for (const login of inboxLogins(config))
-    inboxes.push(
-      await readInbox(
-        login.account,
-        gws(login),
-        now,
-        config.home,
-        trackedThreads(login.account, issues ?? []),
-        inboxCacheName(login.account, config),
-      ),
-    );
-  return inboxes;
 }
 const source = (
   state: Source["state"],

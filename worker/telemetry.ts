@@ -28,6 +28,7 @@ type Operation =
   | "browser.sign_in"
   | "browser.close"
   | "archive.update"
+  | "upkeep.start"
   | "inbox.action"
   | "inbox.read"
   | "push.subscribe"

@@ -185,6 +185,7 @@ export const routeSchema = z.enum([
   "/api/auth/logout",
   "/api/overview",
   "/api/execution-settings",
+  "/api/upkeep",
   "/api/archive",
   "/api/ingest",
   "/api/closes",
@@ -281,6 +282,9 @@ const logFieldsSchema = telemetryFieldsSchema.extend({
   // The release an installed bundle came from: a commit prefix, "-dirty"
   // when the checkout had uncommitted changes.
   release: z.string().regex(/^[0-9a-f]{7,40}(?:-dirty)?$/).optional(),
+  // What a weekly upkeep trigger did: started the week's cycle, found it or
+  // an active one, or had no owner, machine or snapshot to start it for.
+  upkeep: z.enum(["started", "exists", "active", "no_owner", "no_machine", "no_snapshot"]).optional(),
 });
 const logEventSchema = z.enum([
   ...executionEventSchema.shape.event.options,
@@ -324,6 +328,9 @@ const logEventSchema = z.enum([
   // A shadow run check was judged; its receipt stays on the machine.
   "jev_check_judged",
   "notification_sent",
+  // A delegated mailbox got no token for a turn, which ran without one.
+  "mailbox_unavailable",
+  "upkeep_cycle",
 ]);
 export function telemetry(
   component: "worker" | "conversation" | "runner",

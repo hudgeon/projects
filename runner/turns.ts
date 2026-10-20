@@ -5,7 +5,8 @@ import type { ExecutionEvent } from "../src/telemetry";
 import { ACTIVITY_LIMIT, PROGRESS_NOTE_LIMIT, noUsage, type Child } from "../src/run-model";
 import { Failure, type NativeOptions, type SteerInput, type TurnUsage } from "./native";
 import { liveChanges, saveWorkspace } from "./workspaces";
-import { browserInstructions, mailboxFor, progressInstructions, stuckInstructions, responseInstructions } from "./instructions";
+import { browserInstructions, mailboxFor, mailboxUnavailableInstructions, progressInstructions, stuckInstructions, responseInstructions } from "./instructions";
+import { telemetry } from "../src/telemetry";
 import { TURN_LIMITS, watchLimits } from "./turn-limits";
 import { watchTurn } from "./turn-watch";
 import type { Execution } from "./execution";
@@ -220,6 +221,16 @@ export async function runTurn(
     child && !options.readOnly
       ? setInterval(() => void saveNow(), o.saveMs ?? 5 * 60_000)
       : null;
+  // A delegated mailbox reaches the turn as an hour's token for its owner.
+  // When none can be minted the turn gets no mailbox and is told so, never
+  // another person's.
+  const connected = mailboxFor(o.person, o.inboxes);
+  const mailboxToken = connected?.delegated
+    ? await o.mailboxToken?.(connected.account).catch(() => undefined)
+    : undefined;
+  const mailbox = connected?.delegated && !mailboxToken ? null : connected;
+  if (connected && !mailbox)
+    telemetry("runner", "mailbox_unavailable", { runId: o.run.id, generation: o.run.generation }, "warn");
   try {
     await persist();
     const value = await turn({
@@ -228,8 +239,9 @@ export async function runTurn(
       fullAccess: o.fullAccess && !options.readOnly,
       onTiming: fields => { timing = {...timing, ...fields}; },
       person: o.person,
-      mailbox: mailboxFor(o.person, o.inboxes),
-      prompt: `${options.prompt}\n\n${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`,
+      mailbox,
+      mailboxToken,
+      prompt: `${options.prompt}\n\n${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}${connected && !mailbox ? mailboxUnavailableInstructions(o.person) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),
       onProcess: async (p) => {
         pid = p;

@@ -133,6 +133,7 @@ export async function readIssues(
         capability: raw.milestone.description.slice(0, 400),
       },
       customers: tagged("customer:"),
+      ...(raw.labels.some((l) => l.name === "upkeep") ? { upkeep: true } : {}),
       repos: tagged("repo:")
         .filter((name) => /^[\w.-]+$/.test(name))
         .map((name) => `${owner}/${name}`),

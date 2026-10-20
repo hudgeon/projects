@@ -12,9 +12,11 @@ import { People, peopleRoutes } from "./people";
 import { InboxRequests, inboxRoutes, keepInboxes, overviewInboxes } from "./inbox";
 import { Sessions } from "./sessions";
 import { Documents } from "./documents";
+import { settingsRoutes } from "./settings";
+import { scheduledUpkeep } from "./upkeep";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
-import { runInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
+import { startInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
 import { archiveInputSchema, archiveKey, type ArchiveEntry, type ArchiveTarget } from "../src/archive-model";
 import { telemetry } from "../src/telemetry";
 import { codexComparison, executionSettingsSchema, METRIC_LIMIT, METRIC_WINDOW_MS, type CodexSample, type ExecutionSettings } from "../src/codex-metrics";
@@ -126,6 +128,7 @@ export class Portfolio extends DurableObject<Env> {
     this.signIns.end(run);
   }
   listRuns(options: RunListOptions = {}) { return this.runs.list(options); }
+  latestRun(lane: Lane, active = false) { return this.runs.latest(lane, active); }
   runtimeVersions(id?: string) { return this.runs.runtimeVersions(id); }
   getRun(id: string) { return this.runs.get(id); }
   createRun(input: RunInput, owner: string) { return this.runs.create(input, owner); }
@@ -478,15 +481,8 @@ export async function handle(
   // Only a signed-in person reaches these; machine tokens stop above.
   const people = await peopleRoutes(request, store, caller as string);
   if (people) return people;
-  if (url.pathname === "/api/execution-settings") {
-    if (request.method === "GET") return Response.json(await store.executionSettingsView());
-    if (request.method !== "POST") return new Response("Method not allowed", {status: 405});
-    let input;
-    try { input = executionSettingsSchema.parse(await readJson(request, 1024)); }
-    catch { return Response.json({error: "Invalid execution settings"}, {status: 400}); }
-    await store.setExecutionSettings(input);
-    return Response.json(await store.executionSettingsView());
-  }
+  const settings = await settingsRoutes(request, store, env, caller as string);
+  if (settings) return settings;
   // The owner connects machines. Tokens appear once, when a machine is added
   // or its tokens are replaced, and only their hashes are kept.
   const machineRoute = /^\/api\/machines(?:\/([a-z0-9-]{1,32})(?:\/(tokens|remove))?)?$/.exec(url.pathname);
@@ -576,7 +572,7 @@ export async function handle(
       );
     let input;
     try {
-      input = runInputSchema.parse(await readJson(request, MESSAGE_REQUEST_BYTES));
+      input = startInputSchema.parse(await readJson(request, MESSAGE_REQUEST_BYTES));
     } catch {
       return Response.json({ error: "Invalid conversation" }, { status: 400 });
     }
@@ -891,5 +887,9 @@ export default {
       }),
       document,
     );
+  },
+  // The weekly upkeep trigger (wrangler.jsonc, triggers.crons).
+  async scheduled(controller, env) {
+    await scheduledUpkeep(env, controller.scheduledTime, controller.cron);
   },
 } satisfies ExportedHandler<Env>;

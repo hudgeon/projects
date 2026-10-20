@@ -21,8 +21,8 @@ import {
 } from "../src/run-model";
 
 const exec = promisify(execFile);
-// The runner has one process owner. Its concurrent conversations share Git's
-// fetch/ref metadata, even though their eventual worktrees are independent.
+// The runner has one process owner: its concurrent conversations share Git's
+// fetch/ref metadata, though their worktrees are independent.
 const preparations = new Map<string, Promise<unknown>>();
 export async function git(
   cwd: string,
@@ -54,6 +54,8 @@ export type ProjectDirectory = {
   name: string;
   cwd: string;
   plan: string | null;
+  // Its GitHub repository, when origin is there.
+  repo?: string;
 };
 export async function registry(config: Config): Promise<ProjectDirectory[]> {
   const root = await realpath(config.root);
@@ -69,16 +71,16 @@ export async function registry(config: Config): Promise<ProjectDirectory[]> {
       throw Error(
         "Duplicate project identity; fix the project metadata before running work.",
       );
-    result.push({ id, name: item.name, cwd, plan: item.plan ?? null });
+    result.push({ id, name: item.name, cwd, plan: item.plan ?? null, ...(item.repo ? { repo: item.repo } : {}) });
   }
   return result;
 }
-// A change worktree's saved copy on GitHub, so another machine can continue it.
+// A change worktree's saved copy on GitHub, for another machine to continue.
 // Private to Projects: never a branch, so it starts no checks or reviews.
 export const savedRef = (runId: string, childId: string) =>
   `refs/projects/wip/${runId}/${childId}`;
 const SNAPSHOT = "Projects saved work in progress";
-// The GitHub repository behind origin, or null when origin is elsewhere.
+// The GitHub repository behind origin; null when it is elsewhere.
 async function githubRepo(cwd: string) {
   const url = await git(cwd, ["remote", "get-url", "origin"]).catch(() => "");
   return /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
@@ -91,8 +93,8 @@ const gh = (cwd: string, args: string[]) =>
     maxBuffer: 1_000_000,
   }).then((result) => result.stdout.trim());
 // A ref outside the branches is still listed and fetchable on a public
-// repository, so work in progress is saved only to a private one. Unknown
-// visibility, such as an offline lookup or a remote off GitHub, saves nothing.
+// repository, so work in progress is saved only to a private one; unknown
+// visibility (an offline lookup, a remote off GitHub) saves nothing.
 export async function privateOrigin(cwd: string) {
   const repo = await githubRepo(cwd);
   if (!repo) return false;
@@ -102,8 +104,8 @@ export async function privateOrigin(cwd: string) {
   );
 }
 // GitHub merged a pull request whose head is exactly this commit, so its work
-// has landed even where a squash merge left the branch's own commits behind.
-// Unknown, such as a failed lookup or a remote off GitHub, is not landed.
+// has landed even where a squash merge left the branch's commits behind;
+// unknown (a failed lookup, a remote off GitHub) is not landed.
 export async function landed(cwd: string, commit: string) {
   const repo = await githubRepo(cwd);
   if (!repo || !/^[0-9a-f]{40,64}$/.test(commit)) return false;
@@ -142,10 +144,10 @@ async function savedCopies(cwd: string, runId: string) {
 const updateCopies = (cwd: string, refspecs: string[]) =>
   git(cwd, ["push", "--quiet", "--atomic", "origin", ...refspecs]);
 // Saves the worktree on top of its branch's HEAD, as heldHere builds it, and
-// keeps one copy per worktree: copies that earlier children saved in it give
-// way to this one. Once GitHub has the work or its branch has landed, the
-// worktree's copies are removed and null returns; null also when the
-// repository is not known to be private.
+// keeps one copy per worktree: earlier children's copies in it give way to
+// this one. Once GitHub has the work or its branch has landed, the worktree's
+// copies are removed and null returns, as it does when the repository is not
+// known to be private.
 export async function saveWorkspace(
   cwd: string,
   runId: string,
@@ -216,14 +218,13 @@ async function heldHere(cwd: string, isLanded: typeof landed) {
     await rm(index.GIT_INDEX_FILE, { force: true });
   }
 }
-// No saved copy or pushed branch exists for a workspace on another machine.
+// No saved copy or pushed branch exists for another machine's workspace.
 export class UnsavedWorkspace extends Error {}
 // Recreates another machine's child worktree here from the newest copy any of
-// its children saved, or from its pushed branch when that is newer, as
-// uncommitted changes on the same branch. A new native session continues it;
-// the old ones stay on that machine. `sharing` lists the change children that
-// worked in it, oldest first: one child runs at a time, so a later child's
-// copy is newer.
+// its children saved, or its pushed branch when newer, as uncommitted changes
+// on the same branch; a new native session continues it, the old ones stay
+// there. `sharing` lists its change children oldest first: one runs at a
+// time, so a later child's copy is newer.
 async function restoreWorkspace(
   project: ProjectDirectory,
   sharing: Child[],

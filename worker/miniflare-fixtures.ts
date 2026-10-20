@@ -38,6 +38,8 @@ export async function options(
   ];
   const config: MiniflareOptions = {
     unsafeInspectDurableObjects: true,
+    // Lets a test fire the Worker's cron at /cdn-cgi/local/scheduled.
+    unsafeTriggerHandlers: true,
     resourcePersistencePath: path.join(dir, "state"),
     workers: [
       {

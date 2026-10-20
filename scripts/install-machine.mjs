@@ -6,11 +6,12 @@
 // new values are given, and so are the services' launchd labels. A machine
 // whose machine.json names a Doppler config keeps its tokens there, as
 // COLLECTOR_TOKEN and RUNNER_TOKEN, and gets no token files. Other people's
-// inboxes are connected one at a time with --add-inbox, naming the gws config
-// directory that person signed in to on this machine, and dropped with
-// --remove-inbox; every run ends by listing the connected inboxes.
+// inboxes are connected one at a time with --add-inbox: the address alone
+// reads by delegation (the Workspace service account key in that Doppler
+// config), or with the gws config directory that person signed in to on this
+// machine; --remove-inbox drops one. Every run ends by listing the inboxes.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com=~/.config/gws-person] [--remove-inbox person@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -79,17 +80,28 @@ set("endpoint", flag("endpoint"));
 set("root", expand(flag("root")));
 set("agents", flag("agents")?.split(",").map((a) => a.trim()));
 set("workRepo", flag("work-repo"));
+set("configRepo", flag("config-repo"));
 set("inboxAccount", flag("inbox"));
-// Other people's inboxes: each a Gmail account with the gws config directory
-// that person signed in to on this machine, which must be theirs to read and
-// yours alone to see, like gws's own. --add-inbox lists an account or points
-// it at another directory; --remove-inbox drops it. Nothing else in the config
-// changes, and nothing is written until every entry is valid.
+// Other people's inboxes: each a Gmail account read by delegation (the address
+// alone) or with the gws config directory that person signed in to on this
+// machine, which must be theirs to read and yours alone to see, like gws's
+// own. --add-inbox lists an account or changes how it is read; --remove-inbox
+// drops it. Nothing else in the config changes, and nothing is written until
+// every entry is valid.
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 const inboxes = Array.isArray(config.inboxAccounts) ? [...config.inboxAccounts] : [];
+const connect = (login) => {
+  const i = inboxes.findIndex((known) => same(known.account, login.account));
+  if (i === -1) inboxes.push(login);
+  else inboxes[i] = login;
+};
 for (const entry of flags("add-inbox")) {
-  const [, account, dir] = /^([^\s@=]+@[^\s@=]+\.[^\s@=]+)=(.+)$/.exec(entry ?? "") ?? [];
-  if (!account) fail("Give --add-inbox as person@example.com=/path/to/their/gws/config/directory.");
+  const [, account, dir] = /^([^\s@=]+@[^\s@=]+\.[^\s@=]+)(?:=(.+))?$/.exec(entry ?? "") ?? [];
+  if (!account) fail("Give --add-inbox as person@example.com (read by delegation) or person@example.com=/path/to/their/gws/config/directory.");
+  if (dir === undefined) {
+    connect({ account });
+    continue;
+  }
   const configDir = expand(dir);
   if (!path.isAbsolute(configDir)) fail(`Give ${account}'s gws config directory as an absolute path (or under ~).`);
   let info;
@@ -101,10 +113,7 @@ for (const entry of flags("add-inbox")) {
   if (!info.isDirectory()) fail(`${configDir} is not a directory.`);
   if (info.uid !== process.getuid() || info.mode & 0o077)
     fail(`${configDir} must be yours and readable by you alone, like gws's own config directory: chmod 700 ${configDir}`);
-  const login = { account, configDir: path.resolve(configDir) };
-  const i = inboxes.findIndex((known) => same(known.account, account));
-  if (i === -1) inboxes.push(login);
-  else inboxes[i] = login;
+  connect({ account, configDir: path.resolve(configDir) });
 }
 for (const account of flags("remove-inbox")) {
   const i = inboxes.findIndex((known) => account && same(known.account, account));
@@ -219,7 +228,7 @@ const installed = `Installed ${describe(release)} (was ${describe(previous)}) in
 // Every inbox this machine reads, the owner's first, as the collector lists them.
 const logins = [
   ...(config.inboxAccount && !inboxes.some((known) => same(known.account, config.inboxAccount)) ? [`${config.inboxAccount} (default gws sign-in)`] : []),
-  ...inboxes.map((known) => `${known.account} (${known.configDir})`),
+  ...inboxes.map((known) => `${known.account} (${known.configDir ?? "delegated"})`),
 ];
 const connected = `Inboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
 if (args.includes("--hooks"))

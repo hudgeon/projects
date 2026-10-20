@@ -42,10 +42,17 @@ export type EngineOptions = {
   host: RunnerHost;
   // The native apps signed in on this machine, preferred first.
   agents?: Agent[];
-  // The inboxes connected on this machine, each with its gws sign-in, and
-  // the email lane's drafting repository.
+  // The inboxes connected on this machine, each with its gws sign-in or
+  // marked delegated, and the email lane's drafting repository.
   inboxes?: InboxLogin[];
+  // An hour's Gmail token for a delegated mailbox, minted for its owner at
+  // each of their turns; absent on a machine without the service account key.
+  mailboxToken?: (account: string) => Promise<string>;
   workRepo?: string;
+  // The upkeep lane's sources on this machine: the configuration repository
+  // its changes go to, and where the collector keeps friction receipts.
+  configRepo?: string;
+  frictionDir?: string;
   // Whose conversation this is, as the claim said: named in prompts and the
   // author of helpers' commits; never in receipts or telemetry.
   person?: Person;

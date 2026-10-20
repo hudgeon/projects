@@ -29,6 +29,10 @@ export const helperInstructions = (agent: "codex" | "claude", fullAccess = false
 // reads it. Nobody's email is handled from another person's mailbox.
 export const mailboxFor = (person: Person | undefined, inboxes: InboxLogin[] | undefined) =>
   (person && inboxes?.find((login) => sameAccount(login.account, person.email))) ?? null;
+// Told when a delegated mailbox got no token for this turn, which then has no
+// sign-in: the earlier word that the mailbox is there no longer holds.
+export const mailboxUnavailableInstructions = (person?: Person) =>
+  `\n\nProjects: ${whose(person)} mailbox could not be reached for this turn, so gws has no sign-in in this session. Do not read, draft or act on email for them from any other account; if the task needs their email, report that it was unavailable.`;
 // Whose work a helper does: the runner authors its commits as them, and what
 // it writes says who asked.
 export const requesterInstructions = (person: Person | undefined, inboxes: InboxLogin[] | undefined) => {

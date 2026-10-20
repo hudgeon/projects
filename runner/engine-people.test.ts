@@ -90,3 +90,49 @@ test("a connected mailbox reaches every turn of its owner's conversation as the 
   assert.equal(config(undefined, null), undefined);
   assert.equal(config(matt), undefined);
 });
+test("a delegated mailbox reaches its owner's email lane as an hour's token, and a turn that gets none is told so", async () => {
+  const mine: InboxLogin = { account: "Matt.Smith@example.com", delegated: true };
+  const quick = (mailboxToken?: (account: string) => Promise<string>) => {
+    const o = engineOptions(fixtureDir, { ...makeRun(), lane: "quick" });
+    o.person = matt;
+    o.inboxes = [{ account: "owner@example.com" }, mine];
+    o.mailboxToken = mailboxToken;
+    const calls: NativeOptions[] = [];
+    o.turn = async (opts) => {
+      calls.push(opts);
+      await opts.onSession(randomUUID());
+      return complete;
+    };
+    return { o, calls };
+  };
+  const fixtureDir = await fixture();
+  try {
+    const minted: string[] = [];
+    const { o, calls } = quick(async (account) => `tok-${minted.push(account)}`);
+    await executeRun(o);
+    assert.deepEqual(minted, ["Matt.Smith@example.com"], "a token for the owner's account, minted for this turn");
+    assert.deepEqual([calls[0].mailbox, calls[0].mailboxToken], [mine, "tok-1"]);
+    assert.match(calls[0].prompt, /Matt's email is in Matt\.Smith@example\.com/);
+    assert.doesNotMatch(calls[0].prompt, /tok-1|could not be reached|owner@example\.com/, "the token reaches the environment, not the prompt");
+    // The environment carries the token with no sign-in beside it, and
+    // nothing when there is no token; a token is only for a delegated mailbox.
+    const env = nativeEnv(undefined, matt, mine, "tok-1");
+    assert.equal(env.GOOGLE_WORKSPACE_CLI_TOKEN, "tok-1");
+    assert.equal(env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR, path.join(tmpdir(), "projects-no-mailbox"));
+    assert.equal(env.GOOGLE_APPLICATION_CREDENTIALS, path.join(tmpdir(), "projects-no-mailbox", "none.json"));
+    assert.deepEqual([nativeEnv(undefined, matt, mine).GOOGLE_WORKSPACE_CLI_TOKEN, nativeEnv(undefined, matt, mine).GOOGLE_WORKSPACE_CLI_CONFIG_DIR], [undefined, path.join(tmpdir(), "projects-no-mailbox")]);
+    assert.equal(nativeEnv(undefined, matt, { account: "matt.smith@example.com" }, "tok-1").GOOGLE_WORKSPACE_CLI_TOKEN, undefined);
+    // The key cannot be read or Google refuses: the turn has no mailbox and hears it.
+    const refused = quick(async () => { throw Error("refused"); });
+    await executeRun(refused.o);
+    assert.deepEqual([refused.calls[0].mailbox, refused.calls[0].mailboxToken], [null, undefined]);
+    assert.match(refused.calls[0].prompt, /Matt's mailbox could not be reached for this turn, so gws has no sign-in in this session/);
+    // A machine that cannot mint tokens at all reads the same way.
+    const none = quick();
+    await executeRun(none.o);
+    assert.equal(none.calls[0].mailbox, null);
+    assert.match(none.calls[0].prompt, /could not be reached for this turn/);
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true });
+  }
+});

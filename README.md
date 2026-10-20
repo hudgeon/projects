@@ -22,18 +22,18 @@ To run your own copy, see [Self-hosting](docs/self-host.md).
   other person. Linked work opens directly in Today; unlinked email can be
   linked to existing work or start a standalone activity. Previewing, linking
   or starting work never marks a message reviewed.
-- **Settings** holds your name, Codex speed, timing comparisons, machines and repository diagnostics: add a machine, set
-  their order, replace tokens or remove one. Existing repository bookmarks work.
+- **Settings** holds your name, Codex speed and its timing comparisons, upkeep,
+  machines (add, order, replace tokens, remove) and repository diagnostics;
+  older repository bookmarks still work.
 - **Archive** keeps what you marked Done or archived, with Reopen and Restore.
 
 Bigger work has bookmarkable details with its position, source emails and
-activities. Start activity uses the same composer as Today with the work issue
+activities. Start activity uses Today's composer with the work issue
 selected; a repository is selected only for one clear registered match. The
-work issue stays canonical on GitHub, including explicitly linked email threads.
-Link requests use the existing inbox queue and the machine on duty's GitHub login.
+work issue stays canonical on GitHub, linked email threads included.
 
 The selected view, work item, email, project, conversation and archive filter
-are URL search parameters, so reloads, bookmarks and browser Back work.
+are URL parameters, so reloads, bookmarks and Back work.
 
 ## How it works
 
@@ -116,9 +116,10 @@ collector and runner, written by `scripts/install-machine.mjs`:
 | `agents` | The apps signed in on this machine (`claude`, `codex`); conversations never start another. |
 | `collectorTokenFile`, `tokenFile` | Owner-only files holding the two tokens, for a machine without `doppler`. With `doppler` and neither file, the tokens come from that config. |
 | `workRepo` | Optional: the repository whose issues labelled `work` are work items. |
-| `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's, each `{account, configDir}` naming their own `gws` config directory. |
+| `configRepo` | Optional: the shared configuration repository (global agent rules, skills, hooks) that [upkeep](docs/upkeep.md) changes go to, when it is also a registered project. |
+| `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's: `{account}` read by delegation (the Workspace service account key in `doppler`), or `{account, configDir}` with their own `gws` sign-in. |
 | `helpers` | Optional: `localServers` (local MCP servers Claude helpers may use) and `deniedTools` (tools to hide from them). |
-| `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App, read with the read-only service token in `doppler-token` (mode 600). The collector gets only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
+| `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App and `GMAIL_DELEGATION_KEY`, read with the read-only service token in `doppler-token` (mode 600). The collector gets only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
 | `concurrency`, `quickConcurrency` | Standard conversations at once (1–5, default 3) and extra quick-work slots (0–5, default 5). |
 
 ## Conversations
@@ -173,8 +174,7 @@ is preserved separately. The exact exchange stays in a private local context
 file: a short approval is checked against the original request, not guessed
 from a handoff. Helper briefs carry the
 current objective, applicable constraints and approvals, source evidence, open
-questions and acceptance checks. Repository instructions and canonical plans
-stay in their files, read when relevant. It follows
+questions and acceptance checks. It follows
 [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time),
 keeping saved work, approvals and recovery journals.
 
@@ -217,9 +217,9 @@ or verification. Repository instructions own setup, checks and delivery.
   residue.
 - **Pages**: an HTML mockup or slide deck linked at a saved commit opens
   inside Projects, full screen over the current view, from the documents list
-  or the link itself; **Source** keeps the GitHub copy a tap away. The first
-  machine whose runner calls next reads that edition with its own GitHub login,
-  and the Worker keeps it (up to 5 MB, the 30 most recently opened). The commit is the version: nothing is republished. The page runs its
+  or the link itself; **Source** keeps the GitHub copy a tap away. The next
+  machine whose runner calls reads that edition with its own GitHub login;
+  the Worker keeps it (up to 5 MB, the 30 most recently opened). The commit is the version. The page runs its
   own scripts in an opaque origin (sandbox and `DOCUMENT_CSP` in
   `src/document-model.ts`), so its slide controls, notes and clicks work but it
   cannot reach your session, Projects' pages or APIs, the network or the top
@@ -233,7 +233,7 @@ or verification. Repository instructions own setup, checks and delivery.
   Return starts a new line and Send sends.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
   prompts, so it never waits behind long work.
-- **Bounds**: ten active standard and thirty active quick conversations, 30 and
+- **Bounds**: ten active standard, thirty quick and two upkeep conversations, 30 and
   60 starts an hour, 120 follow-ups per person per hour, 24 children per conversation, 12 master
   decisions a turn. At a safe native turn boundary the coordinator rotates when
   reported context exceeds 250,000 tokens or recorded prompt input reaches
@@ -288,15 +288,8 @@ On machines listed in `PROJECTS_BROWSER_SIGN_IN`, each new browser starts
 signed in as the conversation's owner, while their address is allowed; else
 it is not, and the agents are told. The Worker sets the cookie itself over
 its own CDP connection before the runner's opens; no runner route returns it.
-The session belongs to that browser alone: only its hash is kept, it ends when
-the browser closes or the provider ends it (checked every five minutes), on
-Sign out, when the machine is removed or a Deploy drops it from the list, or
-when the conversation continues on another machine, and it cannot connect or
-change machines, change execution settings, open Live View, read or act on
-email, or subscribe to notifications. The machine's runner drives that browser,
-so while it lives the runner can act through it, and could read its cookie over
-CDP, within those limits: narrower than signing the browser in by hand, which
-leaves it a seven-day session without them.
+That session belongs to the browser alone and ends with it; its limits are in
+[docs/self-host.md](docs/self-host.md#browser-sign-in-sessions).
 
 ## Work items (optional)
 
@@ -349,26 +342,27 @@ once.
 
 ## Inbox (optional)
 
-Each person's Gmail is read on the machine on duty with their own `gws`
-sign-in (`inboxAccount` with the machine's default one; each of
-`inboxAccounts` with its own config directory, via the installer's
-`--add-inbox`/`--remove-inbox`), refused
-when it is someone else's. An inbox
-is up to 200 threads as metadata plus each one's latest non-draft message
-as bounded plain text (quoted history removed, at most 4,000 characters),
-which lives only in the latest snapshot, is read by its owner one thread at
-a time and never enters the overview, telemetry or prompts.
-Everyone else sees its count and links on work items, never subjects,
-senders or text. A machine that cannot confirm its duty keeps its last reads up to
-fifteen minutes, age shown. **Start activity** on an email preselects its work item; only a source
-link enters the request, never the email text. **Done** finishes the activity;
-archiving its source email is a separate action. **Archive**,
-**Unsubscribe** and linking are the inbox
-owner's requests, applied with that account's sign-in like Mark done;
-unsubscribe uses RFC 8058 one-click only, to a public HTTPS host checked on
-the connection's own DNS lookup, else starts a conversation. A
-conversation runs `gws` signed in as its owner's connected mailbox, for its
-email lane and helpers; a person without one is told so and gets no sign-in.
+Each person's Gmail is read on the machine on duty as that person: by
+delegation, an hour's token at a time from the Workspace service account key
+in the machine's Doppler config (an `inboxAccounts` entry with the address
+alone, so nobody signs in), or with their own `gws` sign-in (`inboxAccount`
+for the owner's default one; an entry with a config directory), refused when
+the profile is someone else's. An inbox is up to 200 threads as metadata
+plus each one's latest non-draft message as bounded plain text (quoted
+history removed, at most 4,000 characters), which lives only in the latest
+snapshot, is read by its owner a thread at a time and never enters the
+overview, telemetry or prompts. Everyone else sees its count and work-item
+links, never subjects, senders or text. A machine unsure of its duty keeps
+its last reads up to 15 minutes, age shown. **Start activity** on an
+email preselects its work item; only a source link enters the request, never
+the email text. **Done** finishes the activity; archiving its email is a
+separate action. **Archive**, **Unsubscribe** and
+linking are the inbox owner's requests, applied as that account like Mark
+done; unsubscribe uses RFC 8058 one-click only, to a public HTTPS host
+checked on the connection's own DNS lookup, else starts a conversation. A
+conversation runs `gws` as its owner's mailbox (their sign-in, or a token per
+turn) for its email lane and helpers; a person without one, or whose token
+could not be minted, is told so and gets none.
 
 ## Notifications
 
@@ -437,7 +431,11 @@ ledger, and kept at 100%; traces are sampled at 10%, routine successful polls
 at 1%.
 
 Collectors keep [friction receipts](docs/friction.md) on their machines;
-snapshots carry daily totals and versions only.
+snapshots carry daily totals and versions only. Once a week the Worker's cron
+starts an **upkeep** conversation for the deployment owner (or **Run upkeep
+now** in Settings does): its master reads those totals and versions and makes
+at most one guarded change to the agent setup, or reports that none is needed;
+see [Upkeep](docs/upkeep.md).
 
 Settings has an owner-wide **Codex fast mode** switch and compares labelled
 Codex turns by mode; see [Codex speed](docs/codex-speed.md).

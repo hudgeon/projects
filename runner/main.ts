@@ -12,7 +12,8 @@ import {
   screenshotInputSchema,
 } from "../src/screenshot-model";
 import { machineSecret } from "../collector/collect";
-import { inboxLogins } from "../collector/config";
+import { mailboxes } from "../collector/inbox-logins";
+import { frictionDirectory } from "../collector/friction-store";
 import {
   browserSignInSchema,
   laneSchema,
@@ -32,13 +33,7 @@ import { documentJobSchema } from "../src/document-model";
 import { installedRelease, loadConfig, type Config } from "./config";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
 
-type Route =
-  | "/api/runner/claim"
-  | "/api/runner/heartbeat"
-  | "/api/runner/report"
-  | "/api/runner/browser"
-  | "/api/runner/screenshot"
-  | "/api/runner/document";
+type Route = `/api/runner/${"claim" | "heartbeat" | "report" | "browser" | "screenshot" | "document"}`;
 type Body = {
   runnerId: string;
   activeRunIds?: string[];
@@ -292,8 +287,10 @@ async function executeClaim(o: {
       agents: config.agents,
       connectors: () => connectorAccess(config.helpers),
       fullAccess: config.helpers.fullAccess,
-      inboxes: inboxLogins(config),
+      ...mailboxes(config),
       workRepo: config.workRepo,
+      configRepo: config.configRepo,
+      frictionDir: frictionDirectory(config.home),
       person: personSchema.safeParse(claim.person).data,
       browserSignIn: browserSignInSchema.safeParse(claim.browserSignIn).data,
       latestMessages: () => messages,
@@ -353,9 +350,8 @@ async function executeClaim(o: {
   }
 }
 // Each conversation runs in its own executor process, so an update can restart
-// the runner at once: executors finish their current step on the version they
-// started with, then the new runner continues them. An executor's file names
-// its process, lane and conversation while it runs.
+// the runner at once: executors finish their step on their old version, then
+// the new runner continues them. Its file names its process, lane and conversation.
 const executorsDir = (config: Config) => path.join(config.stateDir, "executors");
 const executorFile = (config: Config, runId: string) =>
   path.join(executorsDir(config), `${runId}.json`);
@@ -385,8 +381,7 @@ async function liveExecutor(config: Config, runId: string) {
     return null;
   }
 }
-// Resolves once a conversation's executor, which another runner may have
-// started, is no longer running.
+// Resolves once a conversation's executor, perhaps another runner's, has exited.
 function exited(config: Config, runId: string) {
   return new Promise<void>((resolve) => {
     let checking = false;
@@ -591,8 +586,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
     void sweep();
     setInterval(() => void sweep(), 3600_000).unref();
   }
-  // Executors that end abnormally, by conversation: a third within ten
-  // minutes stops automatic restarts and tells the owner.
+  // A third abnormal executor exit within ten minutes stops restarts and tells the owner.
   const crashes = new Map<string, number[]>();
   const launch = async (claim: ClaimedRun, control: AbortController) => {
     const runId = claim.run.id;
@@ -657,9 +651,8 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       }
     })();
   };
-  // Claims carry documents; a runner with every slot busy is not claiming, so
-  // it asks for them itself. This timer also keeps a full runner running,
-  // since its executors are detached.
+  // Claims carry documents; a full runner is not claiming, so it asks for them
+  // itself. The timer also keeps a full runner alive, as executors are detached.
   const busy = setInterval(() => {
     if (stopDocuments.aborted) return clearInterval(busy);
     if (executors.size < config.concurrency + config.quickConcurrency) return;

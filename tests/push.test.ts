@@ -88,6 +88,10 @@ test("a notice fires once, to the conversation's owner, when an existing convers
   assert.equal(notice(run({}), run({ state: "failed" }))?.title, "Failed: Reply to Rob about training");
   assert.equal(notice(null, run({ state: "completed" })), null, "a new or migrated row is not news");
   assert.equal(notice(run({}), run({ state: "cancelled" })), null, "the user stopped it");
+  // A finished upkeep cycle waits quietly in Today; one needing a decision does not.
+  assert.equal(notice(run({ lane: "upkeep" }), run({ lane: "upkeep", state: "completed", status: "No change needed this cycle." })), null, "a finished upkeep cycle is not news");
+  assert.equal(notice(run({ lane: "upkeep" }), run({ lane: "upkeep", state: "blocked" }))?.title, "Needs you: Reply to Rob about training");
+  assert.equal(notice(run({ lane: "upkeep" }), run({ lane: "upkeep", state: "failed" }))?.title, "Failed: Reply to Rob about training");
   assert.equal(notice(run({ state: "completed" }), run({ state: "completed", archivedAt: 3 })), null, "Done");
   assert.equal(notice(run({ state: "completed", archivedAt: 3 }), run({ state: "completed" })), null, "Reopen");
   assert.equal(notice(run({ state: "completed" }), run({ state: "completed" })), null);
