@@ -126,6 +126,12 @@ every start logs the `release` it runs. Options:
   skill in the work repository. Your conversations work in it; another
   person's work in their own inbox once it is connected (below), and until
   then are told no mailbox is connected for them.
+- `--add-inbox person@example.com=~/.config/gws-person`,
+  `--remove-inbox person@example.com` (optional): connect another person's
+  Gmail account with the `gws` config directory they signed in to on this
+  machine (below), or disconnect it. The directory must exist and be yours
+  alone to read; nothing else in `machine.json` changes, and every run ends
+  by listing the connected inboxes.
 - `--collector-label`, `--runner-label` (optional): launchd labels for the two
   services, when they should differ from the defaults. They are kept in
   `machine.json`, so later runs restart the same services.
@@ -152,7 +158,7 @@ only people who accept that, on a machine only you use. With that person at
 the keyboard, once, using the OAuth client your `gws` already has:
 
 ```bash
-mkdir -p ~/.config/gws-ada && cp ~/.config/gws/client_secret.json ~/.config/gws-ada/
+mkdir -p -m 700 ~/.config/gws-ada && cp ~/.config/gws/client_secret.json ~/.config/gws-ada/
 ```
 
 ```bash
@@ -166,12 +172,12 @@ the directory is theirs:
 GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-ada gws gmail users getProfile --params '{"userId":"me"}'
 ```
 
-Then list the account in `machine.json` with that directory, and run the
-installer again so the runner restarts with it (the collector reads the file
-at its next scan):
+Then connect the account. The installer lists it with that directory under
+`inboxAccounts` in `machine.json`, leaves the rest as it is, and restarts the
+runner with it (the collector reads the file at its next scan):
 
-```json
-"inboxAccounts": [{ "account": "ada@example.com", "configDir": "/Users/you/.config/gws-ada" }]
+```bash
+node scripts/install-machine.mjs --add-inbox ada@example.com=~/.config/gws-ada
 ```
 
 The collector reads each account with its own directory and refuses one whose
@@ -181,7 +187,9 @@ its owner; everyone sees each person's count and the email links on work
 items. That person's conversations run `gws` signed in as their account, so
 the email lane and the work repository's draft helper work in their mailbox;
 until it is connected, their sessions get no `gws` sign-in at all. Your own
-account stays `--inbox`, read with the machine's default sign-in.
+account stays `--inbox`, read with the machine's default sign-in. To
+disconnect a person, run the installer with `--remove-inbox ada@example.com`,
+then delete their directory.
 
 Helpers can use the apps' connectors, except to send email. To also let Claude
 helpers use local MCP servers you already run, list their names under
@@ -220,8 +228,8 @@ agents address that person by name, helpers' commits are authored as them and
 pushed with the machine's Git login, and pull requests and work-record
 comments say who asked.
 
-Whoever can sign in can run code on your machines with your logins, so keep
-`ALLOWED_EMAILS` to yourself.
+Whoever can sign in can run code on your machines with your logins, so allow
+only people you trust with them (step 7).
 
 Weekly usage shows each provider's reported subscription allowance remaining.
 The bar is the percentage consumed; its marker is the share of the seven-day
@@ -234,3 +242,41 @@ Claude usage reads the machine's existing Claude Code login without refreshing
 credentials. If it reports an expired or unavailable login, open Claude Code on
 the named machine and renew its login there. Rejected requests and rate limits
 have separate labels. Older collectors may still report only “unavailable”.
+
+## 7. Add a person
+
+Everyone allowed to sign in is a person: a profile, their own conversations,
+notifications and inbox, and everyone else's conversations in view. The
+machines stay yours, and whatever they run for anyone runs with your logins.
+
+1. **Allow the address.** Add it to `ALLOWED_EMAILS` in Doppler
+   (`project-overview/prod`). On the free email path (step 2), add and verify
+   it as an Email Routing destination first, or their sign-in codes cannot be
+   delivered. Then run **Deploy** on `main` again: the allowlist is a Worker
+   secret bound at each deploy, so nothing changes until it runs. Deploy
+   refuses a list that leaves out `PROJECTS_OWNER_EMAIL`, so you can always
+   sign in.
+2. **They sign in and set their name.** They open your site, enter their
+   address and type the code they receive. Their profile is named from the
+   address until they change it under **Settings → You**; that name is what
+   agents call them and how their commits are authored.
+3. **What they see.** Every conversation, labelled with who started it; Today
+   lists theirs until they switch to everyone's. Their conversations run on
+   your machines: agents address them by name, helpers' commits are authored
+   as them and pushed with the machine's Git login, and pull requests and
+   work-record comments say who asked. On a machine in
+   `PROJECTS_BROWSER_SIGN_IN`, their conversation browsers sign in as them.
+   Notifications they turn on reach the devices they turned them on with,
+   for their conversations only. The Inbox tab shows their own mail once it
+   is connected and, until then, only everyone's counts; nobody reads another
+   person's threads.
+4. **Connect their inbox** (optional), with them at the machine once:
+   [Connect a person's inbox](#connect-a-persons-inbox).
+
+When someone leaves, remove their address from `ALLOWED_EMAILS` and run
+Deploy again: their sessions end at once, conversation browsers no longer
+sign in as them, and no more codes are sent to them. On each machine that
+read their inbox, run the installer with `--remove-inbox` for their account
+and delete their `gws` directory. Their profile, name and the conversations
+and commits attributed to them stay, so the history still says who did what;
+nothing is reassigned.

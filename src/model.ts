@@ -2,6 +2,7 @@ import { inboxSchema } from "./inbox-model";
 import { workSnapshotSchema, type Close } from "./work-model";
 import { z } from "zod";
 import { machineIdSchema } from "./telemetry";
+import { frictionSnapshotSchema } from "./friction-model";
 export { machineIdSchema };
 const text = z.string().max(500);
 const id = z
@@ -17,7 +18,7 @@ export const sourceSchema = z
     observedAt: time,
   })
   .strict();
-// Provider-reported subscription limits: never inferred from session tokens.
+// Provider-reported limits, never inferred from session tokens.
 export const quotaSchema = z.discriminatedUnion("state", [
   z
     .object({
@@ -65,8 +66,8 @@ export const worktreeSchema = z
     conflicts: count,
     ahead: count.nullable(),
     behind: count.nullable(),
-    // Commits only this machine holds (on no remote branch, never landed on main).
-    // Null: no remote or unknown. Absent in snapshots from older collectors.
+    // Commits only this machine holds (on no remote branch, never on main).
+    // Null: no remote or unknown; absent in older collectors' snapshots.
     unpushed: count.nullable().optional(),
     isPrimary: z.boolean(),
     error: text.nullable(),
@@ -120,8 +121,7 @@ export const projectSchema = z
         github: sourceSchema,
         codex: sourceSchema,
         claude: sourceSchema,
-        // An older collector's placeholder for an app nothing reads: accepted
-        // so its snapshots still publish, never shown.
+        // An older collector's placeholder app: accepted, never shown.
         grok: sourceSchema.optional(),
       })
       .strict(),
@@ -142,6 +142,7 @@ export const snapshotSchema = z
       .object({ codex: quotaSchema, claude: quotaSchema })
       .strict()
       .optional(),
+    friction: frictionSnapshotSchema.optional(),
   })
   .strict();
 export type Project = z.infer<typeof projectSchema>;
@@ -149,8 +150,8 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type Source = z.infer<typeof sourceSchema>;
 export type Worktree = z.infer<typeof worktreeSchema>;
-// A machine the owner connected, in preference order. The first one heard
-// from recently takes the shared duties and new conversations.
+// The owner's machines in preference order; the first heard from recently
+// takes the shared duties and new conversations.
 export type MachineView = {
   id: string;
   name: string;
@@ -388,7 +389,7 @@ export function threads(
   return out.sort((a, b) => order[a.kind] - order[b.kind] || b.at - a.at);
 }
 // Ranking uses when work last moved (a session or PR), not when a changed
-// checkout was observed; any thread at all still counts as active.
+// checkout was observed; any thread still counts as active.
 export function lastActivity(list: Thread[]) {
   const moved = list
     .filter((t) => t.kind !== "checkout")

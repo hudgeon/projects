@@ -11,7 +11,8 @@
 //
 // Usage: node scripts/ci/build-secrets-file.mjs <output-path>
 import { writeFileSync } from "node:fs";
-import { requiredSecretNames } from "./wrangler-config.mjs";
+import { unstable_readConfig } from "wrangler";
+import { ownerAllowed, requiredSecretNames } from "./wrangler-config.mjs";
 
 const outputPath = process.argv[2];
 if (!outputPath) {
@@ -26,6 +27,18 @@ if (missing.length > 0) {
     `Doppler supplied no value for: ${missing.join(", ")}. ` +
       "Check the name in the wrangler config against the Doppler config, and that " +
       "the service account can read the config it is inherited from.",
+  );
+}
+
+// This is the first step with both in hand: the owner from the filled-in
+// config and the allowlist from Doppler. A list without the owner would
+// deploy a site its owner cannot sign in to, so it stops the release here;
+// an unset or empty list fails the same way (after the check above, when
+// the list is a required secret), never skipping this.
+const owner = unstable_readConfig({}).vars?.OWNER_EMAIL;
+if (owner && !ownerAllowed(owner, process.env.ALLOWED_EMAILS)) {
+  throw new Error(
+    "OWNER_EMAIL is not one of ALLOWED_EMAILS: add the deployment owner's address to the Doppler config so they can sign in.",
   );
 }
 

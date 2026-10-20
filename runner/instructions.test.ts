@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { browserInstructions, mailboxFor, requesterInstructions } from "./instructions";
+import { browserInstructions, connectorInstructions, helperInstructions, mailboxFor, progressInstructions, requesterInstructions, responseInstructions, workInstructions } from "./instructions";
 
 const owner = { email: "owner@example.com", name: "Owner" };
 const matt = { email: "matt.smith@example.com", name: "Matt" };
@@ -28,6 +28,16 @@ test("helpers hear who asked and whose mailbox they may use", () => {
   const connected = requesterInstructions(matt, inboxes);
   assert.match(connected, /Matt's email is in matt\.smith@example\.com; use gws/);
   assert.doesNotMatch(connected, /gws-matt|Owner@Example/, "the sign-in's directory reaches the environment, not the prompt");
+});
+test("every helper and turn instruction names the person once known, and reads as before until then", () => {
+  const named = [connectorInstructions(matt), progressInstructions(matt), responseInstructions(matt), workInstructions("acme/work", 7, matt), helperInstructions("codex", false, matt)].join("\n");
+  for (const phrase of ["need Matt's approval of each message", "a progress summary for Matt", "until Matt acts", "Matt sees the first remaining item", "Write summaries for Matt", "Matt reads them in Projects", "what Matt needs", "When Matt has to act", "give Matt a saved draft link", "expand Matt's scope", "Matt's corrections take precedence", "from Matt or ask"])
+    assert.ok(named.includes(phrase), phrase);
+  assert.doesNotMatch(named, /\bthe user\b|user-facing|User corrections/);
+  assert.match(browserInstructions("wss://projects.example.com/api/browser/x/cdp", matt, "manual"), /yourMove asks Matt to use Open browser/);
+  const plain = [connectorInstructions(), progressInstructions(), responseInstructions(), workInstructions("acme/work", 7), helperInstructions("claude")].join("\n");
+  for (const phrase of ["need the user's approval", "a progress summary for the user", "The user sees the first remaining item", "Write summaries for the user", "The user reads them", "When the user has to act", "expand the user's scope", "User corrections take precedence", "from the user or ask"])
+    assert.ok(plain.includes(phrase), phrase);
 });
 test("a browser's instructions say how it signs in to Projects", () => {
   const endpoint = "wss://projects.example.com/api/browser/x/cdp";

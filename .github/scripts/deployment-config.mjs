@@ -36,6 +36,8 @@ function validZone(zone) {
 for (const [name, value, valid] of [
   ["PROJECTS_HOST", host, /^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(host)],
   ["PROJECTS_PORTFOLIO", portfolio, /^[\w-]{1,64}$/.test(portfolio)],
+  // The owner must also be one of ALLOWED_EMAILS, which Doppler supplies later
+  // in the Deploy job; build-secrets-file.mjs checks that then.
   ["PROJECTS_OWNER_EMAIL", owner, email.test(owner)],
   ["PROJECTS_EMAIL_FROM", from, email.test(from)],
   ["PROJECTS_TIME_ZONE", timeZone, validZone(timeZone)],

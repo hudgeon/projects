@@ -31,7 +31,7 @@ test("a conversation moved from the Studio starts a new coordinator here and nev
     await executeRun(o);
     assert.deepEqual(calls.map((c) => c.agent), ["codex", "codex", "claude", "codex"]);
     assert.equal(calls[0].sessionId, undefined, "a new coordinator, not the Studio's");
-    assert.match(calls[0].prompt, /moved this conversation here because the machine where it ran so far is unreachable/);
+    assert.match(calls[0].prompt, /This conversation was moved here because the machine where it ran so far is unreachable/);
     assert.match(calls[1].prompt, /no copy on GitHub to continue from/);
     assert.ok(calls.every((c) => c.sessionId !== "studio-child-session" && c.sessionId !== "studio-master-session"));
     const children = reports.at(-1)!.children;

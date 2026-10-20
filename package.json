@@ -18,7 +18,8 @@
     "runner": "tsx runner/main.ts",
     "context:evaluate": "tsx scripts/evaluate-context.ts",
     "context:replay": "tsx scripts/replay-project-context.ts",
-    "hooks:install": "node scripts/install-hooks.mjs"
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "friction": "tsx scripts/friction-report.ts"
   },
   "dependencies": {
     "@fontsource-variable/public-sans": "^5.2.0",

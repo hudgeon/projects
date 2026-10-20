@@ -5,9 +5,12 @@
 // when dependencies changed); an existing config and tokens are kept unless
 // new values are given, and so are the services' launchd labels. A machine
 // whose machine.json names a Doppler config keeps its tokens there, as
-// COLLECTOR_TOKEN and RUNNER_TOKEN, and gets no token files.
+// COLLECTOR_TOKEN and RUNNER_TOKEN, and gets no token files. Other people's
+// inboxes are connected one at a time with --add-inbox, naming the gws config
+// directory that person signed in to on this machine, and dropped with
+// --remove-inbox; every run ends by listing the connected inboxes.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com=~/.config/gws-person] [--remove-inbox person@example.com] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -15,6 +18,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -30,6 +34,7 @@ const flag = (name) => {
   const i = args.indexOf(`--${name}`);
   return i === -1 ? undefined : args[i + 1];
 };
+const flags = (name) => args.flatMap((arg, i) => (arg === `--${name}` ? [args[i + 1]] : []));
 const expand = (value) => value?.replace(/^~(?=$|\/)/, home);
 const fail = (message) => {
   console.error(message);
@@ -75,6 +80,39 @@ set("root", expand(flag("root")));
 set("agents", flag("agents")?.split(",").map((a) => a.trim()));
 set("workRepo", flag("work-repo"));
 set("inboxAccount", flag("inbox"));
+// Other people's inboxes: each a Gmail account with the gws config directory
+// that person signed in to on this machine, which must be theirs to read and
+// yours alone to see, like gws's own. --add-inbox lists an account or points
+// it at another directory; --remove-inbox drops it. Nothing else in the config
+// changes, and nothing is written until every entry is valid.
+const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+const inboxes = Array.isArray(config.inboxAccounts) ? [...config.inboxAccounts] : [];
+for (const entry of flags("add-inbox")) {
+  const [, account, dir] = /^([^\s@=]+@[^\s@=]+\.[^\s@=]+)=(.+)$/.exec(entry ?? "") ?? [];
+  if (!account) fail("Give --add-inbox as person@example.com=/path/to/their/gws/config/directory.");
+  const configDir = expand(dir);
+  if (!path.isAbsolute(configDir)) fail(`Give ${account}'s gws config directory as an absolute path (or under ~).`);
+  let info;
+  try {
+    info = statSync(configDir);
+  } catch {
+    fail(`${configDir} does not exist. ${account} signs gws in there first: see docs/self-host.md, Connect a person's inbox.`);
+  }
+  if (!info.isDirectory()) fail(`${configDir} is not a directory.`);
+  if (info.uid !== process.getuid() || info.mode & 0o077)
+    fail(`${configDir} must be yours and readable by you alone, like gws's own config directory: chmod 700 ${configDir}`);
+  const login = { account, configDir: path.resolve(configDir) };
+  const i = inboxes.findIndex((known) => same(known.account, account));
+  if (i === -1) inboxes.push(login);
+  else inboxes[i] = login;
+}
+for (const account of flags("remove-inbox")) {
+  const i = inboxes.findIndex((known) => account && same(known.account, account));
+  if (i === -1) fail(`No inbox is connected for ${account ?? "that account"} on this machine.`);
+  inboxes.splice(i, 1);
+}
+if (inboxes.length > 10) fail("At most ten inboxes can be connected on one machine.");
+if (flags("add-inbox").length || flags("remove-inbox").length) config.inboxAccounts = inboxes;
 // Labels given once are kept, so a later run restarts the same launchd jobs
 // rather than starting a second collector and runner beside them.
 set("collectorLabel", flag("collector-label"));
@@ -178,13 +216,19 @@ for (const bundle of bundles)
   );
 owned(releaseFile, JSON.stringify(release, null, 2) + "\n");
 const installed = `Installed ${describe(release)} (was ${describe(previous)}) in ${base}.`;
+// Every inbox this machine reads, the owner's first, as the collector lists them.
+const logins = [
+  ...(config.inboxAccount && !inboxes.some((known) => same(known.account, config.inboxAccount)) ? [`${config.inboxAccount} (default gws sign-in)`] : []),
+  ...inboxes.map((known) => `${known.account} (${known.configDir})`),
+];
+const connected = `Inboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",
   });
 if (process.platform !== "darwin" || args.includes("--no-services")) {
   console.log(
-    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file} running with your service manager.`,
+    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file} running with your service manager.\n${connected}`,
   );
   process.exit(0);
 }
@@ -317,7 +361,7 @@ for (const service of services) {
   }
   if (service.runner) runnerState = settled(service.label, before);
 }
-console.log(`${installed}\nRunner: ${runnerState}.`);
+console.log(`${installed}\nRunner: ${runnerState}.\n${connected}`);
 console.log(
   `${config.host} is connected: its collector reports every two minutes and its runner picks up conversations. It needs you logged in after a restart.`,
 );

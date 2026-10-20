@@ -32,8 +32,11 @@ test("the coordinator and helpers are told whose conversation it is, and every t
   try {
     const [master, helper] = await turns(o);
     assert.match(master.prompt, /This conversation is Matt's \(matt\.smith@example\.com\): "the user" in these instructions is Matt/);
+    assert.match(master.prompt, /You are Matt's Projects master\./);
     assert.match(master.prompt, /It starts signed in to Projects as Matt\./);
+    assert.match(master.prompt, /Matt reads them in Projects/);
     assert.match(helper.prompt, /Matt asked for this work, and your commits are authored as them/);
+    assert.match(helper.prompt, /need Matt's approval of each message/);
     assert.match(helper.prompt, /No mailbox is connected for Matt on this machine/);
     assert.doesNotMatch(helper.prompt, /owner@example\.com/, "another person's mailbox is never named");
     assert.deepEqual([master.person, helper.person], [matt, matt]);

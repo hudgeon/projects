@@ -10,6 +10,7 @@ import {
   type Snapshot,
 } from "./model";
 import { api } from "./overview-query";
+import { frictionLine, frictionTotals, utcDate, type FrictionSnapshot } from "./friction-model";
 const labels: Record<HostHealth["verdict"], string> = {
   clean: "Clean",
   unverified: "Clean where verified",
@@ -23,6 +24,17 @@ const tones: Record<HostHealth["verdict"], string> = {
   progress: "working",
   cleanup: "warning",
   stale: "warning",
+};
+// The harness versions a machine's newest sessions ran with.
+function versions(f: FrictionSnapshot) {
+  const codex = f.versions.codex
+    ? `Codex ${f.versions.codex}${f.versions.codexLatest && f.versions.codexLatest !== f.versions.codex ? ` (${f.versions.codexLatest} available)` : ""}`
+    : "";
+  return [f.versions.claude ? `Claude ${f.versions.claude}` : "", codex].filter(Boolean).join(" · ");
+}
+const sevenDays = (f: FrictionSnapshot, now: number) => {
+  const total = frictionTotals(f.days, utcDate(now - 6 * 86400_000));
+  return { counts: total.counts, sessions: total.sessions };
 };
 function counts(h: HostHealth) {
   const parts = [
@@ -215,7 +227,7 @@ export function Machines({
   const [tokens, setTokens] = useState<Tokens | null>(null);
   const hosts = machines.map((machine) => {
     const s = snapshots.find((x) => x.host === machine.id);
-    return { machine, health: s ? hostHealth(s, now) : null };
+    return { machine, health: s ? hostHealth(s, now) : null, friction: s?.friction };
   });
   const allClean =
     hosts.length > 0 && hosts.every((h) => h.health?.verdict === "clean");
@@ -234,7 +246,7 @@ export function Machines({
       {tokens && <TokenNotice value={tokens} done={() => setTokens(null)} />}
       {hosts.length > 0 && (
         <div className="machine-list">
-          {hosts.map(({ machine, health }, index) => (
+          {hosts.map(({ machine, health, friction }, index) => (
             <details className="machine" key={machine.id}>
               <summary className="machine-summary">
                 <span
@@ -268,6 +280,9 @@ export function Machines({
                     updated {ago(health.at, now)}
                   </span>
                 )}
+                {friction && versions(friction) && (
+                  <span className="subtle machine-meta">{versions(friction)}</span>
+                )}
               </summary>
               {health &&
                 (health.problems.length ? (
@@ -291,6 +306,13 @@ export function Machines({
                     is known.
                   </p>
                 ))}
+              {friction && (
+                <p className="subtle machine-note">
+                  {friction.state === "ok"
+                    ? `Friction, 7 days: ${frictionLine(sevenDays(friction, now).counts, sevenDays(friction, now).sessions)}`
+                    : `Friction: ${friction.message}`}
+                </p>
+              )}
               <MachineControls
                 machine={machine}
                 last={index === hosts.length - 1}

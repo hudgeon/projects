@@ -5,6 +5,7 @@ import { applyCloses } from "./close";
 import { oneClick, applyInboxActions } from "./inbox-actions";
 import { cacheIssues } from "./work";
 import { snapshotSchema } from "../src/model";
+import { withFriction } from "./friction";
 
 async function main() {
   const args = process.argv.slice(2),
@@ -17,7 +18,7 @@ async function main() {
     throw Error("Daily briefs have been retired");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   if (!args.includes("--publish")) {
-    const snapshot = snapshotSchema.parse(await collect(config));
+    const snapshot = snapshotSchema.parse(await withFriction(config, await collect(config)));
     if (snapshot.work?.issues) await cacheIssues(config.home, snapshot.work.issues);
     console.log(JSON.stringify(snapshot));
     return;
@@ -56,7 +57,9 @@ async function main() {
   } catch {
     duties = false;
   }
-  const snapshot = snapshotSchema.parse(await collect(config, { inbox: duties }));
+  const snapshot = snapshotSchema.parse(
+    await withFriction(config, await collect(config, { inbox: duties })),
+  );
   const issues = snapshot.work?.issues ?? null;
   // Hooks classify sessions offline against this machine's copy of the work
   // issues.

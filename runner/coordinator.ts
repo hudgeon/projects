@@ -58,8 +58,8 @@ export async function openCoordinator(
     if (j.progress.masterUsage) j.progress.masterUsage.context = 0;
   };
   const workContext =
-    o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue);
-  const stableBrief = `${masterInstructions}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : ""}`;
+    o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue, o.person);
+  const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : ""}`;
   const briefHash = createHash("sha256")
     .update(stableBrief)
     .digest("hex")

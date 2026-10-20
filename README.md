@@ -74,7 +74,7 @@ never act on another's claim.
 
 Machines are ordered. The first machine heard from in the last five minutes is
 **on duty**: it reads the inboxes and applies Mark done and inbox actions. Every collector asks the Worker whether it is on
-duty before each scan, so exactly one machine applies each request. New
+duty before each scan, so one machine applies each request. New
 conversations go to the first machine whose runner called in the last two
 minutes (an idle runner claims every two seconds and a busy one heartbeats
 every ten, so a restart or short network drop hands nothing over).
@@ -85,15 +85,15 @@ While a conversation's machine is away and another is present, the conversation
 offers **Continue on another machine**. That releases the claim without
 replaying anything: a step in flight is abandoned with an unknown outcome under
 a new generation, so the away machine's late reports are refused, and the next
-machine to claim it starts a new coordinator from the conversation's history.
-Its earlier native sessions are never resumed, and the coordinator checks GitHub
+machine to claim it starts a new coordinator from its history. Its earlier
+native sessions are never resumed, and the coordinator checks GitHub
 before repeating any change.
 
 Work in progress follows the conversation through GitHub, for **private
 repositories only**. Every five minutes while a change child works, and when
 each of its turns ends, the runner saves the worktree to the ref
 `refs/projects/wip/<conversation>/<child>` (never a branch, so it starts no
-checks), built in a private index so the agent's own index is untouched. A
+checks), built in a private index, leaving the agent's own index untouched. A
 repository GitHub does not confirm as private is never saved: anyone who can
 read a repository can list and fetch such refs. Ignored files are never
 saved; a changed file over 5 MB or that looks like a credential (`.env*`,
@@ -118,14 +118,14 @@ collector and runner, written by `scripts/install-machine.mjs`:
 | `workRepo` | Optional: the repository whose issues labelled `work` are work items. |
 | `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's, each `{account, configDir}` naming their own `gws` config directory. |
 | `helpers` | Optional: `localServers` (local MCP servers Claude helpers may use) and `deniedTools` (tools to hide from them). |
-| `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App, read with the read-only service token in `doppler-token` (mode 600). The collector runs with only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
+| `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App, read with the read-only service token in `doppler-token` (mode 600). The collector gets only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
 | `concurrency`, `quickConcurrency` | Standard conversations at once (1–5, default 3) and extra quick-work slots (0–5, default 5). |
 
 ## Conversations
 
 Each signed-in view shows the weekly subscription allowance left for Codex
-and Claude, with the reported reset time: provider-reported percentages, not
-token estimates, read by each collector from its native login without starting
+and Claude, with the reported reset time: the provider's percentages, not token
+estimates, read by each collector from its native login without starting
 a model turn. The newest machine's report is
 used once, never added across machines; its source and read time are on the
 indicator. A missing or failed read is unavailable, a read older than five
@@ -136,9 +136,8 @@ selecting its seven-day subscription window; Claude uses the native login's
 OAuth usage endpoint. Credentials stay on the machine and in memory for that
 HTTPS read; only allowlisted percentages and timestamps leave it. The collector
 refreshes no expired credentials, changes no login and enables no extra usage.
-A missing, expired or inaccessible login shows unavailable, as does an upstream
-change to the Claude endpoint (a native-client interface, not a public API)
-until the reader is updated.
+An upstream change to the Claude endpoint (a native-client interface, not a
+public API) also shows unavailable until the reader is updated.
 
 Each conversation gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
@@ -167,17 +166,17 @@ running work is never interrupted. It can also set `task.freshSession: true`
 to give a helper a fresh session in the same owned worktree. Small direct
 revisions can continue their existing session.
 
-A fresh master receives the user's original instructions and corrections,
+A fresh master receives your original instructions and corrections,
 the latest reported position and the existing child evidence, never a replay
 of every earlier agent answer. Reports remain claims to verify; user authority
 is preserved separately. The exact exchange stays in a private local context
-file for read-only reference: a short approval is checked against the original
-request before acting, not guessed from a handoff. Helper briefs carry the
+file: a short approval is checked against the original request, not guessed
+from a handoff. Helper briefs carry the
 current objective, applicable constraints and approvals, source evidence, open
 questions and acceptance checks. Repository instructions and canonical plans
-stay in their files, read when relevant. This applies the task-scoped
-handoff advice in [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time)
-without discarding saved work, approvals or recovery journals.
+stay in their files, read when relevant. It follows
+[Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time),
+keeping saved work, approvals and recovery journals.
 
 Optional Jev context selection (off by default) runs in the conversation's
 executor: it trims older detail from fresh coordinator handovers and ranks
@@ -195,9 +194,8 @@ visual verification and required machine sync for the **current request**. Each
 gate has specific evidence or a reason it does not apply; missing or pending
 gates go back to the master without replaying work. Draft-only
 requests end at a verified saved draft. The final delivery record stays in the
-private local journal, never telemetry or snapshots. This makes the master's
-assessment explicit without attesting external systems or replacing release
-gates.
+private local journal, never telemetry or snapshots. The assessment is the
+master's: it attests no external system and replaces no release gate.
 
 The master checks evidence before declaring anything complete: a native turn
 ending proves no tests, merge or deployment, and nothing here invents progress
@@ -236,7 +234,7 @@ or verification. Repository instructions own setup, checks and delivery.
 - **Quick work** (email replies, unsubscribes) has its own slots and lighter
   prompts, so it never waits behind long work.
 - **Bounds**: ten active standard and thirty active quick conversations, 30 and
-  60 starts an hour, 120 follow-ups per owner per hour, 24 children per conversation, 12 master
+  60 starts an hour, 120 follow-ups per person per hour, 24 children per conversation, 12 master
   decisions a turn. At a safe native turn boundary the coordinator rotates when
   reported context exceeds 250,000 tokens or recorded prompt input reaches
   128,000 characters (including when native usage is unavailable). The chat,
@@ -252,11 +250,10 @@ also get the machine's connected accounts, read and write: Claude allows every
 claude.ai connector plus the local MCP servers in the machine's
 `helpers.localServers`, hiding other local servers and `helpers.deniedTools`;
 Codex approves its app connectors but disables account administration. Sending,
-replying to and forwarding email stay off in both, so email stays a draft until
+replying and forwarding stay off in both, so email stays a draft until
 you approve each message. Codex's macOS sandbox cannot start a local browser,
-so local browser checks go to a Claude child. These are trusted-user sessions
-with access to the machine's existing tools and logins, not a sandbox for
-untrusted users.
+so browser checks go to a Claude child. These are trusted sessions with
+the machine's tools and logins, not a sandbox for untrusted users.
 
 Recovery: each dispatch is journalled locally before it runs. A runner restart
 keeps its claim; once the old process has exited and the workspace is verified,
@@ -264,15 +261,15 @@ the same child session is resumed **read-only** to reconcile what finished; the
 master decides what remains. A helper turn that fails is reconciled the same
 way at once; when its session cannot continue (out of room, say), the master
 gets the worktree's state and continues it in a fresh session. A request the
-runner refused leaves the helper's result standing, as evidence, and a failed
+runner refused leaves the helper's result standing as evidence, and a failed
 coordinator turn runs again. Failures reach you only after the master
 has had its say, or after four in a row in one turn. Turn limits, and how a
 helper's turn ends at its result, are in [docs/run-health.md](docs/run-health.md).
-Uncertain writes are never replayed. Each conversation runs in its own executor process, so a release
-restarts runners at once with `SIGUSR2`: the runner exits for the new bundle,
-which adopts the executors still running; each finishes its current step on
-the version it started with, saves its place and exits, and the new runner
-continues it. `SIGTERM` still stops everything; that work recovers as above.
+Uncertain writes are never replayed. Each conversation runs in its own
+executor process, so a release restarts the runner at once with `SIGUSR2`: the
+new bundle adopts the running executors, each finishes its current step on its
+old version, saves its place and exits, and the new runner continues it.
+`SIGTERM` still stops everything; that work recovers as above.
 
 ### Conversation browsers
 
@@ -354,15 +351,16 @@ once.
 
 Each person's Gmail is read on the machine on duty with their own `gws`
 sign-in (`inboxAccount` with the machine's default one; each of
-`inboxAccounts` with its own config directory, docs/self-host.md), refused
+`inboxAccounts` with its own config directory, via the installer's
+`--add-inbox`/`--remove-inbox`), refused
 when it is someone else's. An inbox
 is up to 200 threads as metadata plus each one's latest non-draft message
 as bounded plain text (quoted history removed, at most 4,000 characters),
-which lives only in the latest snapshot, is read by the inbox's owner one
-thread at a time and never enters the overview, telemetry or prompts.
+which lives only in the latest snapshot, is read by its owner one thread at
+a time and never enters the overview, telemetry or prompts.
 Everyone else sees its count and links on work items, never subjects,
-senders or text. A machine on duty that cannot confirm its duty keeps its last
-reads for up to fifteen minutes, with their age shown. **Start activity** on an email preselects its work item; only a source
+senders or text. A machine that cannot confirm its duty keeps its last reads up to
+fifteen minutes, age shown. **Start activity** on an email preselects its work item; only a source
 link enters the request, never the email text. **Done** finishes the activity;
 archiving its source email is a separate action. **Archive**,
 **Unsubscribe** and linking are the inbox
@@ -377,7 +375,8 @@ email lane and helpers; a person without one is told so and gets no sign-in.
 A conversation becoming its owner's move (Ready, Needs you or Failed) sends a
 Web Push notification to that person's devices. Pushes carry no payload: a
 device fetches its person's notices with its own session, so no title or text
-crosses a push service. The Worker posts only to those services and forgets
+crosses a push service. A device belongs to whoever turned
+notifications on with it. The Worker posts only to those services and forgets
 devices reported gone. On an iPhone, notifications need Projects on the
 Home Screen.
 
@@ -403,21 +402,23 @@ Home Screen.
 
 - **Sign-in**: email codes sent through Cloudflare Email Service to allowlisted
   addresses only. Codes expire after ten minutes, allow five attempts and are
-  consumed once; issuance is rate-limited. Only salted code hashes and session
-  hashes are stored. Sessions last seven days, logout revokes them, cookies are
+  consumed once; issuance is rate-limited. Only salted code and session hashes are stored. Sessions last seven days, logout revokes them, cookies are
   Secure, HttpOnly, SameSite=Strict and host-only, and every browser write must
   be same-origin.
 - **People**: every allowed address is a person with a profile, named from the
   address until set in Settings. A conversation belongs to whoever started it
   (older ones to the deployment owner); everyone sees everyone's, and its
-  machine is told who, never telemetry.
+  machine is told who, never telemetry. Adding a person is allowing their
+  address and deploying (docs/self-host.md); Deploy refuses a list without
+  its owner. Removing an address ends its sessions at
+  once; the profile and attributions stay.
 - **Machines** authenticate with their own tokens, stored as hashes; collector
   and runner tokens reach only their own routes and never read the overview.
 - **Pages** are untrusted HTML: served only to the signed-in owner, framed only
   by Projects, sandboxed without same-origin, top navigation, forms or network.
   Links may open in a new tab, outside Projects.
 - **Whoever can sign in can act on your machines** with your logins and
-  connected accounts, so keep `ALLOWED_EMAILS` to yourself.
+  connected accounts: allow only people you trust with them.
 - **Telemetry** (`src/telemetry.ts`) is a runtime-validated allowlist of fixed
   categories, ids, counts and durations: no prompts, summaries, email
   addresses, native session ids, paths, commands, tool output, exception text
@@ -435,24 +436,11 @@ by conversation, generation and event id. Logs are diagnostic, not an execution
 ledger, and kept at 100%; traces are sampled at 10%, routine successful polls
 at 1%.
 
-Settings has an owner-wide **Codex fast mode** switch, initially off. Every
-Projects Codex coordinator/helper reads it before its next turn, resumes and
-recovery included; an active turn is not interrupted. The app-server receives
-explicit `fast` or `default` service tiers, with model and reasoning unchanged.
-Claude and sessions outside Projects are unaffected. Fast mode uses more
-allowance; see [Codex speed](https://learn.chatgpt.com/docs/agent-configuration/speed).
+Collectors keep [friction receipts](docs/friction.md) on their machines;
+snapshots carry daily totals and versions only.
 
-The same page compares labelled Codex turns from the last 30 days (up to
-10,000): deduplicated completion receipts the portfolio keeps apart from the
-conversation's bounded event window, with requested speed, resolved
-model/effort, attempts, token counts, elapsed time and first text latency when
-observed. Comparisons match role, read/change, new/continued, machine, token
-bands and cache share, and need at least three completed single-attempt turns
-per mode for a median percentage; failures, missing measurements and earlier
-unlabelled turns never become a standard-mode baseline. Total time includes
-native startup and tool work; first output can include reasoning/tool waits.
-These are workload observations, not a benchmark or proof of the provider's
-processing tier. No synthetic timings enter production.
+Settings has an owner-wide **Codex fast mode** switch and compares labelled
+Codex turns by mode; see [Codex speed](docs/codex-speed.md).
 
 ## Development
 
@@ -495,4 +483,4 @@ release. After a deploy that changes the machine bundles, run
 `node scripts/install-machine.mjs` from a checkout of the released commit on
 each connected machine: it builds the bundles there, keeps the config and
 tokens, and drains or starts the runner. A machine that is away gets the
-release when it returns.
+release on return.

@@ -229,7 +229,7 @@ export async function runTurn(
       onTiming: fields => { timing = {...timing, ...fields}; },
       person: o.person,
       mailbox: mailboxFor(o.person, o.inboxes),
-      prompt: `${options.prompt}\n\n${responseInstructions}\n\n${progressInstructions}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`,
+      prompt: `${options.prompt}\n\n${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),
       onProcess: async (p) => {
         pid = p;

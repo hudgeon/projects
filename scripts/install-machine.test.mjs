@@ -151,3 +151,40 @@ test("a runner job with no process is kickstarted rather than signalled, and one
   assert.deepEqual((await calls()).slice(before).filter((call) => !call.startsWith("print ")), [`kickstart ${domain}/local.projects.runner`]);
   assert.match(failing.stdout, new RegExp(`^Runner: not running \\(last exit code 1\\); launchd retries every 30 seconds\\. Look for runner_config_invalid and runner_start_failed in ${path.join(base, "runner-error.log")}\\.$`, "m"));
 });
+
+test("--add-inbox connects a person's gws directory, existing and readable by you alone, without touching the rest of machine.json; --remove-inbox drops it", { timeout: 30000 }, async (t) => {
+  const { root, home, install, config, connect } = await machine(t);
+  const first = await install([...connect, "--no-services", "--inbox", "you@example.com", "--work-repo", "acme/work"], tokens);
+  assert.match(first.stdout, /^Inboxes: you@example\.com \(default gws sign-in\)\.$/m);
+  const before = await config();
+  assert.equal(before.inboxAccounts, undefined, "nothing is written until an inbox is connected");
+  const ada = path.join(home, "gws-ada");
+  await mkdir(ada, { mode: 0o700 });
+  const { stdout } = await install(["--no-services", "--add-inbox", "ada@example.com=~/gws-ada"], tokens);
+  const after = await config();
+  assert.deepEqual(after.inboxAccounts, [{ account: "ada@example.com", configDir: ada }], "~ is this user's home");
+  assert.deepEqual({ ...after, inboxAccounts: undefined }, { ...before, inboxAccounts: undefined }, "the rest of the config is untouched");
+  assert.equal(stdout.trim().split("\n").at(-1), `Inboxes: you@example.com (default gws sign-in); ada@example.com (${ada}).`);
+  // Adding the same account again points it at another directory rather than listing it twice.
+  const moved = path.join(root, "gws-ada-2");
+  await mkdir(moved, { mode: 0o700 });
+  await install(["--no-services", "--add-inbox", `Ada@Example.com=${moved}`], tokens);
+  assert.deepEqual((await config()).inboxAccounts, [{ account: "Ada@Example.com", configDir: moved }]);
+  // Refused, changing nothing: a directory others can read, a missing one, a relative one, a malformed entry.
+  const shared = path.join(root, "gws-shared");
+  await mkdir(shared, { mode: 0o755 });
+  for (const [entry, message] of [
+    [`bob@example.com=${shared}`, `readable by you alone, like gws's own config directory: chmod 700 ${shared}`],
+    [`bob@example.com=${path.join(root, "missing")}`, "does not exist. bob@example.com signs gws in there first"],
+    ["bob@example.com=gws-bob", "as an absolute path"],
+    [`bob=${moved}`, "Give --add-inbox as person@example.com=/path"],
+  ]) {
+    await assert.rejects(install(["--no-services", "--add-inbox", entry], tokens), (e) => e.stderr.includes(message), entry);
+    assert.deepEqual((await config()).inboxAccounts, [{ account: "Ada@Example.com", configDir: moved }], entry);
+  }
+  const removed = await install(["--no-services", "--remove-inbox", "ada@example.com"], tokens);
+  assert.deepEqual((await config()).inboxAccounts, []);
+  assert.match(removed.stdout, /^Inboxes: you@example\.com \(default gws sign-in\)\.$/m);
+  await assert.rejects(install(["--no-services", "--remove-inbox", "ada@example.com"], tokens), (e) => e.stderr.includes("No inbox is connected for ada@example.com on this machine."));
+  assert.deepEqual({ ...(await config()), inboxAccounts: undefined }, { ...before, inboxAccounts: undefined });
+});
