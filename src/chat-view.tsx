@@ -203,7 +203,7 @@ export function ChatDetail({
         ) : text.data ? (
           <span className="subtle">
             {app} shows no preview for this {kindLabel(item.source, item.place)}: open it in {app} to read
-            the new posts.
+            what's new.
           </span>
         ) : (
           <span className={text.error ? "error-inline" : "subtle"}>

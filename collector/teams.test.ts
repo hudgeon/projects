@@ -21,6 +21,8 @@ test("a Teams tree row becomes a chat row, its kind from the thread id", () => {
   const group = parseRow(raw({ id: GROUP, name: "Rollout crew", detail: "Priya: Moved to Thursday · Yesterday" }));
   assert.deepEqual([group?.kind, group?.from, group?.preview], ["group", "Priya", "Moved to Thursday"]);
   assert.equal(parseRow(raw({ id: GROUP, name: "Rollout crew", detail: "You: Thanks all · Mon" }))?.from, "You");
+  // A list without previews names no group sender; a 1:1 is its person.
+  assert.deepEqual([parseRow(raw({ id: GROUP, name: "Rollout crew" }))?.from, parseRow(raw({ id: ONE, name: "Sam Rivers" }))?.from], ["New messages", "Sam Rivers"]);
   // A channel shows no preview in the list; a favourite says so.
   const channel = parseRow(raw({ name: "Support", favorite: true, unread: true }));
   assert.deepEqual([channel?.kind, channel?.from, channel?.preview, channel?.favorite], ["channel", "New posts", "", true]);
@@ -42,6 +44,12 @@ test("a chat needs its person until they reply; a channel when it mentions them 
   // Once read in Teams, a channel clears: Teams' list carries the state.
   const fav = applyTeams(new Map(), [ch({ unread: true, favorite: true })], 1000);
   assert.equal(applyTeams(fav, [ch({ unread: false, favorite: true })], 2000).size, 0);
+  // A list without previews cannot say who wrote last: a chat is theirs while unread.
+  const blind = (over: Partial<TeamsRow>) => row({ key: GROUP, kind: "group", name: "Rollout crew", from: "New messages", preview: "", ...over });
+  assert.equal(applyTeams(new Map(), [blind({ unread: false })], 1000).size, 0, "a read chat with no preview is not theirs");
+  const fresh = applyTeams(new Map(), [blind({ unread: true })], 1000);
+  assert.equal(fresh.get(GROUP)?.mention, true);
+  assert.equal(applyTeams(fresh, [blind({ unread: false })], 2000).size, 0, "read in Teams: cleared");
 });
 
 test("the same message keeps its first-seen time; a new preview or a chat turning unread again is new", () => {

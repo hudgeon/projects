@@ -60,12 +60,14 @@ function place(row: TeamsRow): ChatPlace {
   };
 }
 // What one poll of the chat list changes. A 1:1 or group chat is for the
-// person until they reply; a channel needs them while it is unread and
-// @mentions them or is one they favourited, and otherwise sits as information
-// while it is unread. Teams' own list carries the state (bold while unread,
-// the @ mark until read), so nothing is carried over from the last poll but
-// the time a message was first seen. The person's own latest message settles
-// the chat. A chat's preview is its text; a channel shows none in the list.
+// person until they reply, when the list shows its preview (which says who
+// wrote last); a list without previews cannot say, so such a chat is theirs
+// while it is unread. A channel needs them while it is unread and @mentions
+// them or is one they favourited, and otherwise sits as information while it
+// is unread. Teams' own list carries the state (bold while unread, the @ mark
+// until read), so nothing is carried over from the last poll but the time a
+// message was first seen. The person's own latest message settles the chat.
+// A chat's preview is its text; a channel shows none in the list.
 export function applyTeams(
   previous: Map<string, ChatItem>,
   rows: TeamsRow[],
@@ -76,6 +78,7 @@ export function applyTeams(
     const prev = previous.get(row.key);
     if (/^you$/i.test(row.from.trim())) continue; // the person replied; settled
     const direct = row.kind !== "channel";
+    if (direct && !row.preview.trim() && !row.unread) continue; // no preview: theirs while unread
     const mention = direct || row.mention || (!!row.favorite && row.unread);
     // A read channel that needs nothing from the person is not theirs.
     if (!mention && !row.unread) continue;

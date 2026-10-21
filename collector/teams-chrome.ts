@@ -107,8 +107,9 @@ export type RawRow = z.infer<typeof rawSchema>["rows"][number];
 const TIME = /\s*·?\s*(\d{1,2}:\d{2}(\s?[AP]M)?|Yesterday|Today|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2}\/\d{1,2}(\/\d{2,4})?)$/i;
 // One tree row as a chat row. The kind comes from the thread id. A chat's
 // detail line is its preview, "Sender: message" in a group or "You: …" when
-// the person wrote last; a channel shows no preview in the list, so its text is
-// empty and "Open in Teams" shows the posts.
+// the person wrote last, unless the person's list hides previews; a channel
+// shows no preview in the list, so its text is empty and "Open in Teams" shows
+// the posts.
 export function parseRow(raw: RawRow): TeamsRow | null {
   const name = raw.name.trim();
   if (!name) return null;
@@ -122,6 +123,8 @@ export function parseRow(raw: RawRow): TeamsRow | null {
       from = said[1].trim();
       preview = said[2].trim();
     } else preview = detail;
+    // A group chat's list row without a preview names no sender.
+    if (kind === "group" && !preview) from = "New messages";
   }
   return {
     key: raw.id,

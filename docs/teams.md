@@ -8,7 +8,9 @@ person signed in to once, and every minute reads the list of chats and
 channels — the names, unread marks, who sent a chat's latest message and its
 one-line preview. A 1:1 or group chat joins their Today until they reply in
 it; so does an unread channel that @mentions them or that they made a
-favourite in Teams. Other unread channels wait in their Inbox for a day.
+favourite in Teams. Other unread channels wait in their Inbox for a day. If
+the person's Teams list hides message previews, nothing says who wrote last,
+so a chat joins their Today only while it is unread, and without its text.
 [Self-hosting](self-host.md) says where this fits.
 
 The reader only ever reads the list. **It never opens a chat or channel**, so
