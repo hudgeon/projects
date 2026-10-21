@@ -65,15 +65,14 @@ export const configSchema = z.object({
     )
     .default([]),
   // Whose Microsoft Teams this machine's chat watcher reads, each in a Chrome
-  // profile on this machine they signed in to once (collector/teams-chrome.ts).
-  // Only the list is read; no chat is opened, so no read receipt is sent.
+  // profile on this machine they signed in to once (collector/teams-chrome.ts):
+  // one profile per Teams organisation, so a person may have several. Only the
+  // list is read; no chat is opened, so no read receipt is sent.
   teams: z
     .array(z.object({ account: z.email(), profileDir: absolute }).strict())
     .max(10)
-    .refine(
-      (list) => new Set(list.map((t) => t.account.toLowerCase())).size === list.length,
-      "Each person is listed once.",
-    )
+    // A profile folder once, however its case is written (macOS ignores it).
+    .refine((list) => new Set(list.map((t) => t.profileDir.toLowerCase())).size === list.length, "Each profile is listed once.")
     .default([]),
   // Work items are the issues labelled `work` in this repository; without it
   // the overview has no work items or Mark done.

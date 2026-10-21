@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chatReadSchema } from "../src/chat-model";
-import { applyTeams, FYI_MS, KEEP_MS, prune, teamsRead, type TeamsRow } from "./teams";
+import { configSchema } from "./config";
+import { applyTeams, FYI_MS, KEEP_MS, prune, teamsRead, teamsState, type TeamsRow } from "./teams";
 import { EXTRACT, parseRow, type RawRow } from "./teams-chrome";
 
 // Thread ids as Teams puts them in its tree's element ids.
@@ -70,4 +71,18 @@ test("information lapses after a day, a chat after three days, and a read is bou
   const full = teamsRead("owner@example.com", applyTeams(new Map(), kinds, Date.now()), Date.now());
   assert.equal(full.items.length, 3);
   assert.ok(chatReadSchema.safeParse(full).success);
+});
+
+test("one read covers a person's Teams organisations, one profile each: a needed sign-in shows, an unreadable profile makes it incomplete", () => {
+  assert.deepEqual(teamsState([{ state: "ok" }, { state: "ok" }]), { state: "ok" });
+  assert.equal(teamsState([{ state: "ok" }, { state: "unavailable", problem: "Teams' browser could not be reached on this machine" }]).state, "incomplete");
+  assert.deepEqual(teamsState([{ state: "unavailable", problem: "first" }, { state: "unavailable", problem: "second" }]), { state: "unavailable", problem: "first" });
+  assert.deepEqual(teamsState([{ state: "ok" }, { state: "signed-out", problem: "sign in" }]), { state: "signed-out", problem: "sign in" });
+  // A person may connect a profile per organisation; each profile is listed once.
+  const base = { host: "studio", root: "/repos", home: "/Users/owner" };
+  const first = { account: "owner@example.com", profileDir: "/Users/owner/Library/Projects-Teams" };
+  const second = { account: "owner@example.com", profileDir: "/Users/owner/Library/Projects-Teams-2" };
+  assert.equal(configSchema.safeParse({ ...base, teams: [first, second] }).success, true);
+  assert.equal(configSchema.safeParse({ ...base, teams: [first, { ...first, account: "colleague@example.com" }] }).success, false);
+  assert.equal(configSchema.safeParse({ ...base, teams: [first, { ...second, profileDir: first.profileDir.toLowerCase() }] }).success, false, "one folder, two spellings");
 });

@@ -12,10 +12,11 @@
 // machine; --remove-inbox drops one. --slack names the people whose Slack this
 // machine's chat watcher reads, each with a user token in that Doppler config
 // (docs/slack.md); --no-slack stops it. --teams names the people whose Microsoft
-// Teams it reads, each in a Chrome profile on this machine they signed in to
-// (docs/teams.md); --no-teams stops it. Every run ends by listing them.
+// Teams it reads, each in a Chrome profile on this machine they signed in to,
+// one per Teams organisation (docs/teams.md); --remove-teams drops a person or
+// one profile, and --no-teams stops it. Every run ends by listing them.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--teams person@example.com=~/Library/Projects-Teams] [--no-teams] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--teams person@example.com=~/Library/Projects-Teams] [--remove-teams person@example.com[=dir]] [--no-teams] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -206,7 +207,9 @@ const logins = [
   ...(config.inboxAccount && !inboxes.some((known) => same(known.account, config.inboxAccount)) ? [`${config.inboxAccount} (default gws sign-in)`] : []),
   ...inboxes.map((known) => `${known.account} (${known.configDir ?? "delegated"})`),
 ];
-const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${config.teams?.length ? config.teams.map((t) => t.account).join(", ") : "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
+const profiles = (config.teams ?? []).reduce((count, t) => count.set(t.account, (count.get(t.account) ?? 0) + 1), new Map());
+const teamsRead = [...profiles].map(([account, n]) => (n > 1 ? `${account} (${n} profiles)` : account)).join(", ");
+const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${teamsRead || "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",

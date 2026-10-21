@@ -1,5 +1,6 @@
-// Drives the Teams web app in a dedicated Chrome profile on this machine and
-// reads its chat list. It launches the system Chrome once, keeps it open,
+// Drives the Teams web app in dedicated Chrome profiles on this machine, one per
+// Teams organisation a person reads, and reads each one's chat list. It
+// launches the system Chrome once per profile, keeps it open,
 // connects to it over the DevTools protocol (a WebSocket, like the Slack
 // watcher's), and every poll evaluates a small script in the page that reads
 // the list — never opening a chat, so never sending a read receipt. The
@@ -7,12 +8,13 @@
 // never signs in or types to anyone. The reading, parsing and item logic are
 // in collector/teams.ts, which is tested; this file is the browser plumbing.
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { chatItemSchema, type ChatItem, type ChatRead } from "../src/chat-model";
 import { postChatRead, type Site } from "./upload";
-import { applyTeams, prune, teamsRead, type TeamsRow } from "./teams";
+import { applyTeams, prune, teamsRead, teamsState, type TeamsRow } from "./teams";
 
 const TICK_MS = 60_000;
 const SETTLE_MS = 3_000;
@@ -136,7 +138,9 @@ export function parseRow(raw: RawRow): TeamsRow | null {
 
 type Options = {
   account: string;
-  profileDir: string;
+  // One signed-in Chrome profile per Teams organisation the person reads:
+  // Teams shows one organisation at a time.
+  profileDirs: string[];
   site: Site;
   stateDir: string;
   chrome?: string;
@@ -220,65 +224,86 @@ async function launch(chrome: string, profileDir: string): Promise<{ child: Chil
 }
 
 const savedSchema = z.object({ items: z.array(chatItemSchema).default([]) });
-// Read Teams for one person until stopped: keep Chrome open, poll the list,
-// and post a read each poll so its age shows. Returns a stop function.
+// One profile's browser: its Chrome, the DevTools connection to its Teams
+// page, how its last look went, and what it holds (kept in its own file).
+type Browser = {
+  profileDir: string;
+  stateFile: string;
+  child: ChildProcess | null;
+  cdp: Cdp | null;
+  ws: WebSocket | null;
+  state: ChatRead["state"];
+  problem?: string;
+  items: Map<string, ChatItem>;
+};
+// Read Teams for one person until stopped: keep a Chrome open for each of
+// their profiles, poll each list, and post one read with them all each poll
+// so its age shows. Returns a stop function.
 export function startTeams(options: Options): () => Promise<void> {
-  const { account, profileDir, site, stateDir } = options;
+  const { account, site, stateDir } = options;
   const chrome = options.chrome ?? CHROME;
-  const stateFile = path.join(stateDir, "chats-teams.json");
-  const items = new Map<string, ChatItem>();
+  const browsers: Browser[] = options.profileDirs.map((profileDir) => ({
+    profileDir,
+    stateFile: path.join(stateDir, `chats-teams-${createHash("sha256").update(profileDir.toLowerCase()).digest("hex").slice(0, 16)}.json`),
+    child: null,
+    cdp: null,
+    ws: null,
+    state: "unavailable",
+    problem: "Teams is not open yet",
+    items: new Map(),
+  }));
   let stopped = false;
-  let child: ChildProcess | null = null;
-  let cdp: Cdp | null = null;
-  let ws: WebSocket | null = null;
-  let state: ChatRead["state"] = "unavailable";
-  let problem: string | undefined = "Teams is not open yet";
   let saveTimer: NodeJS.Timeout | undefined;
 
-  async function load() {
-    const parsed = savedSchema.safeParse(JSON.parse(await readFile(stateFile, "utf8").catch(() => "{}")));
-    if (parsed.success) for (const item of parsed.data.items) items.set(item.id, item);
-  }
-  async function save() {
-    const temporary = `${stateFile}.${process.pid}.tmp`;
+  async function load(b: Browser) {
     try {
-      await writeFile(temporary, JSON.stringify({ items: [...items.values()] }), { mode: 0o600 });
-      await rename(temporary, stateFile);
+      const parsed = savedSchema.safeParse(JSON.parse(await readFile(b.stateFile, "utf8")));
+      if (parsed.success) for (const item of parsed.data.items) b.items.set(item.id, item);
+    } catch {
+      /* nothing kept yet */
+    }
+  }
+  async function save(b: Browser) {
+    const temporary = `${b.stateFile}.${process.pid}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ items: [...b.items.values()] }), { mode: 0o600 });
+      await rename(temporary, b.stateFile);
     } catch {
       log("chat_state_unsaved", { source: "teams" });
     }
   }
   function queueSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void save(), SETTLE_MS);
+    saveTimer = setTimeout(() => void Promise.all(browsers.map(save)), SETTLE_MS);
   }
-  async function connect(): Promise<boolean> {
-    if (ws) return true;
+  function unreachable(b: Browser, problem: string) {
+    b.ws = null;
+    b.cdp = null;
+    b.state = "unavailable";
+    b.problem = problem;
+    return false;
+  }
+  async function connect(b: Browser): Promise<boolean> {
+    if (b.ws) return true;
     let fresh = false;
-    if (!child || child.exitCode !== null) {
-      const launched = await launch(chrome, profileDir);
-      if (!launched) {
-        state = "unavailable";
-        problem = "Teams' browser could not be started on this machine";
-        return false;
-      }
-      child = launched.child;
+    if (!b.child || b.child.exitCode !== null) {
+      const launched = await launch(chrome, b.profileDir);
+      if (!launched) return unreachable(b, "Teams' browser could not be started on this machine");
+      const child = launched.child;
+      b.child = child;
       child.once("exit", () => {
-        if (child && !stopped) log("teams_chrome_exited", {});
-        ws = null;
-        cdp = null;
-        child = null;
+        if (b.child !== child) return;
+        if (!stopped) log("teams_chrome_exited", {});
+        b.ws = null;
+        b.cdp = null;
+        b.child = null;
       });
       fresh = true;
       await sleep(5_000);
     }
-    const port = Number((await readFile(path.join(profileDir, "DevToolsActivePort"), "utf8").catch(() => "")).split("\n")[0]);
+    const port = Number((await readFile(path.join(b.profileDir, "DevToolsActivePort"), "utf8").catch(() => "")).split("\n")[0]);
     const url = port ? await pageSocketUrl(port) : null;
-    if (!url) {
-      state = "unavailable";
-      problem = "Teams' browser could not be reached on this machine";
-      return false;
-    }
+    if (!url) return unreachable(b, "Teams' browser could not be reached on this machine");
     try {
       const socket = new WebSocket(url);
       await new Promise<void>((resolve, reject) => {
@@ -287,13 +312,14 @@ export function startTeams(options: Options): () => Promise<void> {
         setTimeout(() => reject(new Error("ws open timeout")), 10_000);
       });
       socket.addEventListener("close", () => {
-        if (ws === socket) {
-          ws = null;
-          cdp = null;
+        if (b.ws === socket) {
+          b.ws = null;
+          b.cdp = null;
         }
       });
-      ws = socket;
-      cdp = new Cdp(socket);
+      const cdp = new Cdp(socket);
+      b.ws = socket;
+      b.cdp = cdp;
       await cdp.send("Runtime.enable");
       // Teams signs itself in, reopens a conversation and draws its list. Look
       // every two seconds: the first look that finds the list also leaves the
@@ -310,56 +336,53 @@ export function startTeams(options: Options): () => Promise<void> {
       }
       return true;
     } catch {
-      ws = null;
-      cdp = null;
-      state = "unavailable";
-      problem = "Teams' browser could not be reached on this machine";
-      return false;
+      return unreachable(b, "Teams' browser could not be reached on this machine");
     }
   }
-  async function pollOnce() {
-    if (!(await connect()) || !cdp) return;
+  async function pollOnce(b: Browser) {
+    if (!(await connect(b)) || !b.cdp) return;
     let result: { result?: { value?: unknown }; exceptionDetails?: unknown };
     try {
-      result = await cdp.send("Runtime.evaluate", { expression: EXTRACT, returnByValue: true, awaitPromise: true });
+      result = await b.cdp.send("Runtime.evaluate", { expression: EXTRACT, returnByValue: true, awaitPromise: true });
     } catch {
-      state = "unavailable";
-      problem = "Teams could not be read on this machine";
+      b.state = "unavailable";
+      b.problem = "Teams could not be read on this machine";
       return;
     }
     const parsed = rawSchema.safeParse(result?.result?.value);
     if (!parsed.success) {
-      state = "unavailable";
-      problem = "Teams' chat list could not be read";
+      b.state = "unavailable";
+      b.problem = "Teams' chat list could not be read";
       return;
     }
     if (!parsed.data.signedIn) {
-      state = "signed-out";
-      problem = "Teams needs you to sign in again on this machine";
+      b.state = "signed-out";
+      b.problem = "Teams needs you to sign in again on this machine";
       return;
     }
-    state = "ok";
-    problem = undefined;
+    b.state = "ok";
+    b.problem = undefined;
     // Signed in but the list is not in the page yet (still loading): keep what
     // we had rather than clearing on a half-loaded page.
     if (!parsed.data.listed) return;
     const rows = parsed.data.rows.map(parseRow).filter((r): r is TeamsRow => r !== null);
-    const next = applyTeams(items, rows, Date.now());
-    items.clear();
-    for (const [key, item] of next) items.set(key, item);
-    prune(items, Date.now());
+    b.items = applyTeams(b.items, rows, Date.now());
     queueSave();
   }
   async function post() {
-    const status = await postChatRead(site, teamsRead(account, items, Date.now(), state, problem));
+    const now = Date.now();
+    for (const b of browsers) if (prune(b.items, now)) queueSave();
+    const items = new Map(browsers.flatMap((b) => [...b.items]));
+    const { state, problem } = teamsState(browsers);
+    const status = await postChatRead(site, teamsRead(account, items, now, state, problem));
     log("chat_read_published", { source: "teams", status: status ?? 0, items: items.size, state });
   }
 
   void (async () => {
-    await load();
-    log("teams_watcher_started", { account: account.split("@")[1] ?? "" });
+    await Promise.all(browsers.map(load));
+    log("teams_watcher_started", { account: account.split("@")[1] ?? "", profiles: browsers.length });
     while (!stopped) {
-      await pollOnce();
+      await Promise.all(browsers.map(pollOnce));
       await post();
       await sleep(TICK_MS);
     }
@@ -368,12 +391,14 @@ export function startTeams(options: Options): () => Promise<void> {
   return async () => {
     stopped = true;
     clearTimeout(saveTimer);
-    await save();
-    try {
-      ws?.close();
-    } catch {
-      /* already closed */
+    await Promise.all(browsers.map(save));
+    for (const b of browsers) {
+      try {
+        b.ws?.close();
+      } catch {
+        /* already closed */
+      }
+      b.child?.kill();
     }
-    child?.kill();
   };
 }

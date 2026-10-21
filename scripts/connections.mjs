@@ -55,9 +55,11 @@ export function applyConnections(config, { args, flags, expand, fail }) {
   if (config.slack?.length && !config.doppler) fail("The chat watcher reads Slack's tokens from the machine's Doppler config; give the machine one first.");
 
   // The people whose Teams the chat watcher reads, each in a Chrome profile on
-  // this machine they sign in to once. The profile is theirs to read and yours
-  // alone to see; Chrome creates it on first run. --no-teams stops it.
-  const teams = Array.isArray(config.teams) ? [...config.teams] : [];
+  // this machine they sign in to once: one per Teams organisation, so a second
+  // --teams for the same person adds a profile. The profile is theirs to read
+  // and yours alone to see; Chrome creates it on first run. --remove-teams
+  // person stops all of theirs, person=dir just that one; --no-teams stops it.
+  let teams = Array.isArray(config.teams) ? [...config.teams] : [];
   for (const entry of flags("teams")) {
     const [, account, dir] = /^([^\s@=]+@[^\s@=]+\.[^\s@=]+)=(.+)$/.exec(entry ?? "") ?? [];
     if (!account) fail("Give --teams as person@example.com=/path/to/their/Chrome/profile/directory.");
@@ -69,14 +71,17 @@ export function applyConnections(config, { args, flags, expand, fail }) {
       if (info.uid !== process.getuid() || info.mode & 0o077)
         fail(`${profileDir} must be yours and readable by you alone: chmod 700 ${profileDir}`);
     }
-    const i = teams.findIndex((t) => same(t.account, account));
-    if (i === -1) teams.push({ account, profileDir: path.resolve(profileDir) });
-    else teams[i] = { account, profileDir: path.resolve(profileDir) };
+    const profile = { account, profileDir: path.resolve(profileDir) };
+    // macOS folders ignore case, so two spellings of one folder are one profile.
+    const i = teams.findIndex((t) => same(t.profileDir, profile.profileDir));
+    if (i === -1) teams.push(profile);
+    else teams[i] = profile;
   }
-  for (const account of flags("remove-teams")) {
-    const i = teams.findIndex((t) => account && same(t.account, account));
-    if (i === -1) fail(`No Teams profile is connected for ${account ?? "that account"} on this machine.`);
-    teams.splice(i, 1);
+  for (const entry of flags("remove-teams")) {
+    const [, account, dir] = /^([^=]+)(?:=(.+))?$/.exec(entry ?? "") ?? [];
+    const gone = teams.filter((t) => account && same(t.account, account) && (!dir || same(t.profileDir, path.resolve(expand(dir)))));
+    if (!gone.length) fail(`No Teams profile is connected for ${entry ?? "that account"} on this machine.`);
+    teams = teams.filter((t) => !gone.includes(t));
   }
   if (teams.length > 10) fail("At most ten Teams profiles can be connected on one machine.");
   if (flags("teams").length || flags("remove-teams").length) config.teams = teams;

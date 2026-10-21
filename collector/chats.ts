@@ -80,10 +80,15 @@ async function main() {
   if (!file) throw new Error("Usage: chats.mjs machine.json");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   const site = await siteHeaders(config);
-  // Teams runs its own browser-backed loop per person, beside Slack.
-  const stopTeams = config.teams.map((t) =>
-    startTeams({ account: t.account, profileDir: t.profileDir, site, stateDir: path.dirname(file) }),
-  );
+  // Teams runs its own browser-backed loop per person, beside Slack, with a
+  // Chrome for each of their profiles (one per Teams organisation).
+  const teamsPeople = new Map<string, { account: string; profileDirs: string[] }>();
+  for (const t of config.teams) {
+    const person = teamsPeople.get(t.account.toLowerCase()) ?? { account: t.account, profileDirs: [] };
+    person.profileDirs.push(t.profileDir);
+    teamsPeople.set(t.account.toLowerCase(), person);
+  }
+  const stopTeams = [...teamsPeople.values()].map((person) => startTeams({ ...person, site, stateDir: path.dirname(file) }));
   const stateFile = path.join(path.dirname(file), "chats-slack.json");
   const saved = savedSchema.safeParse(JSON.parse(await readFile(stateFile, "utf8").catch(() => "{}")));
   const kept = saved.success ? saved.data : { people: {}, names: {} };

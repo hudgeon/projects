@@ -60,8 +60,25 @@ raise it with them.
 Within a minute Projects' Inbox shows a Teams filter and "Teams checked just
 now"; a chat or a mention appears in its person's Today. If the customer later
 forces a fresh sign-in, the read shows as "Teams needs you to sign in again"
-for that person alone — repeat step 2. `--no-teams` stops the watcher;
-`--teams` with a different profile moves it.
+for that person alone — repeat step 2. `--no-teams` stops the watcher.
+
+## More than one organisation
+
+Teams shows one organisation at a time, so each organisation a person reads —
+their own company's beside a customer's, say — has a profile of its own. Sign
+in to the other organisation in a new profile folder (step 2 with, for
+example, `~/Library/Projects-Teams-2`), check its profile menu offers to switch
+to the first organisation rather than this one, and add it:
+
+```bash
+node scripts/install-machine.mjs --teams you@example.com=$HOME/Library/Projects-Teams-2
+```
+
+The watcher keeps a Chrome open for each profile and posts one read with
+both. If one profile needs its sign-in, the read says so; if one cannot be
+read, it shows as incomplete. `--remove-teams you@example.com=<folder>` stops
+reading one profile, and `--remove-teams you@example.com` all of that
+person's.
 
 ## Limits
 
@@ -74,6 +91,6 @@ for that person alone — repeat step 2. `--no-teams` stops the watcher;
   folders and conversations, each with its Teams thread id, and an unread one
   by its bold title; if a release moves things, it is tuned against the real
   page.
-- What waits is kept in an owner-only `chats-teams.json` beside `machine.json`,
-  so a restart loses nothing; messages from before the watcher first ran are
-  not read.
+- What waits is kept in an owner-only `chats-teams-….json` per profile beside
+  `machine.json`, so a restart loses nothing; messages from before the watcher
+  first ran are not read.

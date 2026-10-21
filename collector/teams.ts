@@ -106,6 +106,20 @@ export function prune(items: Map<string, ChatItem>, now: number) {
       changed = items.delete(id) || changed;
   return changed;
 }
+// How one read across a person's profiles stands, one profile per Teams
+// organisation: a profile that needs its sign-in makes the read say so, and one
+// that could not be read beside one that could makes the read incomplete.
+export function teamsState(parts: { state: ChatRead["state"]; problem?: string }[]): {
+  state: ChatRead["state"];
+  problem?: string;
+} {
+  const out = parts.find((p) => p.state === "signed-out");
+  if (out) return { state: "signed-out", problem: out.problem };
+  const failed = parts.filter((p) => p.state !== "ok");
+  if (!failed.length) return { state: "ok" };
+  if (failed.length < parts.length) return { state: "incomplete", problem: "One of the Teams organisations could not be read" };
+  return { state: failed[0].state, problem: failed[0].problem };
+}
 export function teamsRead(
   email: string,
   items: Map<string, ChatItem>,
