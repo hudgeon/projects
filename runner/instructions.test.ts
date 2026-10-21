@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { browserInstructions, connectorInstructions, helperInstructions, mailboxFor, progressInstructions, requesterInstructions, responseInstructions, workInstructions } from "./instructions";
+import { masterInstructions } from "./master-instructions";
 
 const owner = { email: "owner@example.com", name: "Owner" };
 const matt = { email: "matt.smith@example.com", name: "Matt" };
@@ -52,4 +53,10 @@ test("helpers follow a Claude background task with Monitor or its output file, w
   const text = helperInstructions("claude");
   assert.match(text, /For Claude background tasks, follow output with Monitor or by reading the task's output file, and stop a task with TaskStop\./);
   assert.doesNotMatch(text, /TaskOutput|empty output file|If no status tool is offered/);
+});
+test("helpers and the master keep searches out of the home folder and ~/Library", () => {
+  for (const text of [helperInstructions("claude"), helperInstructions("codex"), helperInstructions("codex", true), masterInstructions()]) {
+    assert.match(text, /Never search the whole home folder or ~\/Library/);
+    assert.match(text, /Use a skill by its name from your skill list rather than searching for its files\./);
+  }
 });

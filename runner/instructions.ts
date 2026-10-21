@@ -21,9 +21,13 @@ Use done for work completed since your previous note and remaining for your curr
 // Claude keeps a helper's process alive for any command it left running, so
 // helpers wait in short visible steps and stop what they started.
 export const waitInstructions = `While anything you run takes more than two minutes, such as a review, a test suite, a deploy or CI, run it in the background with its input closed (\`< /dev/null\`) and check on it with short commands that show its progress; do not block in the foreground. For Claude background tasks, follow output with Monitor or by reading the task's output file, and stop a task with TaskStop. For CI and deployment, query the exact remote run directly and stop polling when it reaches a terminal state, including failure or cancellation. Bound every polling loop and each network request; a polling deadline returns control for diagnosis, never proves success. Wait on the process ID you started, not a name search: \`pgrep -f\` also matches your own wait loop, which then never ends. If a local command has no new output or CPU use for five minutes, inspect its status and stop it if stuck. Remote CI or deployment can legitimately use no local CPU: check its remote status before deciding. Before returning your result, stop every background command you started or let it finish: Projects stops whatever is still running when you report, and its later output never reaches you.`;
+// A search of the whole home folder walks into other apps' data in ~/Library,
+// which macOS guards with a permission prompt on the machine's screen that
+// names the runner's node, and it is slow.
+export const searchInstructions = `Search only inside your working folder, the repository or another folder you can name. Never search the whole home folder or ~/Library: macOS stops to ask the machine's owner for permission when a search reaches other apps' data, and such searches are slow. Use a skill by its name from your skill list rather than searching for its files.`;
 // What every helper is told besides its task.
 export const helperInstructions = (agent: "codex" | "claude", fullAccess = false, person?: Person) =>
-  `${connectorInstructions(person)}\n\n${waitInstructions}${agent === "codex" && !fullAccess ? `\n\n${codexBrowserInstructions}` : ""}`;
+  `${connectorInstructions(person)}\n\n${waitInstructions}\n\n${searchInstructions}${agent === "codex" && !fullAccess ? `\n\n${codexBrowserInstructions}` : ""}`;
 // The mailbox a conversation's email work may use: its owner's own, when it
 // is one of the accounts connected on this machine, with the gws sign-in that
 // reads it. Nobody's email is handled from another person's mailbox.
