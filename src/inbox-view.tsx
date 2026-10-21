@@ -3,6 +3,7 @@ import { currentWork } from "./work-model";
 import {
   currentInbox,
   currentInboxes,
+  currentInboxPlaceholders,
   inboxQueue,
   inboxRows,
   snapshotInboxes,
@@ -98,6 +99,8 @@ function EmailInbox({
     work = currentWork(snapshots);
   const conversations = useEmailConversations();
   const inbox = me ? currentInbox(snapshots, me) : undefined;
+  const placeholderScan = currentInboxPlaceholders(snapshots);
+  const placeholders = placeholderScan?.inboxPlaceholders;
   const others = inboxes.filter((other) => other !== inbox);
   if (emailHidden)
     return (
@@ -121,7 +124,7 @@ function EmailInbox({
     const host = snapshots.find((s) => snapshotInboxes(s).includes(read))?.host;
     return host ? hostName(host) : "the machine on duty";
   };
-  const scope = others.length > 0 && (
+  const scope = (others.length > 0 || !!placeholders?.names.length) && (
     <div className="filters scope" role="group" aria-label="Whose inbox">
       <button
         type="button"
@@ -141,11 +144,21 @@ function EmailInbox({
       </button>
     </div>
   );
-  if (everyone && others.length)
+  if (everyone && (others.length || placeholders?.names.length))
     return (
       <section className="inbox" aria-label="Inbox">
         {scope}
         <ul className="mail-list">
+          {placeholders?.names.map((name) => (
+            <li className="mail" key={`placeholder:${name}`}>
+              <span className="mail-subject">
+                {name} <span className="count">0</span>
+              </span>
+              <span className="mail-meta">
+                checked {ago(placeholders.observedAt, now)} on {hostName(placeholderScan!.host)}
+              </span>
+            </li>
+          ))}
           {inboxes.map((read) => {
             const count = inboxCount(snapshots, runs, actions, now, read.account);
             return (

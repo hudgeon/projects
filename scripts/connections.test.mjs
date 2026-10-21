@@ -29,3 +29,16 @@ test("--teams adds a profile for each Teams organisation, and --remove-teams dro
   assert.deepEqual(apply(config, "--remove-teams", "Owner@example.com"), [{ account: "colleague@example.com", profileDir: other }]);
   assert.throws(() => apply(config, "--remove-teams", "owner@example.com"), /No Teams profile is connected for owner@example\.com/);
 });
+
+test("inbox placeholders reserve names without connecting an account and can be replaced explicitly", () => {
+  const config = { inboxAccounts: [{ account: "owner@example.com" }] };
+  apply(config, "--add-inbox-placeholder", "Ada", "--add-inbox-placeholder", "Sam");
+  apply(config, "--add-inbox-placeholder", "ada");
+  assert.deepEqual(config.inboxPlaceholders, ["Ada", "Sam"]);
+  assert.deepEqual(config.inboxAccounts, [{ account: "owner@example.com" }]);
+  apply(config, "--remove-inbox-placeholder", "ADA", "--add-inbox", "ada@example.com");
+  assert.deepEqual(config.inboxPlaceholders, ["Sam"]);
+  assert.deepEqual(config.inboxAccounts, [{ account: "owner@example.com" }, { account: "ada@example.com" }]);
+  assert.throws(() => apply(config, "--add-inbox-placeholder", "ada@example.com"), /person's name/);
+  assert.throws(() => apply(config, "--add-inbox-placeholder"), /person's name/);
+});

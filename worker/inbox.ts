@@ -27,6 +27,9 @@ const KEEP_INBOX_MS = 3 * STALE_AFTER;
 // machine's last reads stay, each with its own time so its age shows, and
 // lapse after a few missed scans, so a brief outage empties nobody's inbox.
 export function keepInboxes(snapshot: Snapshot, previous: Snapshot | undefined, now = Date.now()): Snapshot {
+  if (!snapshot.inboxPlaceholders && previous?.inboxPlaceholders &&
+      now - previous.inboxPlaceholders.observedAt < KEEP_INBOX_MS)
+    snapshot = { ...snapshot, inboxPlaceholders: previous.inboxPlaceholders };
   if (snapshotInboxes(snapshot).length || !previous) return snapshot;
   const kept = snapshotInboxes(previous).filter((inbox) => now - inbox.observedAt < KEEP_INBOX_MS);
   return kept.length ? { ...snapshot, inboxes: kept } : snapshot;
@@ -35,7 +38,7 @@ export function keepInboxes(snapshot: Snapshot, previous: Snapshot | undefined, 
 // and no work item's email links; a person their own threads without message
 // text, and everyone else's with only what counts the threads waiting there.
 export function overviewInboxes(snapshot: Snapshot, viewer: string | null): Snapshot {
-  const { inbox: _inbox, inboxes: _inboxes, ...rest } = snapshot;
+  const { inbox: _inbox, inboxes: _inboxes, inboxPlaceholders, ...rest } = snapshot;
   if (viewer === null)
     return {
       ...rest,
@@ -47,13 +50,14 @@ export function overviewInboxes(snapshot: Snapshot, viewer: string | null): Snap
   return all.length
     ? {
         ...rest,
+        ...(inboxPlaceholders && { inboxPlaceholders }),
         inboxes: all.map((inbox) =>
           sameAccount(inbox.account, viewer)
             ? { ...inbox, threads: inbox.threads.map(({ body: _body, ...thread }) => thread) }
             : countsOnly(inbox),
         ),
       }
-    : rest;
+    : { ...rest, ...(inboxPlaceholders && { inboxPlaceholders }) };
 }
 type Row = {
   thread: string;

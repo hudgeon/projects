@@ -37,10 +37,13 @@ test("inboxes are each their owner's: message text and requests to the owner, co
       mf.dispatchFetch(`${origin}/api/inbox/act`, { method: "POST", headers: { "Content-Type": "application/json", ...as }, body: JSON.stringify(body) });
     const read = (as: Record<string, string>, thread: string) => mf.dispatchFetch(`${origin}/api/inbox/threads/${thread}`, { headers: as });
     const at = Date.now();
-    assert.equal((await ingest(peopleInboxSnapshot(at))).status, 200);
+    const placeholders = { names: ["Ada", "Sam", "Lee"], observedAt: at };
+    assert.equal((await ingest({ ...peopleInboxSnapshot(at), inboxPlaceholders: placeholders })).status, 200);
+    assert.deepEqual((await store.overview())[0].inboxPlaceholders, placeholders);
     // Everyone sees every inbox: their own threads without message text,
     // everyone else's with nothing of the email but what counts it.
     const byOwner = await overview(owner);
+    assert.deepEqual((byOwner.snapshots[0] as { inboxPlaceholders?: unknown }).inboxPlaceholders, placeholders);
     const inboxes = byOwner.snapshots[0].inboxes!;
     assert.deepEqual(inboxes.map((i) => i.account), ["owner@example.com", "matt@example.com"]);
     assert.deepEqual(inboxes[0].threads.map((t) => [t.subject, t.body]), [["Weekly news", undefined], ["Contract", undefined]]);

@@ -46,6 +46,23 @@ export function applyConnections(config, { args, flags, expand, fail }) {
   if (inboxes.length > 10) fail("At most ten inboxes can be connected on one machine.");
   if (flags("add-inbox").length || flags("remove-inbox").length) config.inboxAccounts = inboxes;
 
+  // Names reserved before their mailbox exists. No address or login is added.
+  const placeholders = [...(config.inboxPlaceholders ?? [])];
+  for (const value of flags("add-inbox-placeholder")) {
+    const name = value?.trim();
+    if (!name || name.length > 60 || /[\p{Cc}<>@]/u.test(name))
+      fail("Give --add-inbox-placeholder as a person's name, up to 60 characters.");
+    if (!placeholders.some((known) => same(known, name))) placeholders.push(name);
+  }
+  for (const name of flags("remove-inbox-placeholder")) {
+    const i = placeholders.findIndex((known) => name && same(known, name.trim()));
+    if (i === -1) fail("No inbox placeholder has that name on this machine.");
+    placeholders.splice(i, 1);
+  }
+  if (placeholders.length > 10) fail("At most ten inbox placeholders can be listed.");
+  if (flags("add-inbox-placeholder").length || flags("remove-inbox-placeholder").length)
+    config.inboxPlaceholders = placeholders;
+
   // The people whose Slack the chat watcher reads: --slack sets the list,
   // --no-slack empties it, and otherwise it stays as it was.
   const slack = flags("slack").flatMap((value) => (value ?? "").split(",")).map((e) => e.trim().toLowerCase()).filter(Boolean);

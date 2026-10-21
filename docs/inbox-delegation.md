@@ -70,3 +70,19 @@ Limits: a conversation turn's token lasts an hour from the turn's start
 touches email after that gets an authentication error from `gws` and reports
 it; the email lane is short. Each delegated inbox costs one key read and one
 token request per scan, and each turn of its owner's conversations one more.
+
+Before an address exists, reserve a name on each machine that can be on duty:
+
+```bash
+node scripts/install-machine.mjs --add-inbox-placeholder Ada
+```
+
+Everyone shows that name, 0, and when the machine on duty last checked its
+configuration. This is not a Gmail read and gives no sign-in or mailbox access.
+Once the address is ready, replace the placeholder explicitly:
+
+```bash
+node scripts/install-machine.mjs --remove-inbox-placeholder Ada --add-inbox ada@example.com
+```
+
+A connected inbox that fails to read still shows its coverage warning.

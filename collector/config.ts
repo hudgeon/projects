@@ -4,7 +4,7 @@
 import path from "node:path";
 import { z } from "zod";
 import { machineIdSchema } from "../src/telemetry";
-import { sameAccount } from "../src/inbox-model";
+import { sameAccount, inboxPlaceholderNamesSchema } from "../src/inbox-model";
 
 const absolute = z.string().refine(path.isAbsolute);
 // A person's Gmail account this machine reads, and how: with the gws sign-in
@@ -53,6 +53,8 @@ export const configSchema = z.object({
       "Each inbox account is listed once.",
     )
     .default([]),
+  // Reserved names, with no Gmail account or access yet.
+  inboxPlaceholders: inboxPlaceholderNamesSchema.default([]),
   // Whose Slack this machine's chat watcher reads (collector/chats.ts), each
   // with their own user token from SLACK_USER_TOKENS in the Doppler config
   // above, and the app's SLACK_APP_TOKEN for Socket Mode.

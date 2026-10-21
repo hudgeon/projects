@@ -20,8 +20,14 @@ async function main() {
   if (args.includes("--review") || args.includes("--send-daily"))
     throw Error("Daily briefs have been retired");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
+  const scan = async (duties = false) => ({
+    ...await withFriction(config, await collect(config, { inbox: duties })),
+    ...(duties ? { inboxPlaceholders: {
+      names: config.inboxPlaceholders, observedAt: Date.now(),
+    } } : {}),
+  });
   if (!args.includes("--publish")) {
-    const snapshot = snapshotSchema.parse(await withFriction(config, await collect(config)));
+    const snapshot = snapshotSchema.parse(await scan());
     if (snapshot.work?.issues) await cacheIssues(config.home, snapshot.work.issues);
     console.log(JSON.stringify(snapshot));
     return;
@@ -42,7 +48,7 @@ async function main() {
     duties = false;
   }
   const snapshot = snapshotSchema.parse(
-    await withFriction(config, await collect(config, { inbox: duties })),
+    await scan(duties),
   );
   const issues = snapshot.work?.issues ?? null;
   // Hooks classify sessions offline against this machine's copy of the work

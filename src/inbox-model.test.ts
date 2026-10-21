@@ -4,6 +4,8 @@ import {
   countsOnly,
   currentInbox,
   currentInboxes,
+  currentInboxPlaceholders,
+  inboxPlaceholdersSchema,
   inboxQueue,
   inboxWithThread,
   snapshotInboxes,
@@ -72,4 +74,18 @@ test("what everyone sees of another person's inbox counts its threads without sh
   assert.equal(inboxQueue(full, [], [], [archive])[0].state, "todo");
   assert.equal(inboxQueue(full, [], [], [{ ...archive, account: "MATT@example.com" }])[0].state, "clearing");
   assert.equal(inboxQueue(full, [], [], [{ ...archive, account: undefined }])[0].state, "clearing");
+});
+
+test("placeholder duty scans replace the list, preserve their check time and never become inboxes", () => {
+  const older = { host: "first", inboxPlaceholders: { names: ["Ada"], observedAt: 100 } };
+  const newer = { host: "second", inboxPlaceholders: { names: ["Sam", "Lee"], observedAt: 200 } };
+  assert.equal(currentInboxPlaceholders([newer, older, {}]), newer);
+  assert.equal(currentInboxPlaceholders([older, newer]), newer);
+  assert.deepEqual(currentInboxes([older, newer] as object[]), []);
+  const removed = { inboxPlaceholders: { names: [], observedAt: 300 } };
+  assert.equal(currentInboxPlaceholders([older, removed, newer]), removed);
+  assert.equal(currentInboxPlaceholders([{}]), undefined);
+  assert.equal(inboxPlaceholdersSchema.safeParse(newer.inboxPlaceholders).success, true);
+  assert.equal(inboxPlaceholdersSchema.safeParse({ names: ["Ada", "ada"], observedAt: 100 }).success, false);
+  assert.equal(inboxPlaceholdersSchema.safeParse({ names: ["ada@example.com"], observedAt: 100 }).success, false);
 });

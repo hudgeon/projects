@@ -1,4 +1,4 @@
-import { inboxSchema } from "./inbox-model";
+import { inboxSnapshotShape } from "./inbox-model";
 import { workSnapshotSchema, type Close } from "./work-model";
 import { z } from "zod";
 import { machineIdSchema } from "./telemetry";
@@ -135,9 +135,7 @@ export const snapshotSchema = z
     projects: z.array(projectSchema).max(100),
     unassignedSessions: z.array(sessionSchema).max(2000),
     work: workSnapshotSchema.optional(),
-    // One per connected account; `inbox` alone is an older collector's owner's.
-    inboxes: z.array(inboxSchema).max(10).optional(),
-    inbox: inboxSchema.optional(),
+    ...inboxSnapshotShape,
     quotas: z
       .object({ codex: quotaSchema, claude: quotaSchema })
       .strict()

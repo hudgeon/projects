@@ -34,6 +34,25 @@ export const inboxThreadSchema = z
     unsubscribe: unsubscribeSchema.nullable().optional(),
   })
   .strict();
+// Names reserved before an email address exists; never a mailbox read or login.
+export const inboxPlaceholderNamesSchema = z.array(
+  z.string().trim().min(1).max(60).regex(/^[^\p{Cc}<>@]+$/u),
+).max(10).refine(
+  (names) => new Set(names.map((name) => name.toLowerCase())).size === names.length,
+  "Each placeholder is listed once.",
+);
+export const inboxPlaceholdersSchema = z.object({
+  names: inboxPlaceholderNamesSchema,
+  observedAt: z.number().int().nonnegative(),
+}).strict();
+// Use the latest duty scan as a whole, so removed placeholders stay removed.
+export function currentInboxPlaceholders<T extends {
+  inboxPlaceholders?: z.infer<typeof inboxPlaceholdersSchema>;
+}>(snapshots: T[]) {
+  return snapshots.filter((s) => s.inboxPlaceholders).sort(
+    (a, b) => b.inboxPlaceholders!.observedAt - a.inboxPlaceholders!.observedAt,
+  )[0];
+}
 export const inboxSchema = z
   .object({
     account: z.email(),
@@ -42,6 +61,12 @@ export const inboxSchema = z
     threads: z.array(inboxThreadSchema).max(500),
   })
   .strict();
+// Snapshot fields shared with collectors from before accounts were listed.
+export const inboxSnapshotShape = {
+  inboxes: z.array(inboxSchema).max(10).optional(),
+  inbox: inboxSchema.optional(),
+  inboxPlaceholders: inboxPlaceholdersSchema.optional(),
+};
 export type Inbox = z.infer<typeof inboxSchema>;
 export type InboxThread = z.infer<typeof inboxThreadSchema>;
 export const sameAccount = (a: string, b: string) =>
