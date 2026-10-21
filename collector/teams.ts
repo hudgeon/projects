@@ -5,6 +5,7 @@
 // receipt or marks anything read. A chat keeps its latest message from
 // someone else until the person replies there or it lapses; Done and Hand
 // over are the Worker's. Nothing is ever posted to Teams.
+import { createHash } from "node:crypto";
 import { clip } from "../src/run-text";
 import {
   CHAT_ITEMS_LIMIT,
@@ -68,17 +69,31 @@ function place(row: TeamsRow): ChatPlace {
 // until read), so nothing is carried over from the last poll but the time a
 // message was first seen. The person's own latest message settles the chat.
 // A chat's preview is its text; a channel shows none in the list.
+//
+// `seen` remembers each previewed chat's latest message (a hash of sender and
+// preview, never the text) between polls and is updated in place. A chat
+// already read when first seen is history from before the reader looked, not
+// a new message: it joins only when its message changes or it turns unread.
 export function applyTeams(
   previous: Map<string, ChatItem>,
   rows: TeamsRow[],
   now: number,
+  seen: Map<string, string> = new Map(),
 ): Map<string, ChatItem> {
   const items = new Map<string, ChatItem>();
+  const listed = new Set<string>();
   for (const row of rows) {
     const prev = previous.get(row.key);
-    if (/^you$/i.test(row.from.trim())) continue; // the person replied; settled
     const direct = row.kind !== "channel";
-    if (direct && !row.preview.trim() && !row.unread) continue; // no preview: theirs while unread
+    const message = direct && row.preview.trim() ? createHash("sha256").update(`${row.from}\n${row.preview}`).digest("hex").slice(0, 16) : undefined;
+    const known = seen.get(row.key);
+    if (message) {
+      seen.set(row.key, message);
+      listed.add(row.key);
+    }
+    if (/^you$/i.test(row.from.trim())) continue; // the person replied; settled
+    if (direct && !message && !row.unread) continue; // no preview: theirs while unread
+    if (message && !prev && !row.unread && (known === undefined || known === message)) continue; // history
     const mention = direct || row.mention || (!!row.favorite && row.unread);
     // A read channel that needs nothing from the person is not theirs.
     if (!mention && !row.unread) continue;
@@ -99,6 +114,7 @@ export function applyTeams(
       text,
     });
   }
+  for (const key of seen.keys()) if (!listed.has(key)) seen.delete(key);
   return items;
 }
 // What has lapsed: anything three days old, and information a day old.

@@ -153,7 +153,8 @@ test("the in-page script reads only conversation rows, each by its own thread id
   assert.deepEqual(clicked, [page.drafts, page.chats]);
   const rows = read.rows.map(parseRow).filter((r): r is TeamsRow => r !== null);
   const items = applyTeams(new Map(), rows, 1000);
-  assert.deepEqual([...items.keys()], [CHANNEL, ONE, GROUP, TEAM]);
+  // Sam's chat is read when first seen: history, until a new message.
+  assert.deepEqual([...items.keys()], [CHANNEL, GROUP, TEAM]);
   assert.deepEqual([items.get(CHANNEL)?.mention, items.get(TEAM)?.mention, items.get(GROUP)?.from], [true, false, "Priya"]);
 });
 
@@ -168,4 +169,8 @@ test("the in-page script leaves a page with nothing open alone, and tells a sign
   assert.deepEqual(state("login.microsoftonline.com", h("body", {}, h("input", { type: "password" }))), [false, false]);
   assert.deepEqual(state("login.microsoftonline.com", h("body", {})), [true, false]);
   assert.deepEqual(state("teams.cloud.microsoft", h("body", {})), [true, false]);
+  // Left on another view, the window goes back to the chat list.
+  const chatButton = h("button", { "aria-label": "Chat (⌃ ⇧ 2)" });
+  assert.deepEqual(state("teams.cloud.microsoft", h("body", {}, h("button", { "aria-label": "Calendar (⌃ ⇧ 3)" }), chatButton)), [true, false]);
+  assert.deepEqual(clicked, [chatButton]);
 });

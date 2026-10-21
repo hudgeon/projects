@@ -33,7 +33,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // a 1:1) in its test id or tree value. A bold title is Teams' unread mark.
 // Teams reopens a conversation whenever it loads, so the script moves the page
 // to the Drafts quick view, which opens none; otherwise it only expands a
-// collapsed Chats heading. It never clicks a conversation, so it never opens
+// collapsed Chats heading, and returns to the chat list (Teams' Chat button)
+// when the window was left on another view. It never clicks a conversation, so it never opens
 // one, sends a read receipt or marks anything read. A sign-in page is reported
 // only when it asks for something; Teams' own sign-in hops pass through as
 // "not listed yet".
@@ -43,7 +44,13 @@ export const EXTRACT = `(() => {
     const prompt = document.querySelector('input[type=password], input[type=email], #tilesHolder, [data-test-id="list-item"]');
     if (login || prompt) return { signedIn: !prompt, listed: false, rows: [] };
     const tree = document.querySelector('[role="tree"][data-tid="simple-collab-dnd-rail"]') || document.querySelector('[role="tree"]');
-    if (!tree) return { signedIn: /(^|\\.)teams\\.(cloud\\.)?microsoft(\\.com)?$/.test(location.host), listed: false, rows: [] };
+    const teams = /(^|\\.)teams\\.(cloud\\.)?microsoft(\\.com)?$/.test(location.host);
+    if (!tree) {
+      // Left on another view (Settings, Activity): back to the chat list.
+      const chat = [...document.querySelectorAll('button')].find((b) => /^Chat( \\(|$)/.test(b.getAttribute('aria-label') || ''));
+      if (teams && chat) chat.click();
+      return { signedIn: teams, listed: false, rows: [] };
+    }
     const items = [...tree.querySelectorAll('[role="treeitem"]')];
     const type = (el) => el.getAttribute('data-item-type') || '';
     const open = items.find((el) => /LeftRailSelectedItem/.test(el.getAttribute('data-tabster') || '') || el.getAttribute('aria-selected') === 'true');
@@ -102,9 +109,9 @@ export const rawSchema = z.object({
     .default([]),
 });
 export type RawRow = z.infer<typeof rawSchema>["rows"][number];
-// A trailing time Teams prints after a chat's preview ("9:42 AM", "Yesterday",
-// "Mon", "20/10").
-const TIME = /\s*·?\s*(\d{1,2}:\d{2}(\s?[AP]M)?|Yesterday|Today|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2}\/\d{1,2}(\/\d{2,4})?)$/i;
+// A time Teams prints beside a chat's preview, before or after it ("9:42 AM",
+// "Yesterday", "Mon", "20/10").
+const TIME = /^(\d{1,2}:\d{2}(\s?[AP]M)?|Yesterday|Today|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2}\/\d{1,2}(\/\d{2,4})?)$/i;
 // One tree row as a chat row. The kind comes from the thread id. A chat's
 // detail line is its preview, "Sender: message" in a group or "You: …" when
 // the person wrote last, unless the person's list hides previews; a channel
@@ -117,7 +124,7 @@ export function parseRow(raw: RawRow): TeamsRow | null {
   let from = kind === "channel" ? "New posts" : name,
     preview = "";
   if (kind !== "channel") {
-    const detail = raw.detail.replace(TIME, "").trim();
+    const detail = raw.detail.split(" · ").map((part) => part.trim()).filter((part) => part && !TIME.test(part)).join(" · ");
     const said = /^([^:·]{1,80}):\s+(.+)$/.exec(detail);
     if (said) {
       from = said[1].trim();
@@ -226,7 +233,10 @@ async function launch(chrome: string, profileDir: string): Promise<{ child: Chil
   return null;
 }
 
-const savedSchema = z.object({ items: z.array(chatItemSchema).default([]) });
+const savedSchema = z.object({
+  items: z.array(chatItemSchema).default([]),
+  seen: z.record(z.string(), z.string().regex(/^[a-f0-9]{16}$/)).default({}),
+});
 // One profile's browser: its Chrome, the DevTools connection to its Teams
 // page, how its last look went, and what it holds (kept in its own file).
 type Browser = {
@@ -238,6 +248,10 @@ type Browser = {
   state: ChatRead["state"];
   problem?: string;
   items: Map<string, ChatItem>;
+  // Each previewed chat's latest message as last seen (applyTeams), hashed.
+  seen: Map<string, string>;
+  // Polls in a row that found Teams signed in but no chat list.
+  unlisted: number;
 };
 // Read Teams for one person until stopped: keep a Chrome open for each of
 // their profiles, poll each list, and post one read with them all each poll
@@ -254,6 +268,8 @@ export function startTeams(options: Options): () => Promise<void> {
     state: "unavailable",
     problem: "Teams is not open yet",
     items: new Map(),
+    seen: new Map(),
+    unlisted: 0,
   }));
   let stopped = false;
   let saveTimer: NodeJS.Timeout | undefined;
@@ -261,7 +277,10 @@ export function startTeams(options: Options): () => Promise<void> {
   async function load(b: Browser) {
     try {
       const parsed = savedSchema.safeParse(JSON.parse(await readFile(b.stateFile, "utf8")));
-      if (parsed.success) for (const item of parsed.data.items) b.items.set(item.id, item);
+      if (parsed.success) {
+        for (const item of parsed.data.items) b.items.set(item.id, item);
+        b.seen = new Map(Object.entries(parsed.data.seen));
+      }
     } catch {
       /* nothing kept yet */
     }
@@ -269,7 +288,7 @@ export function startTeams(options: Options): () => Promise<void> {
   async function save(b: Browser) {
     const temporary = `${b.stateFile}.${process.pid}.tmp`;
     try {
-      await writeFile(temporary, JSON.stringify({ items: [...b.items.values()] }), { mode: 0o600 });
+      await writeFile(temporary, JSON.stringify({ items: [...b.items.values()], seen: Object.fromEntries(b.seen) }), { mode: 0o600 });
       await rename(temporary, b.stateFile);
     } catch {
       log("chat_state_unsaved", { source: "teams" });
@@ -365,11 +384,19 @@ export function startTeams(options: Options): () => Promise<void> {
     }
     b.state = "ok";
     b.problem = undefined;
-    // Signed in but the list is not in the page yet (still loading): keep what
-    // we had rather than clearing on a half-loaded page.
-    if (!parsed.data.listed) return;
+    // Signed in but the list is not in the page yet (still loading, or just
+    // sent back to it): keep what we had rather than clearing on a half-drawn
+    // page, unless it stays away.
+    if (!parsed.data.listed) {
+      if (++b.unlisted >= 5) {
+        b.state = "unavailable";
+        b.problem = "Teams' chat list is not showing on this machine";
+      }
+      return;
+    }
+    b.unlisted = 0;
     const rows = parsed.data.rows.map(parseRow).filter((r): r is TeamsRow => r !== null);
-    b.items = applyTeams(b.items, rows, Date.now());
+    b.items = applyTeams(b.items, rows, Date.now(), b.seen);
     queueSave();
   }
   async function post() {

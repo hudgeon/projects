@@ -21,6 +21,11 @@ test("a Teams tree row becomes a chat row, its kind from the thread id", () => {
   const group = parseRow(raw({ id: GROUP, name: "Rollout crew", detail: "Priya: Moved to Thursday · Yesterday" }));
   assert.deepEqual([group?.kind, group?.from, group?.preview], ["group", "Priya", "Moved to Thursday"]);
   assert.equal(parseRow(raw({ id: GROUP, name: "Rollout crew", detail: "You: Thanks all · Mon" }))?.from, "You");
+  // Teams may print the time before the preview rather than after it.
+  const first = (id: string, name: string, detail: string) => parseRow(raw({ id, name, detail }));
+  assert.equal(first(GROUP, "Rollout crew", "12:17 · You: still on it")?.from, "You");
+  assert.deepEqual([first(GROUP, "Rollout crew", "17/10 · Priya: Docs attached")?.from, first(GROUP, "Rollout crew", "17/10 · Priya: Docs attached")?.preview], ["Priya", "Docs attached"]);
+  assert.deepEqual([first(ONE, "Sam Rivers", "06/10 · Hi, can we talk")?.from, first(ONE, "Sam Rivers", "06/10 · Hi, can we talk")?.preview], ["Sam Rivers", "Hi, can we talk"]);
   // A list without previews names no group sender; a 1:1 is its person.
   assert.deepEqual([parseRow(raw({ id: GROUP, name: "Rollout crew" }))?.from, parseRow(raw({ id: ONE, name: "Sam Rivers" }))?.from], ["New messages", "Sam Rivers"]);
   // A channel shows no preview in the list; a favourite says so.
@@ -93,4 +98,18 @@ test("one read covers a person's Teams organisations, one profile each: a needed
   assert.equal(configSchema.safeParse({ ...base, teams: [first, second] }).success, true);
   assert.equal(configSchema.safeParse({ ...base, teams: [first, { ...first, account: "colleague@example.com" }] }).success, false);
   assert.equal(configSchema.safeParse({ ...base, teams: [first, { ...second, profileDir: first.profileDir.toLowerCase() }] }).success, false, "one folder, two spellings");
+});
+
+test("a read chat the reader first sees is history; a new message, read or not, is theirs", () => {
+  const seen = new Map<string, string>();
+  const old = row({ unread: false, preview: "Thanks, all good" });
+  assert.equal(applyTeams(new Map(), [old], 1000, seen).size, 0, "read when first seen: history");
+  assert.equal(applyTeams(new Map(), [old], 2000, seen).size, 0, "the same message stays history");
+  assert.match(seen.get(ONE) ?? "", /^[a-f0-9]{16}$/, "a hash, never the text");
+  const next = applyTeams(new Map(), [row({ unread: false, preview: "One more thing" })], 3000, seen);
+  assert.equal(next.get(ONE)?.mention, true, "a new message counts even if read elsewhere first");
+  assert.equal(applyTeams(new Map(), [row({ key: GROUP, kind: "group", unread: true })], 1000, new Map()).size, 1, "unread when first seen: theirs");
+  // A chat gone from the list is forgotten.
+  applyTeams(new Map(), [], 4000, seen);
+  assert.equal(seen.size, 0);
 });

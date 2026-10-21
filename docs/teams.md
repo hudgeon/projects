@@ -8,16 +8,19 @@ person signed in to once, and every minute reads the list of chats and
 channels — the names, unread marks, who sent a chat's latest message and its
 one-line preview. A 1:1 or group chat joins their Today until they reply in
 it; so does an unread channel that @mentions them or that they made a
-favourite in Teams. Other unread channels wait in their Inbox for a day. If
-the person's Teams list hides message previews, nothing says who wrote last,
-so a chat joins their Today only while it is unread, and without its text.
+favourite in Teams. Other unread channels wait in their Inbox for a day. A
+chat already read when the reader first sees it is history: it joins only
+when a new message arrives. If the person's Teams list hides message previews
+(Settings, Chats and channels), nothing says who wrote last, so a chat joins
+their Today only while it is unread, and without its text.
 [Self-hosting](self-host.md) says where this fits.
 
 The reader only ever reads the list. **It never opens a chat or channel**, so
 it never sends a read receipt and never marks anything read, and it never
 posts, replies or types to anyone. Teams reopens a conversation whenever it
 loads, so within seconds of starting the reader moves its window to the Drafts
-view, which opens none; it clicks nothing else but a folded Chats heading.
+view, which opens none. It clicks nothing else but a folded Chats heading, and
+Teams' Chat button when the window was left on another view, such as Settings.
 
 What leaves Teams is each item's place (the chat or channel name, and the
 customer's name for a shared channel) and, for a chat, the list preview of its
