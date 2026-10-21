@@ -217,7 +217,13 @@ async function launch(chrome: string, profileDir: string): Promise<{ child: Chil
       // which web origins may drive this signed-in session).
       "--no-first-run",
       "--no-default-browser-check",
-      "--disable-features=Translate",
+      // Chrome treats a covered window, or every window while the displays
+      // sleep, as hidden: it stops drawing and slows timers, and Teams' list
+      // goes stale. These keep the page live; a minimised window still stops.
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-background-timer-throttling",
+      "--disable-features=Translate,IntensiveWakeUpThrottling",
       TEAMS_URL,
     ],
     { stdio: "ignore", detached: false },

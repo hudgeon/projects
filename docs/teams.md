@@ -49,7 +49,8 @@ raise it with them.
 
    Complete the customer's sign-in and MFA, then quit that Chrome. The watcher
    opens the profile in a Chrome window of its own and keeps it open; leave
-   that window be (it can sit behind others). The sign-in is a step only you
+   that window be. It can sit behind others and keeps reading while covered or
+   while the displays sleep, but not minimised. The sign-in is a step only you
    can do: the watcher never signs in or types.
 3. Connect it:
 
