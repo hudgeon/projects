@@ -18,86 +18,120 @@ const TICK_MS = 60_000;
 const SETTLE_MS = 3_000;
 // Where the system Chrome lives on macOS.
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const TEAMS_URL = "https://teams.microsoft.com/";
+const TEAMS_URL = "https://teams.cloud.microsoft/";
 
 const log = (event: string, fields: Record<string, string | number> = {}) =>
   console.log(JSON.stringify({ event, at: Date.now(), ...fields }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// The script evaluated in the Teams page. It returns whether the person is
-// signed in and one normalised row per chat, read from the list only. Teams
-// web markup shifts, so it reads accessible names and links defensively; the
-// exact shape is confirmed against the real page on first sign-in.
-const EXTRACT = `(() => {
+// The script evaluated in the Teams page. Teams' left pane is one tree: folder
+// headings (Quick views, Favorites, Chats, Teams and channels) at level 1 and
+// conversations under them, each carrying its thread id ("19:…@thread.tacv2"
+// for a channel or team, "@thread.v2" for a group chat, "@unq.gbl.spaces" for
+// a 1:1) in its test id or tree value. A bold title is Teams' unread mark.
+// Teams reopens a conversation whenever it loads, so the script moves the page
+// to the Drafts quick view, which opens none; otherwise it only expands a
+// collapsed Chats heading. It never clicks a conversation, so it never opens
+// one, sends a read receipt or marks anything read. A sign-in page is reported
+// only when it asks for something; Teams' own sign-in hops pass through as
+// "not listed yet".
+export const EXTRACT = `(() => {
   try {
-    const host = location.host || "";
-    if (/login\\.microsoftonline\\.com|login\\.live\\.com|\\/_#\\/login/.test(location.href) || document.querySelector('input[type=password]'))
-      return { signedIn: false, listed: false, rows: [] };
-    const list = document.querySelector('[data-tid="chat-list"], [role="tree"][aria-label], [role="list"][aria-label]');
-    const nodes = [...document.querySelectorAll('[data-tid="chat-list-item"], [role="treeitem"], [role="listitem"]')];
-    // "listed" means the chat list was found: only then is an empty result a
-    // real "no chats", not a page still loading. Without it the reader keeps
-    // what it had rather than clearing on a half-loaded page.
-    if (!nodes.length) return { signedIn: !!list || /teams\\.microsoft/.test(host), listed: !!list, rows: [] };
-    const rows = [];
-    for (const el of nodes.slice(0, 200)) {
-      const label = (el.getAttribute('aria-label') || el.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (!label) continue;
-      const link = el.querySelector('a[href]');
-      const href = link ? link.href : (el.getAttribute('data-tid') ? null : null);
-      const id = el.getAttribute('data-item-key') || el.getAttribute('data-tid') || el.id || (href || label);
-      const unread = /\\bunread\\b/i.test(label) || !!el.querySelector('[data-tid="unread"], [aria-label*="unread" i]');
-      const mention = /@|mention/i.test(label) || !!el.querySelector('[data-tid*="mention" i], [aria-label*="mention" i]');
-      const channel = !!el.closest('[data-tid="team-channel-list"], [aria-label*="Teams and channels" i]');
-      const group = !channel && (el.querySelectorAll('img, [data-tid="avatar"]').length > 1 || /\bgroup\b/i.test(label));
-      rows.push({ id: String(id), label, href: href || undefined, unread, mention, channel, group });
+    const login = /(^|\\.)login\\.(microsoftonline|live|microsoft)\\.com$/.test(location.host);
+    const prompt = document.querySelector('input[type=password], input[type=email], #tilesHolder, [data-test-id="list-item"]');
+    if (login || prompt) return { signedIn: !prompt, listed: false, rows: [] };
+    const tree = document.querySelector('[role="tree"][data-tid="simple-collab-dnd-rail"]') || document.querySelector('[role="tree"]');
+    if (!tree) return { signedIn: /(^|\\.)teams\\.(cloud\\.)?microsoft(\\.com)?$/.test(location.host), listed: false, rows: [] };
+    const items = [...tree.querySelectorAll('[role="treeitem"]')];
+    const type = (el) => el.getAttribute('data-item-type') || '';
+    const open = items.find((el) => /LeftRailSelectedItem/.test(el.getAttribute('data-tabster') || '') || el.getAttribute('aria-selected') === 'true');
+    const drafts = tree.querySelector('[data-testid="slice-list-item-slice-drafts"]');
+    if (open && type(open) !== 'slice' && drafts) drafts.click();
+    for (const el of items) if (type(el) === 'chats' && el.getAttribute('aria-expanded') === 'false') el.click();
+    // An element of this row itself, not of a row nested under it.
+    const own = (el, sel) => [...el.querySelectorAll(sel)].filter((e) => e.closest('[role="treeitem"]') === el);
+    const rows = [], seen = new Set();
+    for (const el of items) {
+      if (el.getAttribute('aria-level') === '1' || el.hasAttribute('data-conversation-folder') || type(el) === 'slice') continue;
+      // A team row stands for its channels only while they are folded away.
+      if (type(el) === 'team' && el.getAttribute('aria-expanded') !== 'false') continue;
+      const ids = [el.getAttribute('data-testid'), el.getAttribute('data-fui-tree-item-value'), ...own(el, '[id],[data-testid]').map((e) => e.id + ' ' + (e.getAttribute('data-testid') || ''))].join(' ');
+      const m = ids.match(/19:[^\\s|]+?@(thread\\.(tacv2|skype|v2)|unq\\.gbl\\.spaces)/);
+      if (!m || seen.has(m[0])) continue;
+      seen.add(m[0]);
+      const title = own(el, '[id^="title-"]')[0] || own(el, 'span,div').find((t) => [...t.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim()));
+      // An avatar's initials are decoration (aria-hidden), not the preview.
+      const hidden = new Set(own(el, '[aria-hidden="true"],[role="img"]').map((e) => (e.innerText || '').trim()));
+      const lines = [...el.children].filter((c) => c.getAttribute('role') !== 'group').map((c) => c.innerText || '').join('\\n').split('\\n').map((t) => t.trim()).filter((t) => t && !hidden.has(t));
+      const name = ((title && title.innerText) || lines[0] || '').trim();
+      const folder = el.parentElement && el.parentElement.closest('[role="treeitem"]');
+      const marks = own(el, '[aria-label],[title],[data-tid]').map((b) => [b.getAttribute('aria-label'), b.getAttribute('title'), b.getAttribute('data-tid')].join(' ')).join(' ');
+      rows.push({
+        id: m[0],
+        name: name.slice(0, 300),
+        detail: lines.filter((t) => t !== name).join(' \\u00b7 ').slice(0, 1500),
+        favorite: /^favorite-/.test(el.getAttribute('data-testid') || '') || /~Favorites$/.test((folder && folder.getAttribute('data-fui-tree-item-value')) || ''),
+        unread: Number(getComputedStyle(title || el).fontWeight) >= 600 || /\\bunread\\b/i.test(marks),
+        mention: /mention/i.test(marks),
+      });
     }
     return { signedIn: true, listed: true, rows };
   } catch (e) {
-    return { signedIn: false, listed: false, rows: [], error: String(e && e.message || e) };
+    return { signedIn: true, listed: false, rows: [], error: String((e && e.message) || e) };
   }
 })()`;
 
 // What EXTRACT returns, before teams.ts turns it into items.
-const rawSchema = z.object({
+export const rawSchema = z.object({
   signedIn: z.boolean(),
   listed: z.boolean().default(false),
   rows: z
     .array(
       z.object({
-        id: z.string().min(1).max(400),
-        label: z.string().max(2000),
-        href: z.string().max(2000).optional(),
+        id: z.string().regex(/^19:/).max(400),
+        name: z.string().max(300),
+        detail: z.string().max(1500).default(""),
+        favorite: z.boolean().default(false),
         unread: z.boolean(),
         mention: z.boolean(),
-        channel: z.boolean(),
-        group: z.boolean().default(false),
       }),
     )
     .max(400)
     .default([]),
 });
-// Turn a raw row's accessible name into a chat row. The name leads with the
-// chat or channel, then the latest message as "Sender: message" (or
-// "You: message"); a trailing time and an "unread" word are dropped. Tuned
-// against the real page on first sign-in.
-export function parseRow(raw: z.infer<typeof rawSchema>["rows"][number]): TeamsRow | null {
-  const parts = raw.label.split(/,\s+/).map((p) => p.trim()).filter(Boolean);
-  if (!parts.length) return null;
-  const name = parts[0];
+export type RawRow = z.infer<typeof rawSchema>["rows"][number];
+// A trailing time Teams prints after a chat's preview ("9:42 AM", "Yesterday",
+// "Mon", "20/10").
+const TIME = /\s*·?\s*(\d{1,2}:\d{2}(\s?[AP]M)?|Yesterday|Today|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2}\/\d{1,2}(\/\d{2,4})?)$/i;
+// One tree row as a chat row. The kind comes from the thread id. A chat's
+// detail line is its preview, "Sender: message" in a group or "You: …" when
+// the person wrote last; a channel shows no preview in the list, so its text is
+// empty and "Open in Teams" shows the posts.
+export function parseRow(raw: RawRow): TeamsRow | null {
+  const name = raw.name.trim();
   if (!name) return null;
-  const said = parts.find((p) => /: /.test(p));
-  let from = name,
+  const kind: TeamsRow["kind"] = raw.id.includes("@unq.gbl.spaces") ? "direct" : raw.id.includes("@thread.v2") ? "group" : "channel";
+  let from = kind === "channel" ? "New posts" : name,
     preview = "";
-  if (said) {
-    const at = said.indexOf(": ");
-    from = said.slice(0, at).trim() || name;
-    preview = said.slice(at + 2).trim();
+  if (kind !== "channel") {
+    const detail = raw.detail.replace(TIME, "").trim();
+    const said = /^([^:·]{1,80}):\s+(.+)$/.exec(detail);
+    if (said) {
+      from = said[1].trim();
+      preview = said[2].trim();
+    } else preview = detail;
   }
-  // A text blob can't tell a 1:1 from a group reliably, so the kind comes
-  // from the row's own signals (its location and avatars), not from the name.
-  const kind: TeamsRow["kind"] = raw.channel ? "channel" : raw.group ? "group" : "direct";
-  return { key: raw.id, name, kind, url: raw.href, from, preview, unread: raw.unread, mention: raw.mention };
+  return {
+    key: raw.id,
+    name,
+    kind,
+    url: TEAMS_URL,
+    from,
+    preview,
+    unread: raw.unread,
+    mention: raw.mention,
+    favorite: raw.favorite,
+  };
 }
 
 type Options = {
@@ -147,7 +181,7 @@ async function pageSocketUrl(port: number): Promise<string | null> {
       webSocketDebuggerUrl?: string;
     }[];
     const page =
-      targets.find((t) => t.type === "page" && /teams\.microsoft|login\.microsoft/.test(t.url)) ??
+      targets.find((t) => t.type === "page" && /teams\.(cloud\.)?microsoft|login\.microsoft/.test(t.url)) ??
       targets.find((t) => t.type === "page");
     return page?.webSocketDebuggerUrl ?? null;
   } catch {
@@ -220,6 +254,7 @@ export function startTeams(options: Options): () => Promise<void> {
   }
   async function connect(): Promise<boolean> {
     if (ws) return true;
+    let fresh = false;
     if (!child || child.exitCode !== null) {
       const launched = await launch(chrome, profileDir);
       if (!launched) {
@@ -234,7 +269,8 @@ export function startTeams(options: Options): () => Promise<void> {
         cdp = null;
         child = null;
       });
-      await sleep(3000); // let the first page target appear
+      fresh = true;
+      await sleep(5_000);
     }
     const port = Number((await readFile(path.join(profileDir, "DevToolsActivePort"), "utf8").catch(() => "")).split("\n")[0]);
     const url = port ? await pageSocketUrl(port) : null;
@@ -259,6 +295,19 @@ export function startTeams(options: Options): () => Promise<void> {
       ws = socket;
       cdp = new Cdp(socket);
       await cdp.send("Runtime.enable");
+      // Teams signs itself in, reopens a conversation and draws its list. Look
+      // every two seconds: the first look that finds the list also leaves the
+      // conversation (EXTRACT). Then let the list fill in.
+      if (fresh) {
+        for (let waited = 0; waited < 40_000; waited += 2_000) {
+          const look = await cdp
+            .send<{ result?: { value?: unknown } }>("Runtime.evaluate", { expression: EXTRACT, returnByValue: true })
+            .catch(() => null);
+          if (rawSchema.safeParse(look?.result?.value).data?.listed) break;
+          await sleep(2_000);
+        }
+        await sleep(5_000);
+      }
       return true;
     } catch {
       ws = null;

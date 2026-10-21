@@ -198,8 +198,13 @@ export function ChatDetail({
         </div>
       </header>
       <div className="chat-text">
-        {text.data ? (
+        {text.data?.text ? (
           <LinkedText text={text.data.text} />
+        ) : text.data ? (
+          <span className="subtle">
+            {app} shows no preview for this {kindLabel(item.source, item.place)}: open it in {app} to read
+            the new posts.
+          </span>
         ) : (
           <span className={text.error ? "error-inline" : "subtle"}>
             {text.error ? errorText(text.error) : "Loading the message…"}

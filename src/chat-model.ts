@@ -40,8 +40,9 @@ export const chatPlaceSchema = z
   .strict();
 export const chatItemSchema = z
   .object({
-    // Stable for the place, and thread, within its source and person.
-    id: z.string().regex(/^[A-Za-z0-9_.:-]+$/).max(200),
+    // Stable for the place, and thread, within its source and person. A Teams
+    // thread id carries an @ ("19:…@thread.tacv2").
+    id: z.string().regex(/^[A-Za-z0-9_.:@-]+$/).max(200),
     place: chatPlaceSchema,
     from: line(120),
     // The latest message.

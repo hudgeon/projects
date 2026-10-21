@@ -39,6 +39,8 @@ export type TeamsRow = {
   unread: boolean;
   // The row carries an @mention marker for the person.
   mention: boolean;
+  // The person favourited this chat or channel in Teams.
+  favorite?: boolean;
 };
 
 const https = (url?: string) => {
@@ -58,10 +60,12 @@ function place(row: TeamsRow): ChatPlace {
   };
 }
 // What one poll of the chat list changes. A 1:1 or group chat is for the
-// person; a channel is theirs only when it @mentions them, and otherwise sits
-// as information while it is unread. The person's own latest message settles
-// the chat. The latest message's preview is its text: the list is never
-// opened, so there is nothing fuller to read without a read receipt.
+// person until they reply; a channel needs them while it is unread and
+// @mentions them or is one they favourited, and otherwise sits as information
+// while it is unread. Teams' own list carries the state (bold while unread,
+// the @ mark until read), so nothing is carried over from the last poll but
+// the time a message was first seen. The person's own latest message settles
+// the chat. A chat's preview is its text; a channel shows none in the list.
 export function applyTeams(
   previous: Map<string, ChatItem>,
   rows: TeamsRow[],
@@ -72,13 +76,15 @@ export function applyTeams(
     const prev = previous.get(row.key);
     if (/^you$/i.test(row.from.trim())) continue; // the person replied; settled
     const direct = row.kind !== "channel";
-    const mention = direct || row.mention || !!prev?.mention;
-    // A read channel message that never mentioned the person is not theirs.
+    const mention = direct || row.mention || (!!row.favorite && row.unread);
+    // A read channel that needs nothing from the person is not theirs.
     if (!mention && !row.unread) continue;
     const text = clip(row.preview, CHAT_TEXT_LIMIT);
     // The same latest message keeps its first-seen time, so Done holds until a
-    // newer one arrives; a changed preview is a new message.
-    const at = prev && prev.text === text && prev.mention === mention ? prev.at : now;
+    // newer one arrives; a changed preview, or a chat turning unread again, is
+    // a new message.
+    const same = prev && prev.text === text && prev.mention === mention && (prev.unread || !row.unread);
+    const at = same ? prev.at : now;
     items.set(row.key, {
       id: row.key,
       place: place(row),
