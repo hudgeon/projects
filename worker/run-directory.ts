@@ -337,6 +337,9 @@ export class Runs {
     return this.select(async () => {
       await this.migrate();
       this.contact(host);
+      // A full or pressure-paused runner stays present without consuming or
+      // recovering any reservation. Retry it unchanged when capacity returns.
+      if (!lanes.length) return null;
       const slot = this.storage.sql
         .exec<{ id: string }>(
           "SELECT id FROM runner_slots WHERE owner=?",
@@ -344,7 +347,7 @@ export class Runs {
         )
         .toArray()[0];
       // Recovery of this runner's own active claims ignores lanes; new work is
-      // taken only in a lane with a free slot on this machine. A conversation
+      // taken only from the offered lanes. A conversation
       // stays with the runner that first claimed it, where its native sessions
       // and worktrees live; new ones go to the first machine in order that is
       // present.

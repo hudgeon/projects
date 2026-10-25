@@ -28,10 +28,11 @@ Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
 - The conversation belongs to the deployment owner (`OWNER_EMAIL`), and is
   linked to the standing upkeep work issue when the work items show one: the
   open issue labelled `work` and `upkeep` in the work repository.
-- Each runner keeps one slot for the lane (`runner/pool.ts`), so the cycle
-  neither waits behind long work nor takes a slot from it; at most two upkeep
-  conversations are active at once (the week's, and a follow-up to an earlier
-  one). A runner from before the lane never claims it.
+- Upkeep shares the runner's capacity with every other conversation
+  (`runner/pool.ts`), including its memory-pressure guard; it waits its turn
+  without a reserved or extra slot. At most two upkeep conversations are active
+  at once (the week's, and a follow-up to an earlier one). A runner from before
+  the lane never claims it.
 - A finished cycle sends no notification: its result waits in Today and the
   standing issue. A cycle that needs a decision, or fails, notifies the owner
   like any other conversation.
@@ -133,7 +134,7 @@ instructions for this lane. It carries:
     keeping everything else in it.
 
 The rules are tested as text (`runner/upkeep-instructions.test.ts`), the
-trigger's idempotence and the lane's slot in `worker/upkeep.test.ts` and
+trigger's idempotence and shared admission in `worker/upkeep.test.ts` and
 `runner/pool.test.ts`, the sources, the reviewed-versions line and the
 record's form in `tests/upkeep.test.ts`, the comparisons in
 `runner/upkeep-changes.test.ts`, and the research child's web access in

@@ -119,7 +119,7 @@ collector and runner, written by `scripts/install-machine.mjs`:
 | `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's: `{account}` read by delegation (the Workspace service account key in `doppler`), or `{account, configDir}` with their own `gws` sign-in. |
 | `helpers` | Optional: `localServers` (local MCP servers Claude helpers may use) and `deniedTools` (tools to hide from them). |
 | `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App and `GMAIL_DELEGATION_KEY`, read with the read-only service token in `doppler-token` (mode 600). The collector gets only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
-| `concurrency`, `quickConcurrency` | Standard conversations at once (1–5, default 3) and extra quick-work slots (0–5, default 5). |
+| `concurrency` | All conversations share 1–11 places (default 9), with [memory admission](docs/session-capacity.md). |
 
 ## Conversations
 
@@ -230,8 +230,8 @@ or verification. Repository instructions own setup, checks and delivery.
   children receive them.
 - **Typing**: Enter sends and Shift+Enter starts a new line; on a phone,
   Return starts a new line and Send sends.
-- **Quick work** (email replies, unsubscribes) has its own slots and lighter
-  prompts, so it never waits behind long work.
+- **Quick work** (email replies, unsubscribes) uses lighter prompts and shares
+  capacity with other sessions.
 - **Bounds**: ten active standard, thirty quick and two upkeep conversations, 30 and
   60 starts an hour, 120 follow-ups per person per hour, 24 children per conversation, 12 master
   decisions a turn. At a safe native turn boundary the coordinator rotates when

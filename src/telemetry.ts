@@ -270,7 +270,7 @@ export const telemetryFieldsSchema = executionEventSchema
     feedbackMs: ms.optional(),
     heartbeatAgeMs: ms.optional(),
     conversationAgeMs: ms.optional(),
-    concurrency: z.number().int().min(1).max(5).optional(),
+    concurrency: z.number().int().min(1).max(11).optional(),
     host: machineIdSchema.optional(),
     browserOperation: z
       .enum(["lookup", "connect", "close", "sign_in"])
@@ -283,6 +283,8 @@ export const telemetryFieldsSchema = executionEventSchema
 export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
 // These diagnostics belong to local runner logs, not Worker span attributes.
 const logFieldsSchema = telemetryFieldsSchema.extend({
+  admission: z.enum(["open", "paused"]).optional(),
+  memoryPressure: z.enum(["normal", "warning", "critical", "unknown", "unsupported"]).optional(),
   contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
   contextFailure: contextFailureSchema.optional(),
   // The key path a runner's config failed on, never a value: identifier
@@ -326,6 +328,7 @@ const logEventSchema = z.enum([
   "runner_request_failed",
   "runner_request_recovered",
   "runner_started",
+  "runner_admission_changed",
   "runner_stopping",
   "runner_needs_inspection",
   "runner_connection_unavailable",

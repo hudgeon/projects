@@ -26,6 +26,7 @@ import { connectorAccess } from "./connectors";
 import { Failure } from "./native";
 import { pruneSaved, registry, savedRuns } from "./workspaces";
 import { runPool, type ClaimedRun } from "./pool";
+import { memoryAdmission } from "./memory-admission";
 import { readDocument } from "./documents";
 import { documentJobSchema } from "../src/document-model";
 import { installedRelease, loadConfig, type Config } from "./config";
@@ -646,22 +647,12 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       }
     })();
   };
-  // Claims carry documents; a full runner is not claiming, so it asks for them
-  // itself. The timer also keeps a full runner alive, as executors are detached.
-  const busy = setInterval(() => {
-    if (stopDocuments.aborted) return clearInterval(busy);
-    if (executors.size < config.concurrency + config.quickConcurrency) return;
-    const reserved = reserve();
-    if (!reserved) return;
-    void post("/api/runner/document", { runnerId }).then(
-      (result) => offered(true, result.document),
-      () => offered(true, null),
-    );
-  }, 3000);
+  // Serial check-ins continue while full or pressure-paused, carrying documents.
   try {
     await runPool({
       concurrency: config.concurrency,
-      quickConcurrency: config.quickConcurrency,
+      admit: memoryAdmission({changed: (admission, memoryPressure) =>
+        telemetry("runner", "runner_admission_changed", {admission, memoryPressure})}),
       signal: shutdown.signal,
       drain: draining.signal,
       adopted,
@@ -699,7 +690,6 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
         : launch,
     });
   } finally {
-    clearInterval(busy);
     await unlink(lock);
   }
 }

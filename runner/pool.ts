@@ -8,14 +8,12 @@ export type ClaimedRun = { run: Run; activity: unknown[]; person?: unknown; brow
 // Claims stay serial so a lost reply can retry the same durable reservation.
 // Native execution is concurrent; each conversation keeps its own controller,
 // journal, master/child IDs, browser capability and completion receipt.
-// Standard work uses at most `concurrency` slots. Quick work can use those
-// when free, plus `quickConcurrency` slots that standard work never takes.
-// Upkeep has one slot of its own, so the weekly cycle neither waits behind
-// long work nor takes a slot from it.
-export const UPKEEP_SLOTS = 1;
+// Every lane shares one ceiling. Memory pressure pauses new starts only;
+// active conversations and an updating runner's adopted executors keep running.
+export const MAX_CONCURRENCY = 11;
 export async function runPool(options: {
   concurrency: number;
-  quickConcurrency?: number;
+  admit?: () => Promise<boolean>;
   signal: AbortSignal;
   // Stop claiming; each conversation returns at its next pause between turns.
   drain?: AbortSignal;
@@ -31,16 +29,13 @@ export async function runPool(options: {
   onError: (error: unknown, claim?: ClaimedRun) => void;
   pollMs?: number;
 }) {
-  const quick = options.quickConcurrency ?? 0;
   if (
     !Number.isInteger(options.concurrency) ||
     options.concurrency < 1 ||
-    options.concurrency > 5
+    options.concurrency > MAX_CONCURRENCY
   )
-    throw Error("Runner concurrency must be between one and five.");
-  if (!Number.isInteger(quick) || quick < 0 || quick > 5)
-    throw Error("Runner quick concurrency must be between zero and five.");
-  const active = new Map<string, { task: Promise<void>; lane: Lane }>();
+    throw Error(`Runner concurrency must be between one and ${MAX_CONCURRENCY}.`);
+  const active = new Map<string, Promise<void>>();
   const controls = new Set<AbortController>();
   for (const item of options.adopted ?? []) {
     const task = item.done
@@ -48,7 +43,7 @@ export async function runPool(options: {
       .finally(() => {
         active.delete(item.id);
       });
-    active.set(item.id, { task, lane: item.lane });
+    active.set(item.id, task);
   }
   const stop = () => {
     for (const control of controls) control.abort("shutdown");
@@ -57,11 +52,6 @@ export async function runPool(options: {
   const waiting = options.drain
     ? AbortSignal.any([options.signal, options.drain])
     : options.signal;
-  // Resolves when claiming stops, so a full runner notices an update too.
-  const stopped = new Promise<void>((resolve) => {
-    if (waiting.aborted) resolve();
-    else waiting.addEventListener("abort", () => resolve(), { once: true });
-  });
   const pause = () =>
     delay(options.pollMs ?? 2000, undefined, {
       signal: waiting,
@@ -69,30 +59,18 @@ export async function runPool(options: {
   let failure: unknown;
   try {
     while (!waiting.aborted) {
-      const count = (lane: Lane) =>
-        [...active.values()].filter((item) => item.lane === lane).length;
-      const standard = count("standard"),
-        upkeep = count("upkeep");
-      const lanes: Lane[] =
-        active.size - upkeep >= options.concurrency + quick
-          ? []
-          : standard < options.concurrency
-            ? ["standard", "quick"]
-            : ["quick"];
-      if (upkeep < UPKEEP_SLOTS) lanes.push("upkeep");
-      if (!lanes.length) {
-        await Promise.race([
-          ...[...active.values()].map((item) => item.task),
-          stopped,
-        ]);
-        continue;
-      }
       try {
+        const admitted = await options.admit?.() ?? true;
+        if (waiting.aborted) break;
+        const lanes: Lane[] = active.size < options.concurrency && admitted
+          ? ["standard", "quick", "upkeep"] : [];
         const claim = await options.claim([...active.keys()], lanes);
         // A shutdown can arrive while the claim is in flight. Leave that saved
         // claim for this same runner's restart, without starting a native turn.
         if (waiting.aborted) break;
-        if (!claim) {
+        // Empty lanes are a check-in only, even with an older server that
+        // returns a recovery reservation. Keep it saved until admission opens.
+        if (!lanes.length || !claim) {
           if (options.once) break;
           await pause();
           continue;
@@ -112,7 +90,7 @@ export async function runPool(options: {
             active.delete(claim.run.id);
             controls.delete(control);
           });
-        active.set(claim.run.id, { task, lane: claim.run.lane ?? "standard" });
+        active.set(claim.run.id, task);
         if (options.once) break;
       } catch (error) {
         failure = error;
@@ -122,7 +100,7 @@ export async function runPool(options: {
       }
     }
     if (!(options.leave && options.drain?.aborted && !options.signal.aborted))
-      await Promise.all([...active.values()].map((item) => item.task));
+      await Promise.all(active.values());
     if (options.once && failure) throw failure;
   } finally {
     options.signal.removeEventListener("abort", stop);

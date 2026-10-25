@@ -11,7 +11,7 @@ test("invalid keys name the key path, including a key this schema does not know,
     root: "/srv/code",
     home: "/Users/owner",
     endpoint: "https://projects.example.com",
-    concurrency: 9,
+    concurrency: 12,
     projects: { "acme/secret-repo": { name: 42 } },
     helpers: { fullAccess: true, later: "a value" },
   });
@@ -45,4 +45,15 @@ test("configRepo names the shared configuration repository the way workRepo name
   assert.equal(schema.parse({ ...base, configRepo: "acme/agent-config" }).configRepo, "acme/agent-config");
   assert.equal(schema.parse(base).configRepo, undefined);
   assert.deepEqual(invalidKeys(schema.safeParse({ ...base, configRepo: "not a repository" }).error!.issues), ["configRepo"]);
+});
+
+test("one shared ceiling defaults to the former total and accepts legacy config without losing capacity", () => {
+  const base = {host: "studio", root: "/srv/code", home: "/Users/owner", endpoint: "https://projects.example.com"};
+  assert.equal(schema.parse(base).concurrency, 9);
+  assert.equal(schema.parse({...base, concurrency: 9}).concurrency, 9);
+  assert.equal(schema.parse({...base, concurrency: 3, quickConcurrency: 5}).concurrency, 9);
+  assert.equal(schema.parse({...base, concurrency: 1, quickConcurrency: 0}).concurrency, 2);
+  assert.equal(schema.parse({...base, quickConcurrency: 0}).concurrency, 4);
+  assert.equal("quickConcurrency" in schema.parse({...base, quickConcurrency: 0}), false);
+  assert.equal(schema.safeParse({...base, concurrency: 9, quickConcurrency: 5}).success, false);
 });

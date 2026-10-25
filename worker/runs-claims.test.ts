@@ -390,7 +390,7 @@ test("a conversation alarm detects disconnection without replacing its claim and
   }
 });
 
-test("quick work is claimed only into a free quick slot and has its own capacity", async () => {
+test("lane filters remain compatible and empty lanes pause new and recovery claims", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-lanes-"));
   const script = path.join(dir, "worker.mjs");
   await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
@@ -402,8 +402,20 @@ test("quick work is claimed only into a free quick slot and has its own capacity
     const big = await create("Refactor the importer");
     const reply = await create("Reply to Rob", "quick");
     const runner = randomUUID();
-    assert.equal((await db.claimRun(runner, [], ["quick"], "studio"))!.id, reply.id, "a full standard pool still takes quick work");
-    assert.equal(await db.claimRun(runner, [reply.id], ["quick"], "studio"), null, "standard work waits for a standard slot");
+    const paused = async () => {
+      const response = await mf.dispatchFetch("https://example.com/api/runner/claim", {
+        method: "POST", headers: {Authorization: `Bearer ${"r".repeat(64)}`, "Content-Type": "application/json"},
+        body: JSON.stringify({runnerId: runner, activeRunIds: [], lanes: []}),
+      });
+      assert.equal(response.status, 200, "empty offered lanes pass the HTTP boundary");
+      assert.equal((await response.json() as {run: Run | null}).run, null);
+    };
+    await paused();
+    assert.equal((await db.getRun(big.id))!.state, "queued");
+    assert.equal((await db.claimRun(runner, [], ["quick"], "studio"))!.id, reply.id, "an older runner can still filter lanes");
+    await paused(); // A paused check-in must not recover the saved reservation.
+    assert.equal((await db.claimRun(runner, [], ["standard", "quick", "upkeep"], "studio"))!.id, reply.id, "the reservation is retried intact after recovery");
+    assert.equal(await db.claimRun(runner, [reply.id], ["quick"], "studio"), null, "excluded lanes wait");
     assert.equal((await db.claimRun(runner, [reply.id], ["standard", "quick"], "studio"))!.id, big.id);
     assert.equal((await db.listRuns()).find((r) => r.id === reply.id)!.lane, "quick");
     // Ten standard conversations fill their bound; quick work can still start.

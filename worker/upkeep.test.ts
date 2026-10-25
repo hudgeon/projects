@@ -1,5 +1,5 @@
 // The upkeep lane in the Worker (worker/upkeep.ts, worker/settings.ts): the
-// weekly trigger, Run upkeep now, and the lane's own slot and capacity.
+// weekly trigger, Run upkeep now, and lane filtering and the active-upkeep bound.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -124,7 +124,7 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
   }
 });
 
-test("upkeep is claimed only by a runner offering its lane, into its own slot, with a capacity of its own", async () => {
+test("upkeep requires its lane to be offered and retains its active-conversation bound", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-upkeep-lane-")), script = await bundle(dir);
   const mf = await start(await options(script, dir, { ALLOWED_EMAILS: "owner@example.com", RUNNER_TOKEN: "r".repeat(64) }));
   try {
@@ -135,7 +135,7 @@ test("upkeep is claimed only by a runner offering its lane, into its own slot, w
     const big = await create("Refactor the importer");
     const runner = randomUUID();
     assert.equal((await db.claimRun(runner, [], undefined, "studio"))!.id, big.id, "a runner from before the lane, offering none, takes standard work");
-    assert.equal(await db.claimRun(runner, [big.id], ["standard", "quick"], "studio"), null, "upkeep waits for a runner with its slot free");
+    assert.equal(await db.claimRun(runner, [big.id], ["standard", "quick"], "studio"), null, "excluded upkeep work waits until its lane is offered");
     assert.equal((await db.claimRun(runner, [big.id], ["upkeep"], "studio"))!.id, cycle.id);
     assert.equal((await db.listRuns()).find((r) => r.id === cycle.id)!.lane, "upkeep");
     assert.equal((await db.latestRun("upkeep"))!.id, cycle.id);

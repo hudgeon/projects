@@ -5,6 +5,7 @@ import { z } from "zod";
 import { configSchema } from "../collector/config";
 import { helperPolicySchema } from "./connectors";
 import { contextConfigSchema } from "./context";
+import { MAX_CONCURRENCY } from "./pool";
 import { telemetry } from "../src/telemetry";
 
 const absolute = z.string().refine(path.isAbsolute);
@@ -12,9 +13,9 @@ const absolute = z.string().refine(path.isAbsolute);
 // its collector reads. Its paths default beside it.
 export const schema = configSchema
   .extend({
-    concurrency: z.number().int().min(1).max(5).default(3),
-    // Extra slots only quick work (such as unsubscribes) may use.
-    quickConcurrency: z.number().int().min(0).max(5).default(5),
+    concurrency: z.number().int().min(1).max(MAX_CONCURRENCY).optional(),
+    // Accept an older machine's config, preserving its total ceiling.
+    quickConcurrency: z.number().int().min(0).max(5).optional(),
     endpoint: z.url(),
     stateDir: absolute.optional(),
     worktreeRoot: absolute.optional(),
@@ -30,10 +31,14 @@ export const schema = configSchema
     // hide from them as Claude permission rules (mcp__server__tool).
     helpers: helperPolicySchema,
   })
-  .transform((config) => {
+  .refine((config) => config.quickConcurrency === undefined || (config.concurrency ?? 3) <= 5,
+    {path: ["concurrency"], message: "Legacy standard concurrency must be at most five."})
+  .transform(({quickConcurrency, ...config}) => {
     const base = path.join(config.home, ".local/share/project-overview");
     return {
       ...config,
+      concurrency: quickConcurrency === undefined ? config.concurrency ?? 9
+        : (config.concurrency ?? 3) + quickConcurrency + 1,
       stateDir: config.stateDir ?? path.join(base, "runner"),
       worktreeRoot: config.worktreeRoot ?? path.join(base, "worktrees"),
       masterCwd: config.masterCwd ?? config.root,

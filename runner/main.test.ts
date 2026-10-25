@@ -76,7 +76,7 @@ test("an update restarts the runner at once, and the new runner adopts the conve
   }
 });
 
-test("a runner fetches documents the owner opened through claims, and on its own while every slot is busy", {timeout: 60000}, async () => {
+test("runner check-ins deliver opened documents even while every shared place is busy", {timeout: 60000}, async () => {
   const dir = await fixture();
   const root = path.join(dir, "root"), stateDir = path.join(dir, "state"), bin = path.join(dir, "bin");
   await mkdir(root, {recursive: true});
@@ -90,7 +90,7 @@ test("a runner fetches documents the owner opened through claims, and on its own
   const job = (n: number) => ({id: String(n).repeat(64), lease: randomUUID(), repo: "acme/fixture", commit: "0123456789abcdef0123456789abcdef01234567", path: "mockups/screens.html"});
   const first = job(1), second = job(2);
   const hold = deferred();
-  const claims: {documents?: boolean; lanes?: string[]}[] = [], polls: unknown[] = [], delivered: {id: string; lease: string; content?: string}[] = [];
+  const claims: {documents?: boolean; lanes?: string[]}[] = [], delivered: {id: string; lease: string; content?: string}[] = [];
   let claimed = false, offered = false;
   const server = createServer(async (req, res) => {
     let body = "";
@@ -100,10 +100,10 @@ test("a runner fetches documents the owner opened through claims, and on its own
     if (req.url === "/api/runner/claim") {
       claims.push(input);
       if (!claimed) { claimed = true; return reply({run, activity: [], document: first}); }
+      if (!offered) { offered = true; return reply({document: second}); }
       return reply({});
     }
     if (req.url === "/api/runner/document") {
-      if (!input.id) { polls.push(input); if (offered) return reply({}); offered = true; return reply({document: second}); }
       delivered.push(input);
       return reply({accepted: true});
     }
@@ -113,16 +113,15 @@ test("a runner fetches documents the owner opened through claims, and on its own
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const config = path.join(dir, "machine.json");
-  await writeFile(config, JSON.stringify({host: "studio", root, home: dir, endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, tokenFile, stateDir, worktreeRoot: path.join(dir, "worktrees"), masterCwd: root, agents: ["claude"], concurrency: 1, quickConcurrency: 0}));
+  await writeFile(config, JSON.stringify({host: "studio", root, home: dir, endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, tokenFile, stateDir, worktreeRoot: path.join(dir, "worktrees"), masterCwd: root, agents: ["claude"], concurrency: 1}));
   const runner = spawn(process.execPath, ["--import", "tsx", "runner/main.ts", config], {stdio: "ignore", env: {...process.env, PATH: `${bin}:${process.env.PATH}`}});
   try {
     await waitFor(() => delivered.length === 2, 30000);
     assert.equal(claims[0].documents, true, "a new runner says it can fetch documents");
     assert.deepEqual(delivered.map((d) => [d.id, d.lease]), [[first.id, first.lease], [second.id, second.lease]]);
     for (const d of delivered) assert.equal(Buffer.from(d.content!, "base64").toString(), "<!doctype html><p>Page</p>");
-    assert.ok(polls.length >= 1, "a full runner asked on its own");
-    // Its standard and quick slots full, it claims only for the upkeep slot.
-    assert.ok(claims.slice(1).every((c) => JSON.stringify(c.lanes) === JSON.stringify(["upkeep"])), "it claimed no standard or quick work while full");
+    assert.ok(claims.length >= 2, "a full runner continues checking in for opened documents");
+    assert.ok(claims.slice(1).every((c) => c.lanes?.length === 0), "a full pool checks in without accepting any lane");
     assert.equal(runner.exitCode, null, "a full runner keeps running");
   } finally {
     hold.resolve();
@@ -176,7 +175,7 @@ test("a runner that rejects its config logs the offending keys beside the start 
   const config = path.join(dir, "machine.json");
   // A config written for a newer runner than this one (an unknown helpers
   // key) with a value out of range: both are named, no value is.
-  await writeFile(config, JSON.stringify({host: "studio", root: dir, home: dir, endpoint: "https://projects.example.com", agents: ["claude"], concurrency: 9, helpers: {fullAccess: true, later: {setting: "a secret value"}}}));
+  await writeFile(config, JSON.stringify({host: "studio", root: dir, home: dir, endpoint: "https://projects.example.com", agents: ["claude"], concurrency: 12, helpers: {fullAccess: true, later: {setting: "a secret value"}}}));
   const runner = spawn(process.execPath, ["--import", "tsx", "runner/main.ts", config], {stdio: ["ignore", "ignore", "pipe"]});
   let stderr = "";
   runner.stderr!.on("data", (chunk) => { stderr += chunk; });
