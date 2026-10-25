@@ -204,7 +204,7 @@ test("archive choices require browser authorization and survive snapshot replace
   } finally { await mf.dispose(); await rm(dir, {recursive: true, force: true}); }
 });
 
-test("conversation archives preserve active claims, receipts and history, with project filtering and legacy-index recovery", async () => {
+test("Done refuses active work and preserves finished receipts and history, with project filtering and legacy-index recovery", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-conversation-archive-"));
   const script = path.join(dir, "worker.mjs");
   await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
@@ -230,21 +230,22 @@ test("conversation archives preserve active claims, receipts and history, with p
       assert.equal((await archive(true, {Origin: origin, ...headers})).status, 401);
     assert.equal((await archive(true, {Cookie: browser.Cookie})).status, 403);
     const [archived, reported] = await Promise.all([archive(true), db.reportRun(owner, run.id, run.generation, progress, "studio")]);
-    assert.equal(archived.status, 200);
+    assert.equal(archived.status, 409, "running work cannot disappear from Today");
     assert.equal(reported, true);
     const kept = (await db.getRun(run.id))!;
-    assert.ok(kept.archivedAt);
+    assert.ok(!kept.archivedAt);
     assert.equal(kept.state, "running");
     assert.equal(kept.generation, claimed.generation);
     assert.deepEqual(kept.messages, claimed.messages);
     assert.deepEqual(kept.progress, progress);
-    assert.deepEqual(await db.listRuns(), []);
-    assert.deepEqual((await db.listRuns({archived: true, projectId: child.projectId})).map((r) => r.id), [run.id]);
+    assert.deepEqual((await db.listRuns()).map(r => r.id), [run.id]);
+    assert.deepEqual(await db.listRuns({archived: true, projectId: child.projectId}), []);
     assert.equal((await db.claimRun(owner, [], undefined, "studio"))!.id, run.id);
     assert.equal(await db.claimRun(randomUUID(), [], undefined, "studio"), null);
     assert.deepEqual((await db.getRun(run.id))!.messages, claimed.messages);
     assert.equal(await db.reportRun(owner, run.id, run.generation, {...progress, seq: 2, state: "completed", children: [{...child, state: "completed"}]}, "studio"), true);
-    assert.ok((await db.getRun(run.id))!.archivedAt, "a later receipt cannot unarchive the conversation");
+    assert.equal((await archive(true)).status, 200);
+    assert.ok((await db.getRun(run.id))!.archivedAt, "finished work can be marked Done");
     // Existing pre-feature directory summaries do not contain selected child projects.
     const storage = await mf.unsafeGetDurableObjectStorage("test", "Portfolio", {name: "test"});
     // ...nor the list title and status line added later.
@@ -283,7 +284,7 @@ test("conversation archives preserve active claims, receipts and history, with p
     assert.equal(followed.state, "queued");
     assert.equal(followed.messages.filter((m) => m.id === followUp.requestId).length, 1);
     assert.deepEqual((await db.listRuns()).map((r) => r.id).includes(run.id), true);
-    assert.equal((await archive(true)).status, 200);
-    assert.equal((await db.claimRun(owner, [], undefined, "studio"))!.id, run.id, "archiving queued work does not silently cancel it");
+    assert.equal((await archive(true)).status, 409, "queued work stays visible until stopped");
+    assert.equal((await db.claimRun(owner, [], undefined, "studio"))!.id, run.id);
   } finally { await mf.dispose(); await rm(dir, {recursive: true, force: true}); }
 });

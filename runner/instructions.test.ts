@@ -60,3 +60,10 @@ test("helpers and the master keep searches out of the home folder and ~/Library"
     assert.match(text, /Use a skill by its name from your skill list rather than searching for its files\./);
   }
 });
+
+test("routine drafts keep source reads and verification in one helper without weakening send approval", () => {
+  const text = masterInstructions(owner);
+  assert.match(text, /one helper the source read, drafting and saved-draft verification together/);
+  assert.match(text, /wording revisions or recipient corrections/);
+  assert.match(text, /send still needs Owner's explicit approval of that message/);
+});

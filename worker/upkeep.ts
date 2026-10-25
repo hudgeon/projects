@@ -4,7 +4,7 @@
 // show one (an open issue labelled `upkeep`). Its brief comes from the runner.
 import { telemetry } from "../src/telemetry";
 import { currentWork } from "../src/work-model";
-import { UPKEEP_CRON, upkeepRequestId, upkeepText, upkeepWeek, type UpkeepStart } from "../src/upkeep-model";
+import { UPKEEP_CRON, upkeepRequestId, upkeepText, upkeepWeek, type UpkeepStart, type UpkeepScheduleReceipt } from "../src/upkeep-model";
 import { deploymentOwner } from "./auth";
 import type { Portfolio } from "./index";
 
@@ -49,13 +49,34 @@ export async function startUpkeep(
   );
   return { id: run.id, started: "started" };
 }
+// One durable receipt for the latest scheduled check, including skips and failures.
+export function readUpkeepSchedule(storage: DurableObjectStorage): UpkeepScheduleReceipt | null {
+  storage.sql.exec("CREATE TABLE IF NOT EXISTS upkeep_schedule(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL)");
+  const row = storage.sql.exec<{payload: string}>("SELECT payload FROM upkeep_schedule WHERE id=1").toArray()[0];
+  return row ? JSON.parse(row.payload) as UpkeepScheduleReceipt : null;
+}
+export function saveUpkeepSchedule(storage: DurableObjectStorage, receipt: UpkeepScheduleReceipt) {
+  readUpkeepSchedule(storage);
+  storage.sql.exec("INSERT INTO upkeep_schedule(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload WHERE json_extract(excluded.payload,'$.scheduledAt')>=json_extract(upkeep_schedule.payload,'$.scheduledAt')", JSON.stringify(receipt));
+}
 // The Worker's weekly trigger: one cycle per ISO week, whenever in the week
 // it fires. A cron this Worker does not know starts nothing.
 export async function scheduledUpkeep(env: Env, at: number, cron?: string) {
   if (cron && cron !== UPKEEP_CRON) return;
   const store = env.PORTFOLIOS.getByName(env.PORTFOLIO_ID);
   const requestId = await upkeepRequestId(env.PORTFOLIO_ID, upkeepWeek(at));
-  const outcome = await startUpkeep(store, env, requestId, "schedule");
+  const receipt: UpkeepScheduleReceipt = { scheduledAt: at, observedAt: Date.now(), outcome: "checking" };
+  await store.saveUpkeepSchedule(receipt);
+  let outcome: UpkeepOutcome;
+  try {
+    outcome = await startUpkeep(store, env, requestId, "schedule");
+    await store.saveUpkeepSchedule({ ...receipt, observedAt: Date.now(),
+      outcome: "skipped" in outcome ? outcome.skipped : outcome.started,
+      ...("id" in outcome ? { runId: outcome.id } : {}) });
+  } catch (error) {
+    await store.saveUpkeepSchedule({ ...receipt, observedAt: Date.now(), outcome: "failed" });
+    throw error;
+  }
   telemetry(
     "worker",
     "upkeep_cycle",

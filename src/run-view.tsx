@@ -38,11 +38,10 @@ import {
   formatTokens,
   runDocuments,
   runTitle,
-  tokenLine,
   type DocumentLink,
 } from "./run-text";
 import { Restart } from "./restart";
-import { NowStatus, Time, agentName } from "./run-watch";
+import { NowStatus, RunMeasures, Time, agentName } from "./run-watch";
 import {
   ScreenshotButtons,
   ScreenshotPreviews,
@@ -976,7 +975,7 @@ export function ConversationPage({
       </p>
     );
   const active = activeRun(run.state);
-  const [label, tone] = runStates[run.state];
+  const [label, tone] = run.archivedAt && !active ? ["Done", "quiet"] : runStates[run.state];
   const stale =
     ["running", "cancelling"].includes(run.state) &&
     (run.connection === "disconnected" ||
@@ -998,7 +997,7 @@ export function ConversationPage({
   const children = run.progress?.children ?? [];
   const updates = run.updates ?? [];
   const error = follow.error ?? cancel.error ?? archive.error;
-  const answer = run.state === "blocked" || run.state === "failed";
+  const answer = !run.archivedAt && (run.state === "blocked" || run.state === "failed");
   // The keyboard shortcut submits too, so the button's rules apply here.
   const canSend =
     (!!reply.trim() || !!images.images.length) &&
@@ -1095,10 +1094,9 @@ export function ConversationPage({
           )}
         </div>
       )}
-      {!!run.archivedAt && active && (
-        <p className="subtle">
-          Marked Done while still working; it continues on{" "}
-          {run.host ? hostName(run.host) : "its machine"}.
+      {!!run.archivedAt && (
+        <p className={active ? "error" : "subtle"} role="status">
+          {active ? "This older conversation was marked Done while still working. Stop it above to end its work." : "Done. The messages below are historical; no action is waiting on you here. Sending a new message reopens it."}
         </p>
       )}
       <Thread run={run} />
@@ -1202,14 +1200,7 @@ export function ConversationPage({
             {run.progress?.masterFallback &&
               `, which took over when ${run.progress.masterFallback.from === "claude" ? "Claude" : "Codex"} ${MASTER_TAKEOVER[run.progress.masterFallback.reason]}`}
           </p>
-          {tokenLine(run.progress) && (
-            <p
-              className="subtle"
-              title="New tokens are fresh input and output; the rest is earlier context the apps read again from cache."
-            >
-              {tokenLine(run.progress)}
-            </p>
-          )}
+          <RunMeasures run={run} />
           {active && (
             <p className="subtle">
               {run.heartbeatAt ? (

@@ -16,7 +16,7 @@ import {
 } from "./run-view";
 import { BiggerWork, WorkDetail } from "./work-view";
 import { chatSearch, conversationSearch, workSearch, type Navigation } from "./navigation";
-import { ChatDetail, ChatRow, useChats } from "./chat-view";
+import { ChatDetail, ChatHealth, ChatRow, useChats } from "./chat-view";
 import { chatsToDo, type ChatView } from "./chat-model";
 
 // Today's count: the conversations waiting on the person, as the list shows
@@ -175,6 +175,7 @@ export function TodayView({
             </button>
           </div>
         )}
+        {!done && <ChatHealth now={now} />}
         {list.error && (
           <p role="alert" className="error">
             {errorText(list.error)}

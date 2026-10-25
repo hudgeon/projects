@@ -51,9 +51,11 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
     // Nothing to run for until a machine has published.
     await scheduled(friday);
     assert.deepEqual(await cycles(), []);
+    assert.equal((await db.upkeepSchedule())?.outcome, "no_snapshot");
     await db.publish({ ...closeSnapshot(friday - 60_000), work: { issues: [issue(7), issue(10, { upkeep: true, open: false }), issue(9, { title: "Agent upkeep", upkeep: true })], associations: [], associationsState: "ok" }, friction } as Parameters<Portfolio["publish"]>[0]);
     await scheduled(friday);
     const [first] = await cycles();
+    assert.deepEqual([(await db.upkeepSchedule())?.scheduledAt, (await db.upkeepSchedule())?.outcome, (await db.upkeepSchedule())?.runId], [friday, "started", first.id]);
     assert.equal(first.owner, "owner@example.com", "the deployment owner's, as nobody asked for it");
     assert.equal(first.workIssue, 9, "linked to the open standing issue labelled upkeep");
     assert.equal(first.id, await upkeepRequestId("test", upkeepWeek(friday)));
@@ -65,14 +67,19 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
     await scheduled(friday + DAY);
     await scheduled(friday + 2 * DAY, "0 7 * * 2");
     assert.equal((await cycles()).length, 1);
+    assert.equal((await db.upkeepSchedule())?.outcome, "exists");
     // The next week waits while a cycle is still active, then starts its own.
     await scheduled(friday + 7 * DAY);
     assert.equal((await cycles()).length, 1);
     const owner = randomUUID();
     assert.equal((await db.claimRun(owner, [], ["upkeep"], "studio"))!.id, first.id);
     await finish(owner, first);
+    const timed = (await db.getRun(first.id))!;
+    assert.ok(timed.startedAt && timed.finishedAt && timed.finishedAt >= timed.startedAt);
     await scheduled(friday + 7 * DAY);
     const second = (await cycles())[1];
+    await db.saveUpkeepSchedule({ scheduledAt: friday, observedAt: Date.now(), outcome: "failed" });
+    assert.equal((await db.upkeepSchedule())?.runId, second.id, "an old delayed trigger cannot replace newer evidence");
     assert.equal(second.id, await upkeepRequestId("test", upkeepWeek(friday + 7 * DAY)));
     await finish(owner, (await db.claimRun(owner, [], ["upkeep"], "studio"))!);
     // Run upkeep now: a cycle of its own for the deployment owner, whoever asks.

@@ -1,6 +1,7 @@
 import { ago } from "./model";
 import type { Run } from "./run-model";
-import { watchText } from "./run-text";
+import { runMeasures } from "./run-measures";
+import { tokenLine, watchText } from "./run-text";
 
 export function Time({ at }: { at: number }) {
   return (
@@ -62,4 +63,21 @@ export function NowStatus({
       </p>
     </>
   );
+}
+
+// Times are wall-clock request-to-reply observations, not agent runtime or acceptance.
+export function RunMeasures({ run }: { run: Run }) {
+  const m = runMeasures(run);
+  const duration = (ms: number) => ms < 60_000 ? `${Math.round(ms / 1000)} sec` : `${Math.round(ms / 60_000)} min`;
+  return <section aria-label="Conversation measures">
+    <h4>Conversation measures</h4>
+    <p className="subtle">
+      First reply: {m.firstReplyMs === null ? "not yet recorded" : duration(m.firstReplyMs)}
+      {m.latestReplyMs !== null && ` · latest request to reply: ${duration(m.latestReplyMs)}`}
+      {` · ${m.followUps} follow-up messages · ${m.helpers} helpers`}
+      {m.usageObserved && ` · ${m.turns} native turns with usage recorded`}
+    </p>
+    <p className="subtle">Follow-ups include approvals and new requests. A reply may report a blocker; these measures do not prove delivery or acceptance.</p>
+    {tokenLine(run.progress) && <p className="subtle" title="New tokens are fresh input and output; cached tokens are earlier context read again.">{tokenLine(run.progress)}</p>}
+  </section>;
 }

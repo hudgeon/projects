@@ -85,3 +85,15 @@
   color: #153b56;
   font-weight: 650;
 }
+
+.chat-health {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #b87832;
+  border-radius: 6px;
+  background: #fff8ed;
+  color: #65441f;
+  font-size: 13px;
+}
+.chat-health h2 { margin: 0; font-size: 14px; }
+.chat-health p { margin: 8px 0; }

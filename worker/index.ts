@@ -16,7 +16,7 @@ import { InboxRequests, inboxRoutes, keepInboxes, overviewInboxes } from "./inbo
 import { Sessions } from "./sessions";
 import { Documents } from "./documents";
 import { settingsRoutes } from "./settings";
-import { scheduledUpkeep } from "./upkeep";
+import { readUpkeepSchedule, saveUpkeepSchedule, scheduledUpkeep } from "./upkeep";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
 import { startInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
@@ -79,15 +79,13 @@ export class Portfolio extends DurableObject<Env> {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS archive_entries (key TEXT PRIMARY KEY, payload TEXT NOT NULL)",
     );
-    // Closes were keyed by an older work ID before work items became issues.
     this.ctx.storage.sql.exec("DROP TABLE IF EXISTS closes");
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS issue_closes (issue INTEGER PRIMARY KEY, requested INTEGER NOT NULL, email TEXT NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
     );
   }
-  // Each machine's collector publishes its own snapshot. The first machine in
-  // order that published in the last five minutes also reads the inbox and
-  // work items and applies Mark done and inbox requests.
+  upkeepSchedule() { return readUpkeepSchedule(this.ctx.storage); }
+  saveUpkeepSchedule(receipt: import("../src/upkeep-model").UpkeepScheduleReceipt) { saveUpkeepSchedule(this.ctx.storage, receipt); }
   collectorDuties(from: string) {
     return this.machines.collectorDuties(from);
   }
@@ -201,8 +199,6 @@ export class Portfolio extends DurableObject<Env> {
       snapshot.host,
       Date.now(),
     );
-    // The machine on duty keeps its last inbox reads through a scan that
-    // could not learn it was on duty (worker/inbox.ts).
     const last = this.collectorDuties(snapshot.host)
       ? this.ctx.storage.sql.exec<{ payload: string }>("SELECT payload FROM snapshots WHERE host=?", snapshot.host).toArray()[0]
       : undefined;
@@ -673,7 +669,8 @@ export async function handle(
       let input;
       try { input = runArchiveSchema.parse(await readJson(request, 512)); }
       catch { return Response.json({error: "Invalid archive request"}, {status: 400}); }
-      const run = await trace("conversation.archive", {runId: id}, () => store.archiveRun(id, input.archived));
+      const run = await trace("conversation.archive", {runId: id}, async () => await store.archiveRun(id, input.archived));
+      if (run === "active") return Response.json({error: "Stop this conversation and wait for its machine to confirm before marking it Done."}, {status: 409});
       return Response.json(run ? {run} : {error: "Conversation not found"}, {status: run ? 200 : 404});
     }
     try {

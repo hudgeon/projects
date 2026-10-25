@@ -261,7 +261,7 @@ async function main() {
       const response = await fetch(new URL("/api/chats/read", site.endpoint), {
         method: "POST", headers: site.headers, body: JSON.stringify(read), redirect: "error", signal: AbortSignal.timeout(20_000),
       });
-      log("chat_read_published", { source: "slack", status: response.status, items: read.items.length });
+      log("chat_read_published", { source: "slack", status: response.status, state: read.state, items: read.items.length });
     } catch {
       log("chat_read_failed", { source: "slack" });
     }

@@ -447,6 +447,8 @@ export type Run = {
   createdAt: number;
   updatedAt: number;
   heartbeatAt: number;
+  startedAt?: number | null;
+  finishedAt?: number | null;
   // The machine that claimed it; its follow-ups stay there. Unset before a
   // claim.
   host?: RunnerHost;
@@ -471,6 +473,8 @@ export type RunSummary = Pick<
   | "createdAt"
   | "updatedAt"
   | "heartbeatAt"
+  | "startedAt"
+  | "finishedAt"
   | "archivedAt"
   | "workIssue"
   | "emailThread"
@@ -479,6 +483,7 @@ export type RunSummary = Pick<
   | "owner"
 > & {
   title: string;
+  measures?: import("./run-measures").RunMeasures;
   projectIds?: string[];
   // Index summaries saved before these fields existed are refreshed on load.
   status?: string;
@@ -502,8 +507,8 @@ export const activeRun = (state: RunState) =>
   ["queued", "running", "cancelling"].includes(state);
 // The user's move: finished work to review, or running work only they can
 // unblock.
-export const awaitsYou = (run: Pick<RunSummary, "state" | "needsYou" | "stuck">) =>
-  !activeRun(run.state) || !!run.needsYou || !!run.stuck;
+export const awaitsYou = (run: Pick<RunSummary, "state" | "needsYou" | "stuck" | "archivedAt">) =>
+  !run.archivedAt && (!activeRun(run.state) || !!run.needsYou || !!run.stuck);
 export const RUNNER_STALE_MS = 45_000;
 // A later machine in the owner's order starts new conversations only once
 // every earlier machine's runner has been silent this long. An idle runner

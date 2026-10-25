@@ -112,6 +112,28 @@ export function readProblem(read: ChatReadView, now: number) {
     return `This list may be out of date: ${name} was last read ${ago(read.observedAt, now).toLowerCase()} on ${machine}.`;
   return null;
 }
+// A successful upload is not a successful source read. Keep gaps visible in Today.
+export function ChatHealth({ now }: { now: number }) {
+  const query = useChats();
+  const gaps = (query.data?.reads ?? []).filter((r) => readProblem(r, now));
+  if (!gaps.length && !query.error) return null;
+  return (
+    <section className="chat-health" aria-label="Message coverage" role="status">
+      <h2>Message coverage needs attention</h2>
+      {query.error && <p>{errorText(query.error)} Message coverage could not be checked.</p>}
+      {gaps.map((read) => (
+        <p key={read.source}>
+          {readProblem(read, now)}{" "}
+          {read.lastHealthyAt
+            ? `Last successful read ${ago(read.lastHealthyAt, now).toLowerCase()}.`
+            : "No successful read is recorded."}
+        </p>
+      ))}
+      <Link to="/" search={{ view: "inbox" }}>Check message connections →</Link>
+    </section>
+  );
+}
+
 export function ChatDetail({
   chatKey,
   back,

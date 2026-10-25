@@ -52,7 +52,7 @@ export function ConversationRow({
   selected?: boolean;
 }) {
   const ownerLabel = useOwnerLabel();
-  const [label, tone] = run.stuck && !run.needsYou ? ["May be stuck", "warning"] : runStates[run.needsYou ? "blocked" : run.state];
+  const [label, tone] = run.archivedAt ? ["Done", "quiet"] : run.stuck && !run.needsYou ? ["May be stuck", "warning"] : runStates[run.needsYou ? "blocked" : run.state];
   const projects = run.projectIds ?? (run.projectId ? [run.projectId] : []);
   const meta = [
     ownerLabel(run.owner),

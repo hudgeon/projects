@@ -116,7 +116,7 @@ test("five-minute summaries survive alarms, duplicate receipts, restart and disc
     portfolio = await store();
     await (await object()).triggerAlarm();
     assert.equal((await portfolio.getRun(runId))?.updates?.length, 1);
-    await portfolio.archiveRun(runId, true);
+    assert.equal(await portfolio.archiveRun(runId, true), "active");
     await makeDue(true);
     await (await object()).triggerAlarm();
     run = (await portfolio.getRun(runId))!;

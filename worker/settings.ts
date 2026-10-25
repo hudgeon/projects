@@ -6,7 +6,7 @@ import { trace } from "./telemetry";
 import { startUpkeep, type UpkeepStore } from "./upkeep";
 import type { Portfolio } from "./index";
 
-type SettingsStore = UpkeepStore & Pick<DurableObjectStub<Portfolio>, "rate">;
+type SettingsStore = UpkeepStore & Pick<DurableObjectStub<Portfolio>, "rate" | "upkeepSchedule">;
 export async function settingsRoutes(
   request: Request,
   store: SettingsStore,
@@ -15,7 +15,12 @@ export async function settingsRoutes(
 ): Promise<Response | null> {
   const { pathname } = new URL(request.url);
   if (pathname !== "/api/upkeep") return null;
-  const view = async () => ({ latest: await store.latestRun("upkeep"), schedule: UPKEEP_SCHEDULE });
+  const view = async () => {
+    const scheduled = await store.upkeepSchedule();
+    const run = scheduled?.runId ? await store.getRun(scheduled.runId) : null;
+    return { latest: await store.latestRun("upkeep"), schedule: UPKEEP_SCHEDULE, scheduled,
+      scheduledRun: run ? { id: run.id, state: run.state, createdAt: run.createdAt, updatedAt: run.updatedAt, startedAt: run.startedAt, finishedAt: run.finishedAt } : null };
+  };
   if (request.method === "GET") return Response.json(await view());
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   if (!(await store.rate(`upkeep:${caller}`, 10, 3600_000)))

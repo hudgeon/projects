@@ -113,6 +113,7 @@ test("a resumed coordinator gets only what is new to it; a follow-up skips the u
     assert.match(first, /Current user conversation \(including any queued feedback\)/);
     assert.match(second, /Nothing new in the conversation since your last decision\./);
     assert.doesNotMatch(second, /Current user conversation|You are the user's Projects master/);
+    assert.doesNotMatch(second, /Active work \(check the timestamps/, "the same immutable snapshot is not resent");
     assert.match(second, /FIRST-CHILD-REPORT/, "the returned child comes in full");
     // A follow-up: the same session hears the new message only.
     const followUp: RunMessage = {id: randomUUID(), role: "user", text: "NEW-FOLLOW-UP", at: Date.now(), delivery: "queued"};

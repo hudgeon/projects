@@ -118,3 +118,27 @@ conversations validate a threshold, as the 0.5 cutoff was validated for
 project review. `npm run context:replay -- checks`
 labels and scores them (see the quality loop in
 [context-selection.md](context-selection.md)).
+
+## Current work and conversation measures
+
+Today and the canonical conversation index distinguish current conversations
+from Done history. Local runner journals keep the last execution result and
+are not the current-work list. Reviews must reconcile the live current and
+Done lists by conversation ID before reporting blockers. Done labels historical
+results as Done, removes them from waiting counts, and refuses queued, running
+or stopping work until its machine confirms it stopped. Sending a new message
+explicitly reopens a finished conversation.
+
+Conversation Details and list summaries carry request-to-first-reply and
+latest-request-to-reply time, follow-up messages, helper count, native turns
+with reported usage, and fresh/cached/output tokens. Reply times come from
+message timestamps, not archival or heartbeat timestamps. Follow-ups include
+approvals and new requests, so they are not automatically classified as
+corrections or failures. Replies may report blockers; completion and customer
+acceptance still require their own evidence. Historical usage coverage may be
+partial. These measures do not clip cumulative session counts to a day.
+
+The coordinator sends its immutable active-work snapshot once per unchanged
+brief. A changed snapshot or fresh coordinator receives it again. Routine
+drafts delegate source reading, drafting and saved-draft verification together;
+wording revisions reuse the same helper and verified facts where appropriate.

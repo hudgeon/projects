@@ -13,6 +13,7 @@ import {
   type RunListOptions,
   type MessageInput,
 } from "../src/run-model";
+import { runMeasures } from "../src/run-measures";
 import { decodeScreenshots, type ScreenshotInput } from "../src/screenshot-model";
 import { UPKEEP_ACTIVE_LIMIT } from "../src/upkeep-model";
 import { latestPlan, runTitle, statusLine } from "../src/run-text";
@@ -38,12 +39,15 @@ const summary = (run: Run): RunSummary => ({
   createdAt: run.createdAt,
   updatedAt: run.updatedAt,
   heartbeatAt: run.heartbeatAt,
+  startedAt: run.startedAt,
+  finishedAt: run.finishedAt,
   workIssue: run.workIssue,
   emailThread: run.emailThread ?? null,
   lane: run.lane ?? "standard",
   host: run.host,
   owner: run.owner,
   title: runTitle(run),
+  measures: runMeasures(run),
   status: statusLine(run),
   remaining: activeRun(run.state)
     ? (latestPlan(run)?.remaining.length ?? null)
@@ -160,7 +164,7 @@ export class Runs {
       // its full summary.
       for (const row of this.storage.sql
         .exec<{ id: string }>(
-          "SELECT id FROM conversation_index WHERE json_type(payload,'$.projectIds') IS NULL OR json_type(payload,'$.status') IS NULL",
+          "SELECT id FROM conversation_index WHERE json_type(payload,'$.projectIds') IS NULL OR json_type(payload,'$.status') IS NULL OR json_type(payload,'$.measures') IS NULL",
         )
         .toArray()) {
         const record = await this.stub(row.id).record();
@@ -319,10 +323,10 @@ export class Runs {
     await this.stub(id).cancel(id);
     return (await this.get(id))!;
   }
-  async archive(id: string, archived: boolean) {
+  async archive(id: string, archived: boolean): Promise<Run | "active" | null> {
     if (!(await this.get(id))) return null;
-    await this.stub(id).archive(id, archived);
-    return this.get(id);
+    const result = await this.stub(id).archive(id, archived);
+    return result === "active" ? result : this.get(id);
   }
   claim(
     owner: string,

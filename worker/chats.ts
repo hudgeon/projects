@@ -24,7 +24,7 @@ import type { Portfolio } from "./index";
 const SKEW_MS = 10 * 60_000;
 // Marks outlive their items a while, so a gap in reads keeps what was done.
 const KEEP_MARKS_MS = 30 * 86400_000;
-type Stored = Omit<ChatRead, "items"> & { host: string; items: (ChatItem & { key: string })[] };
+type Stored = Omit<ChatRead, "items"> & { host: string; lastHealthyAt?: number; problemSince?: number; items: (ChatItem & { key: string })[] };
 type MarkRow = { key: string; holder: string | null; handed_by: string | null; handed_at: number | null; done_at: number | null };
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 // An opaque key, so links and requests carry no names or IDs from the source.
@@ -47,7 +47,14 @@ export class Chats {
     const items = await Promise.all(
       read.items.map(async (item) => ({ ...item, key: await itemKey(read.source, owner, item.id) })),
     );
-    const stored: Stored = { ...read, owner, host, items };
+    const previous = this.reads().find((r) => r.source === read.source && r.owner === owner);
+    const stored: Stored = {
+      ...read, owner, host, items,
+      ...(read.state === "ok"
+        ? { lastHealthyAt: read.observedAt }
+        : { lastHealthyAt: previous?.lastHealthyAt ?? (previous?.state === "ok" ? previous.observedAt : undefined),
+            problemSince: previous?.problemSince ?? read.observedAt }),
+    };
     const accepted = this.storage.sql
       .exec(
         "INSERT INTO chat_reads(source,owner,observed,payload) VALUES(?,?,?,?) ON CONFLICT(source,owner) DO UPDATE SET observed=excluded.observed,payload=excluded.payload WHERE excluded.observed > chat_reads.observed RETURNING owner",
@@ -95,7 +102,7 @@ export class Chats {
     return {
       reads: reads
         .filter((read) => same(read.owner, viewer))
-        .map(({ source, observedAt, state, problem, host }) => ({ source, observedAt, state, host, ...(problem ? { problem } : {}) })),
+        .map(({ source, observedAt, state, problem, host, lastHealthyAt, problemSince }) => ({ source, observedAt, state, host, lastHealthyAt, problemSince, ...(problem ? { problem } : {}) })),
       items: items.sort((a, b) => b.at - a.at),
     };
   }

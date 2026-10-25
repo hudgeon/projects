@@ -269,3 +269,13 @@ passing on the default branch.
 The brief states this (rule 13), the master names the guard when it
 dispatches the change child, and the row records it. A kept change's guard
 stays, listed in every cycle's brief.
+
+## Schedule receipts
+
+Settings distinguishes the latest conversation (including manual cycles) from
+the latest scheduled check. Each scheduled invocation durably records its due
+time, observation time, outcome and associated conversation ID, including skips
+and failures. Old delayed invocations cannot replace newer schedule evidence.
+Settings links the associated cycle's current state and last-update time; an
+unrecorded or overdue check is not displayed as a verified run. Receipts start
+with this release: no historical success is inferred or backfilled.

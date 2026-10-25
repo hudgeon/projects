@@ -100,6 +100,8 @@ export type ChatView = Omit<ChatItem, "text"> & {
 };
 export type ChatReadView = Pick<ChatRead, "source" | "observedAt" | "state" | "problem"> & {
   host: string;
+  lastHealthyAt?: number;
+  problemSince?: number;
 };
 export type ChatList = { reads: ChatReadView[]; items: ChatView[] };
 

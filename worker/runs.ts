@@ -351,8 +351,6 @@ export class Conversation extends DurableObject<Env> {
       throw Error(
         "Wait for its machine to confirm it stopped before sending a follow-up.",
       );
-    // Done is a visibility choice. A new message brings the conversation back
-    // to the current list rather than steering work nobody can see.
     const reopened = !!run.archivedAt;
     this.storage.transactionSync(() => {
       if (reopened) run.archivedAt = null;
@@ -366,7 +364,6 @@ export class Conversation extends DurableObject<Env> {
         ...(screenshots.length ? { screenshots } : {}),
       });
       run.updatedAt = Date.now();
-      // Feedback never replaces the current claim or starts a second executor.
       if (!activeRun(run.state)) this.nextGeneration(run);
       this.save(run);
     });
@@ -389,6 +386,7 @@ export class Conversation extends DurableObject<Env> {
     run.state = "queued";
     run.updatedAt = Date.now();
     run.heartbeatAt = 0;
+    run.startedAt = run.finishedAt = null;
     run.nextUpdateAt = null;
     delete run.connection;
     run.progress = run.progress
@@ -404,10 +402,9 @@ export class Conversation extends DurableObject<Env> {
   archive(id: string, archived: boolean) {
     const run = this.get(id);
     if (!run) throw Error("Conversation not found.");
+    if (archived && activeRun(run.state)) return "active" as const;
     if (!!run.archivedAt === archived) return run;
     run.archivedAt = archived ? Date.now() : null;
-    // Archiving changes visibility only. Keep claims, generation, timestamps,
-    // messages and execution receipts intact, including while work is running.
     this.save(run);
     telemetry(
       "conversation",
@@ -450,7 +447,7 @@ export class Conversation extends DurableObject<Env> {
     const run = this.get(id);
     if (!run) throw Error("Conversation not found.");
     const previousState = run.state;
-    if (run.state === "queued") run.state = "cancelled";
+    if (run.state === "queued") { run.state = "cancelled"; run.finishedAt = Date.now(); }
     else if (run.state === "running") run.state = "cancelling";
     run.updatedAt = Date.now();
     this.save(run);
@@ -481,8 +478,6 @@ export class Conversation extends DurableObject<Env> {
       .toArray()[0];
     if (!row) return null;
     const run = JSON.parse(row.payload) as Run;
-    // A terminal receipt can race with new feedback. Keep its generation and
-    // owner until acknowledged, then resume the confirmed master on this claim.
     if (run.progress && run.progress.state !== "running")
       this.nextGeneration(run);
     const pendingAt = run.messages
@@ -499,6 +494,8 @@ export class Conversation extends DurableObject<Env> {
         Math.min(...(pendingAt.length ? pendingAt : [run.updatedAt])),
     );
     run.state = "running";
+    run.startedAt ??= Date.now();
+    run.finishedAt = null;
     run.connection = "connected";
     run.host = host;
     run.updatedAt = run.heartbeatAt = Date.now();
@@ -607,6 +604,7 @@ export class Conversation extends DurableObject<Env> {
     run.state = state;
     run.connection = "connected";
     run.updatedAt = run.heartbeatAt = Date.now();
+    run.finishedAt = activeRun(state) ? null : run.updatedAt;
     if (!activeRun(state))
       run.messages.push({
         id: `${id}:${generation}:result`,

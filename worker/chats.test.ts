@@ -74,6 +74,17 @@ test("each person's Slack and Teams items: the newest read wins, lists carry no 
     assert.equal((await post("/api/chats/read", read(now + 1000, now, { owner: "stranger@example.com" }), { Authorization: collector })).status, 400);
     assert.equal((await post("/api/chats/read", read(now - 3600_000), { Authorization: collector })).status, 400);
     assert.equal((await post("/api/chats/read", read(now + 1000), them)).status, 401, "a signed-in session posts no reads");
+    // Transport success never resets the last actual successful source read.
+    await post("/api/chats/read", read(now + 1500, now, {source: "teams"}), {Authorization: collector});
+    await post("/api/chats/read", read(now + 2500, now, {source: "teams", state: "signed-out", items: []}), {Authorization: collector});
+    await post("/api/chats/read", read(now + 3500, now, {source: "teams", state: "signed-out", items: []}), {Authorization: collector});
+    let health = (await list(me)).reads.find(r => r.source === "teams")!;
+    assert.deepEqual([health.lastHealthyAt, health.problemSince, health.observedAt], [now + 1500, now + 2500, now + 3500]);
+    assert.equal((await post("/api/chats/read", read(now + 2000, now, {source: "teams"}), {Authorization: collector})).status, 409);
+    assert.equal((await list(me)).reads.find(r => r.source === "teams")!.lastHealthyAt, now + 1500);
+    await post("/api/chats/read", read(now + 4500, now, {source: "teams", items: []}), {Authorization: collector});
+    health = (await list(me)).reads.find(r => r.source === "teams")!;
+    assert.deepEqual([health.lastHealthyAt, health.problemSince], [now + 4500, undefined]);
     // Done holds until a newer message.
     const act = (as: Record<string, string>, input: object) => post("/api/chats/act", { key, ...input }, as);
     assert.equal((await act(them, { action: "done" })).status, 404, "only its holder changes it");

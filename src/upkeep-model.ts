@@ -8,6 +8,28 @@ import { FRICTION_CATEGORIES, FRICTION_DAYS, FRICTION_SIGNS, frictionAppSchema, 
 import { machineIdSchema } from "./telemetry";
 export const UPKEEP_CRON = "0 18 * * 5";
 export const UPKEEP_SCHEDULE = "Fridays at 18:00 UTC";
+export type UpkeepScheduleReceipt = {
+  scheduledAt: number;
+  observedAt: number;
+  outcome: "checking" | "started" | "exists" | "active" | "no_owner" | "no_machine" | "no_snapshot" | "failed";
+  runId?: string;
+};
+export const upkeepOutcomeLabel = (outcome: UpkeepScheduleReceipt["outcome"]) => ({
+  checking: "check in progress", started: "cycle started", exists: "cycle already recorded", active: "earlier cycle still active",
+  no_owner: "no deployment owner configured", no_machine: "no connected machine", no_snapshot: "no inventory available", failed: "check failed",
+})[outcome];
+export function upkeepScheduleProblem(receipt: UpkeepScheduleReceipt | null, now: number) {
+  if (!receipt) return "No scheduled check has been recorded yet; the schedule is not verified.";
+  const due = new Date(now);
+  due.setUTCHours(18, 0, 0, 0);
+  due.setUTCDate(due.getUTCDate() - (due.getUTCDay() + 2) % 7);
+  if (due.getTime() > now) due.setUTCDate(due.getUTCDate() - 7);
+  if (receipt.scheduledAt < due.getTime() && now > due.getTime() + 10 * 60_000)
+    return "The latest weekly scheduled check has not been recorded.";
+  if (["failed", "no_owner", "no_machine", "no_snapshot", "checking"].includes(receipt.outcome))
+    return `The scheduled check did not confirm a cycle started (${upkeepOutcomeLabel(receipt.outcome)}).`;
+  return null;
+}
 // Active upkeep conversations at once: the week's, and a follow-up to an
 // earlier one.
 export const UPKEEP_ACTIVE_LIMIT = 2;

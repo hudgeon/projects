@@ -63,7 +63,7 @@ export async function openCoordinator(
   const upkeep = o.run.lane === "upkeep" ? `\n${await upkeepBrief(o)}` : "";
   const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : upkeep}`;
   const briefHash = createHash("sha256")
-    .update(stableBrief)
+    .update(stableBrief + JSON.stringify(activityBrief(o.activity, o.run.projectId)))
     .digest("hex")
     .slice(0, 24);
   const projectBrief = (...turn: ProjectTurn) =>
@@ -74,7 +74,7 @@ export async function openCoordinator(
   // Quick work skips the repository activity dump: it is most of a first turn's
   // input and only matters when choosing where code changes can safely go.
   const brief = (full: boolean) =>
-    `${workLine}${full ? stableBrief : "A follow-up turn in this conversation; your instructions and the registered projects are unchanged."}\n${o.run.lane === "quick" ? "" : `Active work (check the timestamps; gaps are unknown, not clean): ${JSON.stringify(activityBrief(o.activity, o.run.projectId))}\n`}Previous children: ${full && s.contextPlan ? s.contextPlan.children : childContext(j.progress.children, full ? 6 : 2)}`;
+    `${workLine}${full ? stableBrief : "A follow-up turn in this conversation; your instructions and the registered projects are unchanged."}\n${o.run.lane === "quick" || !full ? "" : `Active work (check the timestamps; gaps are unknown, not clean): ${JSON.stringify(activityBrief(o.activity, o.run.projectId))}\n`}Previous children: ${full && s.contextPlan ? s.contextPlan.children : childContext(j.progress.children, full ? 6 : 2)}`;
   // A coordinator whose session grew large hands over to a fresh one.
   const rotate = () => {
     if (!j.progress.masterSessionId) {

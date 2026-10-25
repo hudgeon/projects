@@ -100,3 +100,13 @@ person's.
 - What waits is kept in an owner-only `chats-teams-….json` per profile beside
   `machine.json`, so a restart loses nothing; messages from before the watcher
   first ran are not read.
+
+## Coverage in Today
+
+Today shows failed or stale chat reads even when there are no message items.
+A successful collector upload does not mean Teams was read successfully. The
+Worker retains the last fully successful read time and the start of the
+current failure interval; repeated signed-out uploads do not reset them. On
+upgrade, historical successful read times are unknown until a healthy read is
+observed. Sign in again in the named machine's existing reader profiles to
+restore coverage. New Graph permissions remain a separately approved operation.
