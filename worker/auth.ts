@@ -108,6 +108,7 @@ export function browserMay(pathname: string, method: string) {
   if (
     /^\/api\/machines(?:\/|$)/.test(pathname) ||
     pathname === "/api/upkeep" ||
+    pathname === "/api/work-review" ||
     pathname === "/api/me"
   )
     return read;

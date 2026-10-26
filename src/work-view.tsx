@@ -1,3 +1,6 @@
+import { EvidenceText } from "./work-evidence-text";
+import { workAssessment, assessmentSourceGap, type Assessment } from "./work-assessment";
+import { AssessmentSummary, AssessmentDetails } from "./work-assessment-view";
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -62,6 +65,7 @@ export type Row = {
   recent: boolean;
   live: boolean;
   emailAttention: boolean;
+  assessment?: Assessment;
 };
 const recentWindow = RECENT_WORK_DAYS * 86400_000;
 const onBranch = (branch: string | null): branch is string =>
@@ -123,8 +127,9 @@ export function rows(
   now: number,
   closes: Close[] = [],
 ): Row[] {
+  const inboxes = currentInboxes(snapshots);
   const emailReview = new Set(
-    currentInboxes(snapshots).flatMap((inbox) =>
+    inboxes.flatMap((inbox) =>
       inboxRows(inbox, work.issues)
         .filter((r) => !r.reviewed)
         .flatMap((r) => r.linked.map((i) => i.number)),
@@ -181,6 +186,12 @@ export function rows(
       recent: lastActive !== null && now - lastActive <= recentWindow,
       live: sessions.some((s) => s.live),
       emailAttention: emailReview.has(issue.number),
+      assessment: workAssessment(issue, {
+        emailAttention: emailReview.has(issue.number),
+        unavailable: assessmentSourceGap(issue, snapshots, work.observedAt, now),
+        deliveryAt: Math.max(0, ...pulls.map(p => p.updatedAt), ...snapshots.flatMap(s => s.projects.flatMap(p => p.latestMerge?.workIssues?.includes(issue.number) ? [p.latestMerge.mergedAt] : []))),
+        nativePendingAt: Math.max(0, ...sessions.filter(s => s.recordReview === "unverified").map(s => s.updatedAt)),
+      }, now),
     };
   });
 }
@@ -296,6 +307,8 @@ export function agenda(row: Row): Agenda {
   // Closed on GitHub is closed here; new email on it waits in the Inbox.
   if (row.done) return "history";
   if (row.emailAttention) return "review";
+  if (["planned", "deferred"].includes(row.issue.position?.status ?? "")) return "planned";
+  if (row.assessment?.reason) return "review";
   switch (row.issue.position?.status) {
     case "needs you":
       return "needs";
@@ -319,22 +332,6 @@ export function agendaOrder(a: Row, b: Row) {
       b.issue.position?.due ?? "9999",
     ) ||
     a.issue.number - b.issue.number
-  );
-}
-function EvidenceText({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/(\[[^\]]+\]\(https:\/\/[^\s)]+\))/g).map((part, i) => {
-        const m = part.match(/^\[([^\]]+)\]\((https:\/\/[^\s)]+)\)$/);
-        return m ? (
-          <a key={i} href={m[2]} target="_blank" rel="noreferrer">
-            {m[1]}
-          </a>
-        ) : (
-          <React.Fragment key={i}>{part.replace(/\*\*/g, "")}</React.Fragment>
-        );
-      })}
-    </>
   );
 }
 export function outcomeGroup(issue: Issue) {
@@ -380,6 +377,7 @@ export function WorkCard({
   const navigate = useNavigate({ from: "/" });
   const { issue, pulls, sessions } = row;
   const p = issue.position;
+  const assessment = row.assessment ?? workAssessment(issue, { emailAttention: row.emailAttention }, now);
   const [label, tone] = sections[agenda(row)];
   const working = conversations.filter((c) => !awaitsYou(c)).length;
   const ready = conversations.length - working;
@@ -411,12 +409,7 @@ export function WorkCard({
             <span className="work-card-title">{issue.title}</span>
           )}
         </span>
-        {!detail && p?.position && (
-          <span className="work-card-overview">{plainText(p.position)}</span>
-        )}
-        <span className="work-card-next">
-          {p?.next ? plainText(p.next) : "No next step recorded yet."}
-        </span>
+        {!detail && <AssessmentSummary position={p} assessment={assessment} />}
         {!!signals.length && (
           <span className="work-card-signals">{signals.join(" · ")}</span>
         )}
@@ -427,30 +420,7 @@ export function WorkCard({
             <span className="label">Clients</span>
             {issue.customers.join(", ") || "No client recorded"}
           </p>
-          {p?.why && (
-            <p>
-              <span className="label">Outcome</span>
-              <EvidenceText text={p.why} />
-            </p>
-          )}
-          {p?.position && (
-            <p>
-              <span className="label">Where it stands</span>
-              <EvidenceText text={p.position} />
-            </p>
-          )}
-          {p?.next && (
-            <p>
-              <span className="label">Next</span>
-              <EvidenceText text={p.next} />
-            </p>
-          )}
-          {!p && (
-            <p className="subtle">
-              No current position has been recorded on this issue.
-            </p>
-          )}
-          {p && <p className="subtle">Overview reviewed {p.reviewed}</p>}
+          <AssessmentDetails position={p} assessment={assessment} now={now} />
           <div className="actions">
             {!row.done && (
               <>
@@ -507,7 +477,7 @@ export function WorkCard({
               }}
             />
           )}
-          <WorkFacts issue={issue} />
+          <WorkFacts issue={issue} assessment={assessment} />
           {!!(
             historyIssues(issue).length || issue.details?.continuesAs.length
           ) && (
@@ -661,7 +631,7 @@ export function WorkCard({
     </li>
   );
 }
-export function WorkFacts({ issue }: { issue: Issue }) {
+export function WorkFacts({ issue, assessment }: { issue: Issue; assessment?: Assessment }) {
   if (issue.details === null)
     return (
       <p className="notice">
@@ -680,7 +650,7 @@ export function WorkFacts({ issue }: { issue: Issue }) {
                 <dt>{p.name}</dt>
                 <dd>{p.role || "Role not recorded"}</dd>
                 <dd className="subtle">
-                  Next: {p.next || "No action recorded"}
+                  Next: {assessment?.reason ? "Reconcile the evidence before acting" : p.next || "No action recorded"}
                 </dd>
               </div>
             ))}

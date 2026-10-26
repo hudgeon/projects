@@ -9,6 +9,7 @@ import { machineIdSchema } from "./telemetry";
 export const UPKEEP_CRON = "0 18 * * 5";
 export const UPKEEP_SCHEDULE = "Fridays at 18:00 UTC";
 export type UpkeepScheduleReceipt = {
+  kind?: "work-review";
   scheduledAt: number;
   observedAt: number;
   outcome: "checking" | "started" | "exists" | "active" | "no_owner" | "no_machine" | "no_snapshot" | "failed";

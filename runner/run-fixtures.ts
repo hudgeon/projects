@@ -76,6 +76,7 @@ export const dispatch = (workspace = "new"): MasterDecision => ({
 export function engineOptions(dir: string, run = makeRun()): EngineOptions {
   return {
     run,
+    readWorkRecord: async (repo, number) => ({number, body: "", url: `https://github.com/${repo}/issues/${number}`}),
     host: "studio",
     projects: [{ id: "acme/test", name: "Test", cwd: dir, plan: null }],
     stateDir: dir,

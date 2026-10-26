@@ -279,7 +279,7 @@ export function notice(previous: RunSummary | null, next: RunSummary) {
   const kind = move(next);
   if (!previous || !kind || next.archivedAt || kind === move(previous))
     return null;
-  if (next.lane === "upkeep" && kind === "Ready") return null;
+  if ((next.lane === "upkeep" || (next.lane === "review" && !next.reviewChanged)) && kind === "Ready") return null;
   return {
     to: next.owner,
     title: `${kind}: ${clip(next.title, 80)}`,

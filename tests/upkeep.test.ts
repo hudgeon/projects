@@ -1,3 +1,4 @@
+import { WORK_REVIEW_CRON } from "../src/work-review-model";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -24,7 +25,7 @@ test("the week's conversation id is one UUID per portfolio and week", async () =
 test("the Worker's cron and the local emulator's run the schedule the model names", async () => {
   for (const file of ["wrangler.jsonc", "wrangler.local.jsonc"]) {
     const crons = /"crons":\s*\[([^\]]*)\]/.exec(await readFile(file, "utf8"))?.[1] ?? "";
-    assert.deepEqual(crons.match(/"[^"]+"/g)?.map((s) => JSON.parse(s)), [UPKEEP_CRON], file);
+    assert.deepEqual(crons.match(/"[^"]+"/g)?.map((s) => JSON.parse(s)), [UPKEEP_CRON, WORK_REVIEW_CRON], file);
   }
   assert.equal(UPKEEP_CRON, "0 18 * * 5");
   assert.equal(UPKEEP_SCHEDULE, "Fridays at 18:00 UTC");

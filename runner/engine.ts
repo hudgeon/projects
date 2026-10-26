@@ -1,3 +1,4 @@
+import { workRecordGate } from "./work-record";
 import path from "node:path";
 import { z } from "zod";
 import type { ScreenshotInput } from "../src/screenshot-model";
@@ -25,6 +26,7 @@ export { masterInstructions, quickInstructions, movedInstructions } from "./mast
 export type { EngineOptions } from "./execution";
 
 export async function executeRun(o: EngineOptions) {
+  if (o.run.lane === "review") o = {...o, inboxes: o.inboxes?.filter(login => login.delegated)};
   // An executor reads the selector's key once and keeps it in memory.
   const selector = o.contextSelector && {...o.contextSelector, key: keptKey(o.contextSelector.key)};
   const checks = runChecks({ selector, stateDir: o.stateDir, runId: o.run.id, signal: o.signal });
@@ -49,8 +51,14 @@ export async function executeRun(o: EngineOptions) {
     j.progress.seq = 0;
     delete j.progress.notes;
     delete j.delivery;
+    delete j.workBaseline;
+    delete j.workChanged;
+    delete j.progress.reviewChanged;
     if (!interrupted) j.phase = "ready";
   }
+  const verifyWorkRecord = await workRecordGate(o.workRepo, o.run.workIssue, o.readWorkRecord, j.workBaseline);
+  j.workBaseline = verifyWorkRecord.baseline;
+  await persist();
   const turn = o.turn ?? nativeTurn,
     prepare = o.prepare ?? prepareWorkspace,
     evidence = o.evidence ?? workspaceEvidence;
@@ -246,7 +254,7 @@ export async function executeRun(o: EngineOptions) {
         decision,
         j.progress.children,
         !!workContext,
-      );
+      ) ?? await verifyWorkRecord(decision, j.workChanged);
       if (unfinished) {
         refuse(unfinished);
         continue;
@@ -259,6 +267,7 @@ export async function executeRun(o: EngineOptions) {
         if (decision.resetContext) resetCoordinator();
         if (decision.action === "complete" && decision.delivery)
           j.delivery = decision.delivery;
+        if (o.run.lane === "review") j.progress.reviewChanged = decision.workRecord?.status === "updated";
         if (decision.workRecord) j.workRecord = decision.workRecord;
         else delete j.workRecord;
         j.phase = "finished";
@@ -283,6 +292,7 @@ export async function executeRun(o: EngineOptions) {
         await settle();
         return;
       }
+      if (task.mode === "change") {j.workChanged = true; await persist();}
       if ((await dispatch(x, decision, task, inputIds, reviewedIds, refuse)) === "paused") return;
     }
     j.phase = "finished";

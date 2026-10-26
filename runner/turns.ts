@@ -222,7 +222,7 @@ export async function runTurn(
   // another person's.
   const connected = mailboxFor(o.person, o.inboxes);
   const mailboxToken = connected?.delegated
-    ? await o.mailboxToken?.(connected.account).catch(() => undefined)
+    ? await o.mailboxToken?.(connected.account, o.run.lane === "review").catch(() => undefined)
     : undefined;
   const mailbox = connected?.delegated && !mailboxToken ? null : connected;
   if (connected && !mailbox)

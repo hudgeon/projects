@@ -74,11 +74,11 @@ export function inboxGws(config: Pick<Config, "home" | "doppler">, login: InboxL
 // reach; the key is read for each token and kept in the executor's memory only.
 export const mailboxes = (config: Config) => ({
   inboxes: inboxLogins(config),
-  mailboxToken: async (account: string) => {
+  mailboxToken: async (account: string, readOnly = false) => {
     const login = inboxLogins(config).find((l) => sameAccount(l.account, account));
     if (!login?.delegated) throw Error("Not a delegated mailbox on this machine.");
     const key = parseDelegationKey(await machineSecret(config, DELEGATION_SECRET));
-    return delegatedToken(key, login.account, GMAIL_MODIFY_SCOPE);
+    return delegatedToken(key, login.account, readOnly ? GMAIL_READ_SCOPE : GMAIL_MODIFY_SCOPE);
   },
 });
 // The owner's account keeps the cache file it always had; every other account

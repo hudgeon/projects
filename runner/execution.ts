@@ -46,8 +46,9 @@ export type EngineOptions = {
   inboxes?: InboxLogin[];
   // An hour's Gmail token for a delegated mailbox, minted for its owner at
   // each of their turns; absent on a machine without the service account key.
-  mailboxToken?: (account: string) => Promise<string>;
+  mailboxToken?: (account: string, readOnly?: boolean) => Promise<string>;
   workRepo?: string;
+  readWorkRecord?: import("../collector/work-record").ReadWorkRecord;
   // The upkeep lane's sources on this machine: the configuration repository
   // its changes go to, and the home folder where the collector keeps the
   // friction receipts and the work item cache the brief reads.

@@ -192,6 +192,7 @@ export const routeSchema = z.enum([
   "/api/auth/logout",
   "/api/overview",
   "/api/upkeep",
+  "/api/work-review",
   "/api/archive",
   "/api/ingest",
   "/api/closes",

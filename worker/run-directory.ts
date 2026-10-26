@@ -48,6 +48,7 @@ const summary = (run: Run): RunSummary => ({
   owner: run.owner,
   title: runTitle(run),
   measures: runMeasures(run),
+  reviewChanged: run.progress?.reviewChanged,
   status: statusLine(run),
   remaining: activeRun(run.state)
     ? (latestPlan(run)?.remaining.length ?? null)

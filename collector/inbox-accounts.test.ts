@@ -201,6 +201,9 @@ test("delegated inboxes are read with an hour's token each from the key in Doppl
     for (const account of ["sam@example.com", "owner@example.com", "stranger@example.com"])
       await assert.rejects(runner.mailboxToken(account), /Not a delegated mailbox on this machine\./, account);
     assert.equal(minted.length, 1, "no grant is signed for an unlisted account");
+    minted.length = 0;
+    assert.equal(await runner.mailboxToken("ada@example.com", true), "tok-ada@example.com");
+    assert.deepEqual(minted, [["ada@example.com", GMAIL_READ_SCOPE]], "reconciliation receives a read-only Gmail grant");
     // Without the key, every delegated inbox is unavailable and the owner's is not.
     process.env.DOPPLER_DOWN = "1";
     logged.length = 0;

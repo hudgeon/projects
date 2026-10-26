@@ -1,3 +1,4 @@
+import { readWorkRecord, verifiedRecord } from "../collector/work-record";
 import {
   mkdir,
   readFile,
@@ -174,6 +175,7 @@ export async function handleHook(
   input: Record<string, unknown>,
   app: "Codex" | "Claude",
   home: string,
+  readRecord = (repo: string, number: number) => readWorkRecord(repo, number, 1200),
 ) {
   const event = String(input.hook_event_name ?? "");
   if (
@@ -279,6 +281,24 @@ export async function handleHook(
     if (declared === null || (declared && found(declared)))
       set(declared, "assistant");
   }
+  if (record.issue) {
+    if (event === "UserPromptSubmit") {
+      record.recordStartedAt = Date.now();
+      record.recordBaseline = found(record.issue)?.recordHash;
+    } else {
+      record.recordStartedAt = prior?.recordStartedAt;
+      record.recordBaseline = prior?.issue === record.issue ? prior.recordBaseline : undefined;
+      record.recordReview = prior?.recordReview;
+    }
+    if (event === "Stop") {
+      record.recordReview = "unverified";
+      const workRepo = work ? issueRepo(work.issues) : null;
+      if (workRepo && record.recordBaseline) try {
+        const actual = await readRecord(workRepo, record.issue);
+        if (verifiedRecord(actual.body, record.recordStartedAt ?? record.updatedAt, record.recordBaseline)) record.recordReview = "verified";
+      } catch { /* A failed read never makes the work record current. */ }
+    }
+  }
   // A session is recorded from its first prompt: apps open threads on launch
   // that are never used, and those have nothing to classify.
   if (prior || event === "UserPromptSubmit" || event === "Stop") {
@@ -297,7 +317,7 @@ export async function handleHook(
     return {
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: linked(record, found(record.issue)?.title),
+        additionalContext: linked(record, found(record.issue)?.title) + (record.issue ? " Before finishing meaningful linked work, reconcile its Current position, people, commitments and reviewed email IDs against actual evidence. Include Evidence checked: YYYY-MM-DDTHH:mm:ss.sssZ with the actual UTC evidence cutoff in Current position, not a fabricated fresh date. Write and read back the issue. The Stop hook independently verifies fresh record changes; unreadable or unchanged records remain unverified in Projects. Read-only questions stay read-only; their session evidence may await the daily reconciliation." : ""),
       },
     };
   else context = "";

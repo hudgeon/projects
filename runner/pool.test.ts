@@ -50,7 +50,7 @@ test("every lane uses the same capacity, with no reserved or extra slots", {time
   const pool = runPool({
     concurrency: 2, signal: shutdown.signal, pollMs: 1,
     claim: async (_active, lanes) => {
-      assert.ok(!lanes.length || JSON.stringify(lanes) === JSON.stringify(["standard", "quick", "upkeep"]));
+      assert.ok(!lanes.length || JSON.stringify(lanes) === JSON.stringify(["standard", "quick", "upkeep", "review"]));
       const run = lanes.length ? queue.shift() : undefined;
       return run ? {run, activity: []} : null;
     },
@@ -122,7 +122,7 @@ test("executions a previous runner left running hold their slots until they fini
     assert.ok(asked.length && asked.every(([, lanes]) => lanes.length === 0), "no lane bypasses an adopted executor");
     earlier.resolve();
     await waitFor(() => started === 1);
-    assert.deepEqual(asked.find(([, lanes]) => lanes.includes("standard")), [[], ["standard", "quick", "upkeep"]]);
+    assert.deepEqual(asked.find(([, lanes]) => lanes.includes("standard")), [[], ["standard", "quick", "upkeep", "review"]]);
   } finally { shutdown.abort(); await pool; }
 });
 

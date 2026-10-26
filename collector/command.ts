@@ -70,10 +70,11 @@ export async function command(
   args: string[],
   cwd?: string,
   env: Record<string, string> = {},
+  timeout = 20_000,
 ) {
   const { stdout } = await exec(bin, args, {
     cwd,
-    timeout: 20_000,
+    timeout,
     maxBuffer: 4_000_000,
     env: {
       ...subprocessEnv(),

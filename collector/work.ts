@@ -1,3 +1,5 @@
+import { evidenceChecked } from "../src/work-assessment";
+import { recordHash } from "./work-record";
 import {
   mkdir,
   readFile,
@@ -142,6 +144,8 @@ export async function readIssues(
         .map((name) => `${owner}/${name}`),
       updatedAt: Date.parse(raw.updatedAt),
       position: currentPosition(raw.body),
+      evidenceCheckedAt: evidenceChecked(raw.body),
+      recordHash: recordHash(raw.body),
       details: workDetails(raw.body),
       emailLinks: emailLinks(raw.body),
       area: raw.labels.some((l) => l.name === "personal")

@@ -63,7 +63,7 @@ export async function runPool(options: {
         const admitted = await options.admit?.() ?? true;
         if (waiting.aborted) break;
         const lanes: Lane[] = active.size < options.concurrency && admitted
-          ? ["standard", "quick", "upkeep"] : [];
+          ? ["standard", "quick", "upkeep", "review"] : [];
         const claim = await options.claim([...active.keys()], lanes);
         // A shutdown can arrive while the claim is in flight. Leave that saved
         // claim for this same runner's restart, without starting a native turn.

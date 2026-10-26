@@ -1,3 +1,4 @@
+import { workReviewInstructions } from "./work-review-instructions";
 // The coordinator's brief and session record: what a fresh or resumed
 // coordinator is given, and the handover when its session grows large.
 import { readFile } from "node:fs/promises";
@@ -60,8 +61,9 @@ export async function openCoordinator(
   };
   const workContext =
     o.run.lane === "quick" ? "" : workInstructions(o.workRepo, o.run.workIssue, o.person);
+  const review = o.run.lane === "review" ? `\n${workReviewInstructions}` : "";
   const upkeep = o.run.lane === "upkeep" ? `\n${await upkeepBrief(o)}` : "";
-  const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : upkeep}`;
+  const stableBrief = `${masterInstructions(o.person)}${personInstructions(o.person)}${movedHere ? `\n\n${movedInstructions}` : ""}\n\n${workContext}\n\nRegistered projects: ${JSON.stringify(o.projects)}\nSelected project: ${o.run.projectId ?? "choose from registered projects"}; child agent: ${o.run.agent === "auto" && agents.length > 1 ? "auto" : o.run.agent === "auto" ? agents[0] : o.run.agent}.${o.run.lane === "quick" ? `\n${quickInstructions(o)}` : upkeep + review}`;
   const briefHash = createHash("sha256")
     .update(stableBrief + JSON.stringify(activityBrief(o.activity, o.run.projectId)))
     .digest("hex")

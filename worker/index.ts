@@ -1,3 +1,4 @@
+import { scheduled } from "./scheduled";
 import { DurableObject } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
 import { MESSAGE_REQUEST_BYTES } from "../src/screenshot-model";
@@ -16,7 +17,7 @@ import { InboxRequests, inboxRoutes, keepInboxes, overviewInboxes } from "./inbo
 import { Sessions } from "./sessions";
 import { Documents } from "./documents";
 import { settingsRoutes } from "./settings";
-import { readUpkeepSchedule, saveUpkeepSchedule, scheduledUpkeep } from "./upkeep";
+import { readUpkeepSchedule, saveUpkeepSchedule } from "./upkeep";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
 import { startInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
@@ -84,7 +85,7 @@ export class Portfolio extends DurableObject<Env> {
       "CREATE TABLE IF NOT EXISTS issue_closes (issue INTEGER PRIMARY KEY, requested INTEGER NOT NULL, email TEXT NOT NULL, state TEXT NOT NULL, message TEXT, updated INTEGER NOT NULL)",
     );
   }
-  upkeepSchedule() { return readUpkeepSchedule(this.ctx.storage); }
+  upkeepSchedule(kind?: "work-review") { return readUpkeepSchedule(this.ctx.storage, kind); }
   saveUpkeepSchedule(receipt: import("../src/upkeep-model").UpkeepScheduleReceipt) { saveUpkeepSchedule(this.ctx.storage, receipt); }
   collectorDuties(from: string) {
     return this.machines.collectorDuties(from);
@@ -847,8 +848,5 @@ export default {
       document,
     );
   },
-  // The weekly upkeep trigger (wrangler.jsonc, triggers.crons).
-  async scheduled(controller, env) {
-    await scheduledUpkeep(env, controller.scheduledTime, controller.cron);
-  },
+  scheduled,
 } satisfies ExportedHandler<Env>;

@@ -34,6 +34,8 @@ export type Journal = {
   checkpoint?: z.infer<typeof checkpointSchema>;
   delivery?: z.infer<typeof deliverySchema>;
   workRecord?: z.infer<typeof workRecordSchema>;
+  workBaseline?: { startedAt: number; hash?: string };
+  workChanged?: boolean;
 };
 export async function savePrivate(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -67,6 +69,8 @@ export async function readJournal(o: EngineOptions, file: string) {
         checkpoint: checkpointSchema.optional(),
         delivery: deliverySchema.optional(),
         workRecord: workRecordSchema.optional(),
+        workChanged: z.boolean().optional(),
+        workBaseline: z.object({startedAt: z.number().int().nonnegative(), hash: z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict().optional(),
       })
       .strict()
       .parse(JSON.parse(await readFile(file, "utf8")));

@@ -1,3 +1,4 @@
+import { WorkReviewPanel } from "./work-review-view";
 import React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -29,7 +30,7 @@ export function UpkeepPanel() {
   const active = !!latest && activeRun(latest.state);
   const error = start.error || query.error;
   return (
-    <section className="execution-settings" aria-label="Upkeep">
+    <><WorkReviewPanel /><section className="execution-settings" aria-label="Upkeep">
       <h2 className="section">Upkeep</h2>
       <p>
         Once a week ({query.data?.schedule ?? "weekly"}) an upkeep conversation
@@ -72,6 +73,6 @@ export function UpkeepPanel() {
           {error.message === "SIGN_IN" ? "Sign in again to run upkeep." : error.message}
         </p>
       )}
-    </section>
+    </section></>
   );
 }

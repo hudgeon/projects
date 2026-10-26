@@ -1,3 +1,4 @@
+import { latestMergeSchema } from "./work-delivery";
 import { inboxSnapshotShape } from "./inbox-model";
 import { workSnapshotSchema, type Close } from "./work-model";
 import { z } from "zod";
@@ -104,14 +105,7 @@ export const projectSchema = z
         updatedAt: time.nullable(),
       })
       .strict(),
-    latestMerge: z
-      .object({
-        title: text,
-        url: z.url().refine((x) => new URL(x).hostname === "github.com"),
-        mergedAt: time,
-      })
-      .strict()
-      .nullable(),
+    latestMerge: latestMergeSchema,
     worktrees: z.array(worktreeSchema).max(500),
     sessions: z.array(sessionSchema).max(500),
     pulls: z.array(pullSchema).max(100),

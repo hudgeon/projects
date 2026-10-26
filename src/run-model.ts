@@ -27,7 +27,7 @@ export const runStateSchema = z.enum([
 // lighter master turn, so it never waits behind long-running work. Upkeep is
 // the weekly cycle that keeps the agent setup improving (docs/upkeep.md): its
 // own brief and shared runner capacity, started by cron or from Settings.
-export const laneSchema = z.enum(["standard", "quick", "upkeep"]);
+export const laneSchema = z.enum(["standard", "quick", "upkeep", "review"]);
 export type Lane = z.infer<typeof laneSchema>;
 export const QUICK_ACTIVE_LIMIT = 30;
 export const STANDARD_ACTIVE_LIMIT = 10;
@@ -58,7 +58,7 @@ export const runInputSchema = messageInputSchema
 // What a person starts from the composer: the upkeep lane starts only from
 // its schedule or Settings.
 export const startInputSchema = runInputSchema
-  .extend({ lane: laneSchema.exclude(["upkeep"]).optional() })
+  .extend({ lane: laneSchema.exclude(["upkeep", "review"]).optional() })
   .strict();
 export const runListSchema = z.object({
   archived: z
@@ -312,6 +312,7 @@ export const progressSchema = z
       .optional(),
     activity: z.array(activitySchema).max(ACTIVITY_LIMIT).optional(),
     reviewedMessageIds: z.array(uuid).max(40).optional(),
+    reviewChanged: z.boolean().optional(),
     // Feedback given to the agent working at the time; the master still
     // reviews it at its next decision.
     steeredMessageIds: z.array(uuid).max(40).optional(),
@@ -326,7 +327,7 @@ export const runnerClaimSchema = runnerIdentitySchema
     activeRunIds: z.array(uuid).max(20).default([]),
     // Offered lanes; [] checks in without starting or recovering work.
     // An older runner omits it and takes standard or quick work.
-    lanes: z.array(laneSchema).max(3).optional(),
+    lanes: z.array(laneSchema).max(4).optional(),
     // It can fetch an HTML edition the owner opened; an older runner cannot.
     documents: z.boolean().optional(),
   })
@@ -369,6 +370,7 @@ export const workRecordSchema = z
   .object({
     status: z.enum(["updated", "unchanged", "pending"]),
     evidence: z.string().trim().min(1).max(1200),
+    issues: z.array(z.number().int().positive()).max(50).nullable().optional(),
   })
   .strict();
 export const masterDecisionSchema = z
@@ -483,6 +485,7 @@ export type RunSummary = Pick<
   | "owner"
 > & {
   title: string;
+  reviewChanged?: boolean;
   measures?: import("./run-measures").RunMeasures;
   projectIds?: string[];
   // Index summaries saved before these fields existed are refreshed on load.

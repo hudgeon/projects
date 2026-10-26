@@ -268,6 +268,8 @@ export const issueSchema = z
     changes: z.array(upkeepChangeSchema).max(UPKEEP_RECORD_ROWS).nullable().optional(),
     updatedAt: z.number().int().nonnegative(),
     position: positionSchema.nullable().optional(),
+    evidenceCheckedAt: z.number().int().nonnegative().nullable().optional(),
+    recordHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     details: workDetailsSchema.nullable().optional(),
     emailLinks: z.array(emailLinkSchema).max(50).optional(),
     area: z.enum(["business", "personal", "unassigned"]).optional(),
@@ -295,6 +297,9 @@ export const associationSchema = z
     // Who made the selection. Absent on older records, which the owner made.
     by: z.enum(["user", "assistant"]).optional(),
     state: z.enum(["open", "running", "idle", "ended"]),
+    recordReview: z.enum(["verified", "unverified"]).optional(),
+    recordStartedAt: z.number().int().nonnegative().optional(),
+    recordBaseline: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     updatedAt: z.number().int().nonnegative(),
   })
   .strict()

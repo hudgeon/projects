@@ -50,14 +50,16 @@ export async function startUpkeep(
   return { id: run.id, started: "started" };
 }
 // One durable receipt for the latest scheduled check, including skips and failures.
-export function readUpkeepSchedule(storage: DurableObjectStorage): UpkeepScheduleReceipt | null {
-  storage.sql.exec("CREATE TABLE IF NOT EXISTS upkeep_schedule(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL)");
-  const row = storage.sql.exec<{payload: string}>("SELECT payload FROM upkeep_schedule WHERE id=1").toArray()[0];
+export function readUpkeepSchedule(storage: DurableObjectStorage, kind?: "work-review"): UpkeepScheduleReceipt | null {
+  const table = kind === "work-review" ? "work_review_schedule" : "upkeep_schedule";
+  storage.sql.exec(`CREATE TABLE IF NOT EXISTS ${table}(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL)`);
+  const row = storage.sql.exec<{payload: string}>(`SELECT payload FROM ${table} WHERE id=1`).toArray()[0];
   return row ? JSON.parse(row.payload) as UpkeepScheduleReceipt : null;
 }
 export function saveUpkeepSchedule(storage: DurableObjectStorage, receipt: UpkeepScheduleReceipt) {
-  readUpkeepSchedule(storage);
-  storage.sql.exec("INSERT INTO upkeep_schedule(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload WHERE json_extract(excluded.payload,'$.scheduledAt')>=json_extract(upkeep_schedule.payload,'$.scheduledAt')", JSON.stringify(receipt));
+  readUpkeepSchedule(storage, receipt.kind);
+  const table = receipt.kind === "work-review" ? "work_review_schedule" : "upkeep_schedule";
+  storage.sql.exec(`INSERT INTO ${table}(id,payload) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload WHERE json_extract(excluded.payload,'$.scheduledAt')>=json_extract(${table}.payload,'$.scheduledAt')`, JSON.stringify(receipt));
 }
 // The Worker's weekly trigger: one cycle per ISO week, whenever in the week
 // it fires. A cron this Worker does not know starts nothing.

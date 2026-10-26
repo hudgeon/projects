@@ -1,3 +1,4 @@
+import { latestWorkMerge, workIssueRefs } from "./work-delivery";
 import { readQuotas } from "./quotas";
 import { readWork } from "./work";
 import { readdir, readFile, stat, lstat, open } from "node:fs/promises";
@@ -535,18 +536,7 @@ export function checkState(
     return "pending";
   return "passing";
 }
-// Work issues a pull request names: full issue links or OWNER/REPO#N.
-export function workIssueRefs(body: string, repo?: string) {
-  if (!repo) return [];
-  const name = repo.replaceAll(".", "\\.");
-  const refs = new RegExp(
-    `(?:https://github\\.com/${name}/issues/|${name}#)([1-9]\\d*)`,
-    "g",
-  );
-  return [
-    ...new Set(Array.from(body.matchAll(refs), (m) => Number(m[1]))),
-  ].slice(0, 100);
-}
+export { workIssueRefs } from "./work-delivery";
 async function collectProject(
   config: Config,
   item: Item,
@@ -695,26 +685,7 @@ async function collectProject(
       checks: checkState(p.statusCheckRollup as Record<string, unknown>[]),
       updatedAt: Date.parse(String(p.updatedAt)),
     }));
-    const merged = JSON.parse(
-      await command("gh", [
-        "pr",
-        "list",
-        "--repo",
-        repo,
-        "--state",
-        "merged",
-        "--limit",
-        "1",
-        "--json",
-        "title,url,mergedAt",
-      ]),
-    );
-    if (merged[0])
-      latestMerge = {
-        title: String(merged[0].title).slice(0, 500),
-        url: merged[0].url,
-        mergedAt: Date.parse(merged[0].mergedAt),
-      };
+    latestMerge = await latestWorkMerge(repo, config.workRepo);
     if (pulls.length === 100)
       github = source(
         "unavailable",

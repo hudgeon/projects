@@ -1,3 +1,4 @@
+import { recordHash } from "../collector/work-record";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { recordHeader } from "../src/upkeep-model";
@@ -247,6 +248,8 @@ test("issues carry type, milestone, customer and repo labels; a failed or trunca
     number: 1,
     title: "Issue 1",
     body: "Status  text",
+    evidenceCheckedAt: null,
+    recordHash: recordHash("Status <!-- hidden --> text"),
     position: null,
     details: { people: [], commitments: [], combinedFrom: [], splitFrom: [], continuesAs: [] },
     emailLinks: [],
