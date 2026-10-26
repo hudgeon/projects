@@ -14,6 +14,14 @@ node ~/.local/share/project-overview/service.mjs --snapshot
 
 Output is private metadata, not a public artifact. Nothing here authorises deleting worktrees, archiving tasks, moving repositories or changing code; obtain the user's scope first.
 
+Every project row and project page shows a clickable `ID`. Clicking copies its stable ID and a local lookup command for Claude or Codex:
+
+```
+node ~/.local/share/project-overview/service.mjs --project 'owner/repository'
+```
+
+This reads the current local registry and returns JSON with the exact ID, machine, checkout (`cwd`), repository and absolute canonical plan path (or null). It needs no browser or Doppler credentials and does not publish or read mail or sessions. IDs are exact and case-sensitive; unknown or duplicate IDs fail rather than choosing a similar folder. If the project is on another connected machine, run the command there. A move is resolved by fresh discovery; an explicit metadata ID remains stable across repository renames.
+
 ## Reorganise projects
 
 Repositories are discovered under the machine's configured `root`, up to three folder levels, and selected by GitHub repository identity, never by folder name. Add `.project-overview.json` to opt a repository into the overview, or name it under `projects` in the machine's `machine.json`. Hidden directories, `zarchive` and `_archive` are excluded. Registered Git worktrees are included automatically; use Git's worktree move/repair commands rather than leaving stale registrations. Symlink directories are not followed. Discovery failures preserve the previous snapshot, which becomes visibly stale, instead of publishing a misleading empty list.

@@ -118,7 +118,8 @@ test("runner check-ins deliver opened documents even while every shared place is
   try {
     await waitFor(() => delivered.length === 2, 30000);
     assert.equal(claims[0].documents, true, "a new runner says it can fetch documents");
-    assert.deepEqual(delivered.map((d) => [d.id, d.lease]), [[first.id, first.lease], [second.id, second.lease]]);
+    // Document fetches run concurrently; both leases must arrive, in either order.
+    assert.deepEqual(delivered.map((d) => [d.id, d.lease]).sort(([a], [b]) => a.localeCompare(b)), [[first.id, first.lease], [second.id, second.lease]]);
     for (const d of delivered) assert.equal(Buffer.from(d.content!, "base64").toString(), "<!doctype html><p>Page</p>");
     assert.ok(claims.length >= 2, "a full runner continues checking in for opened documents");
     assert.ok(claims.slice(1).every((c) => c.lanes?.length === 0), "a full pool checks in without accepting any lane");

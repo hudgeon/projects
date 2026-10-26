@@ -1,23 +1,13 @@
+import { ProjectActions, ProjectHeading } from "./project-id";
 import { InboxView, inboxCount } from "./inbox-view";
 import { Machines } from "./machines-view";
 import { UpkeepPanel } from "./upkeep-view";
 import { Restart } from "./restart";
-import {
-  ProjectConversations,
-  useEmailConversations,
-} from "./run-view";
+import { ProjectConversations, useEmailConversations } from "./run-view";
 import { TodayView, useWaiting } from "./today-view";
 import { ArchiveButton, ArchiveView } from "./archive-view";
-import {
-  isArchived,
-  sessionArchived,
-  type ArchiveEntry,
-} from "./archive-model";
-import {
-  conversationSearch,
-  parseNavigation,
-  projectSearch,
-} from "./navigation";
+import { isArchived, sessionArchived, type ArchiveEntry } from "./archive-model";
+import { conversationSearch, parseNavigation, projectSearch } from "./navigation";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -304,24 +294,7 @@ function ProjectRow({
           {expanded ? "−" : "+"}
         </span>
       </button>
-      <div className="project-actions">
-        {!detail && (
-          <Link to="/" search={projectSearch(p.id)}>
-            Open project →
-          </Link>
-        )}
-        <Link to="/" search={conversationSearch(undefined, p.id)}>
-          Conversations
-        </Link>
-        <Link to="/" search={{ view: "archive", project: p.id }}>
-          Archived items
-        </Link>
-        <ArchiveButton
-          target={{ kind: "project", projectId: p.id }}
-          archived={archived}
-          name={p.name}
-        />
-      </div>
+      <ProjectActions id={p.id} name={p.name} detail={detail} archived={archived} />
       {expanded && (
         <div className="project-details" id={`details-${p.id}`}>
           <div className="detail-column">
@@ -635,9 +608,7 @@ function Dashboard() {
       <Topbar view={view} waiting={waiting} toHandle={toHandle} inert={!!navigation.doc} />
       <WeeklyQuotas snapshots={snapshots} />
       <main className={`view-${view}`} inert={!!navigation.doc}>
-        {view === "project" && (
-          <h1 className="page-title">{selectedProjectName ?? "Project"}</h1>
-        )}
+        {view === "project" && <ProjectHeading name={selectedProjectName} id={navigation.project} />}
         {query.error && (
           <div role="alert" className="error">
             {query.error.message}

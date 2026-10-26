@@ -8,6 +8,13 @@ import { homedir } from "node:os";
 const base = `${homedir()}/.local/share/project-overview`;
 try {
   const file = `${base}/machine.json`;
+  // Exact project lookup needs no Doppler environment and never publishes.
+  if (process.argv.includes("--project")) {
+    const id = process.argv[process.argv.indexOf("--project") + 1];
+    if (!id || id.startsWith("--")) throw Error("--project requires an ID");
+    execFileSync(process.execPath, [`${base}/collector.mjs`, file, "--project", id], { stdio: "inherit", timeout: 30000 });
+    process.exit(0);
+  }
   // The collector validates the whole config; this reads only its Doppler
   // names, so the service stays small.
   const { doppler } = JSON.parse(readFileSync(file, "utf8")) as {

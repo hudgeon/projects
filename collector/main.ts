@@ -9,6 +9,7 @@ import { oneClick, applyInboxActions } from "./inbox-actions";
 import { cacheIssues } from "./work";
 import { snapshotSchema } from "../src/model";
 import { withFriction } from "./friction";
+import { locateProject } from "./project-reference";
 
 async function main() {
   const args = process.argv.slice(2),
@@ -20,6 +21,12 @@ async function main() {
   if (args.includes("--review") || args.includes("--send-daily"))
     throw Error("Daily briefs have been retired");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
+  if (args.includes("--project")) {
+    const id = args[args.indexOf("--project") + 1];
+    if (!id || id.startsWith("--")) throw Error("--project requires an exact project ID");
+    console.log(JSON.stringify(await locateProject(config, id)));
+    return;
+  }
   const scan = async (duties = false) => ({
     ...await withFriction(config, await collect(config, { inbox: duties })),
     ...(duties ? { inboxPlaceholders: {
