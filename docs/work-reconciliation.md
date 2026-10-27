@@ -16,7 +16,7 @@ These checks verify a persisted record and its declared evidence cutoff, not the
 
 ## Daily reconciliation
 
-An hourly Worker trigger starts one `review` conversation per local day at 07:00 in the deployment's `TIME_ZONE`, or on a later hourly retry if no machine/inventory was available. A deterministic request ID prevents duplicate work after repeated delivery or uncertain creation. An earlier active review prevents overlap. It uses the existing native runner, owner attribution, recovery and shared memory/capacity admission; older runners do not claim the reserved lane.
+A Worker trigger at half past each hour starts one `review` conversation per local day at 05:30 in the deployment's `TIME_ZONE`, or on a later hourly retry if no machine/inventory was available. A deterministic request ID prevents duplicate work after repeated delivery or uncertain creation. An earlier active review prevents overlap. It uses the existing native runner, owner attribution, recovery and shared memory/capacity admission; older runners do not claim the reserved lane.
 
 The brief in `runner/work-review-instructions.ts` directs one existing change helper to reconcile changed/due records using complete relevant evidence, preserve concurrent edits and history, and read back corrections. It does not authorize code, deployment, credential, access, financial, customer-send or calendar changes, or closing/combining work without separate specific authority. Gmail grants for review are read-only. A machine with only an ordinary gws login supplies no mailbox to this lane, rather than exposing a broader grant; report that coverage gap.
 

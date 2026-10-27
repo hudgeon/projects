@@ -1,4 +1,7 @@
-import { workReviewScheduleProblem } from "./work-review-model";
+import {
+  WORK_REVIEW_TIME,
+  workReviewScheduleProblem,
+} from "./work-review-model";
 import React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -40,7 +43,7 @@ export function WorkReviewPanel() {
       <h2 className="section">Work reconciliation</h2>
       <p>
         {query.data?.schedule ??
-          "Daily at 07:00 in this deployment's time zone"}
+          `Daily at ${WORK_REVIEW_TIME} in this deployment's time zone`}
         . Reviews changed work against mail, delivery evidence and commitments,
         and corrects existing records. It stays quiet when nothing needs
         attention.

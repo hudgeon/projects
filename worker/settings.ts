@@ -4,6 +4,7 @@ import { startWorkReview, type WorkReviewStore } from "./work-review";
 // person reaches it; a conversation browser's sign-in may read it
 // (worker/auth.ts).
 import { UPKEEP_SCHEDULE } from "../src/upkeep-model";
+import { WORK_REVIEW_TIME } from "../src/work-review-model";
 import { trace } from "./telemetry";
 import { startUpkeep, type UpkeepStore } from "./upkeep";
 import type { Portfolio } from "./index";
@@ -23,7 +24,7 @@ export async function settingsRoutes(
   const view = async () => {
     const scheduled = await store.upkeepSchedule(review ? "work-review" : undefined);
     const run = scheduled?.runId ? await store.getRun(scheduled.runId) : null;
-    return { timeZone: env.TIME_ZONE || "UTC", latest: await store.latestRun(lane), schedule: review ? `Daily at 07:00 (${env.TIME_ZONE || "UTC"})` : UPKEEP_SCHEDULE, scheduled,
+    return { timeZone: env.TIME_ZONE || "UTC", latest: await store.latestRun(lane), schedule: review ? `Daily at ${WORK_REVIEW_TIME} (${env.TIME_ZONE || "UTC"})` : UPKEEP_SCHEDULE, scheduled,
       scheduledRun: run ? { id: run.id, state: run.state, createdAt: run.createdAt, updatedAt: run.updatedAt, startedAt: run.startedAt, finishedAt: run.finishedAt } : null };
   };
   if (request.method === "GET") return Response.json(await view());

@@ -1,8 +1,8 @@
 import { currentWork } from "../src/work-model";
 import {
   WORK_REVIEW_CRON,
-  WORK_REVIEW_HOUR,
   workReviewDay,
+  workReviewDue,
   workReviewText,
 } from "../src/work-review-model";
 import {
@@ -43,8 +43,8 @@ export async function startWorkReview(
 }
 export async function scheduledWorkReview(env: Env, at: number, cron: string) {
   if (cron !== WORK_REVIEW_CRON) return;
-  const { day, hour } = workReviewDay(at, env.TIME_ZONE || "UTC");
-  if (hour < WORK_REVIEW_HOUR) return;
+  const { day, minute } = workReviewDay(at, env.TIME_ZONE || "UTC");
+  if (!workReviewDue(minute)) return;
   const store = env.PORTFOLIOS.getByName(env.PORTFOLIO_ID);
   const requestId = await upkeepRequestId(
     env.PORTFOLIO_ID,

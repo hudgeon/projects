@@ -10,7 +10,11 @@ import type { Portfolio } from "./index";
 import { start, options } from "./miniflare-fixtures";
 import { closeSnapshot } from "./snapshot-fixtures";
 import { issue } from "../tests/work-fixtures";
-import { WORK_REVIEW_CRON, workReviewDay } from "../src/work-review-model";
+import {
+  WORK_REVIEW_CRON,
+  workReviewDay,
+  workReviewScheduleProblem,
+} from "../src/work-review-model";
 import { startInputSchema } from "../src/run-model";
 
 test("daily review records skips, starts once per local day, retries after an offline morning and shares runner admission", async () => {
@@ -35,7 +39,7 @@ test("daily review records skips, starts once per local day, retries after an of
   );
   const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
   const db = ns.get(ns.idFromName("test")) as unknown as Portfolio;
-  const at = Date.UTC(2026, 9, 27, 7); // next local day, 07:00
+  const at = Date.UTC(2026, 9, 27, 5, 30); // next local day, 05:30
   const cron = async (time: number) => {
     const r = await mf.dispatchFetch(
       `https://example.com/cdn-cgi/local/scheduled?time=${time}&cron=${encodeURIComponent(WORK_REVIEW_CRON)}`,
@@ -97,13 +101,32 @@ test("daily review records skips, starts once per local day, retries after an of
 });
 test("daily local clock follows daylight saving and the composer cannot start the reserved lane", () => {
   assert.deepEqual(
-    workReviewDay(Date.UTC(2026, 5, 2, 6), "Europe/London"),
-    { day: "2026-06-02", hour: 7 },
+    workReviewDay(Date.UTC(2026, 5, 2, 4, 30), "Europe/London"),
+    { day: "2026-06-02", minute: 5 * 60 + 30 },
   );
   assert.deepEqual(
-    workReviewDay(Date.UTC(2026, 9, 27, 7), "Europe/London"),
-    { day: "2026-10-27", hour: 7 },
+    workReviewDay(Date.UTC(2026, 9, 27, 5, 30), "Europe/London"),
+    { day: "2026-10-27", minute: 5 * 60 + 30 },
   );
+  // London summer time: 05:30 local on 2 June is 04:30 UTC.
+  const zone = "Europe/London";
+  const seen = (at: number) => ({
+    scheduledAt: at,
+    observedAt: at,
+    outcome: "started",
+  });
+  const previous = seen(Date.UTC(2026, 5, 1, 4, 30));
+  const today = seen(Date.UTC(2026, 5, 2, 4, 30));
+  for (const [now, receipt, problem] of [
+    [Date.UTC(2026, 5, 2, 4, 0), previous, false], // 05:00: not yet due
+    [Date.UTC(2026, 5, 2, 5, 0), previous, false], // 06:00: may still land
+    [Date.UTC(2026, 5, 2, 5, 31), previous, true], // 06:31: missing
+    [Date.UTC(2026, 5, 2, 5, 31), today, false],
+  ] as const)
+    assert.equal(
+      workReviewScheduleProblem(receipt, now, zone) !== null,
+      problem,
+    );
   assert.equal(
     startInputSchema.safeParse({
       requestId: randomUUID(),

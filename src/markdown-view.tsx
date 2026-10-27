@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { renderInlineMarkdown, renderMarkdown } from "./markdown";
 import { htmlSource } from "./document-model";
 import { useOpenDocument } from "./document-view";
@@ -16,8 +16,11 @@ function useDocumentClicks() {
 }
 // HTML is produced only by the shared, HTML-disabled Markdown renderer.
 export function MarkdownContent({ text, className }: { text: string; className?: string }) {
-  return <div className={className} onClick={useDocumentClicks()} dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
+  // Keep the HTML prop stable so unrelated refreshes do not replace selected text.
+  const html = useMemo(() => ({ __html: renderMarkdown(text) }), [text]);
+  return <div className={className} onClick={useDocumentClicks()} dangerouslySetInnerHTML={html} />;
 }
 export function InlineMarkdown({ text }: { text: string }) {
-  return <span onClick={useDocumentClicks()} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(text) }} />;
+  const html = useMemo(() => ({ __html: renderInlineMarkdown(text) }), [text]);
+  return <span onClick={useDocumentClicks()} dangerouslySetInnerHTML={html} />;
 }
