@@ -32,6 +32,8 @@ export const inboxThreadSchema = z
     // inbox. Served one thread at a time, never in the overview or telemetry.
     body: z.string().max(INBOX_BODY_LIMIT).optional(),
     unsubscribe: unsubscribeSchema.nullable().optional(),
+    // Message IDs that work issues link instead of this conversation's own.
+    linkedAs: z.array(id).max(50).optional(),
   })
   .strict();
 // Names reserved before an email address exists; never a mailbox read or login.
@@ -96,9 +98,13 @@ export function currentInbox(snapshots: Inboxed[], account?: string) {
     : inboxes[0];
 }
 // The inbox holding a thread, whoever's it is: a work item's email link.
+// A work link names a conversation, or one of its messages the machine on
+// duty found in it.
+export const isLinkedThread = (thread: InboxThread, threadId: string) =>
+  thread.id === threadId || !!thread.linkedAs?.includes(threadId);
 export function inboxWithThread(snapshots: Inboxed[], threadId: string) {
   return currentInboxes(snapshots).find((inbox) =>
-    inbox.threads.some((thread) => thread.id === threadId),
+    inbox.threads.some((thread) => isLinkedThread(thread, threadId)),
   );
 }
 // What everyone else sees of a person's inbox: what counts the threads waiting
@@ -188,7 +194,7 @@ export function inboxRows(inbox: Inbox, issues: Issue[]) {
   return inbox.threads
     .map((thread) => {
       const linked = issues.filter((i) =>
-        i.emailLinks?.some((l) => l.threadId === thread.id),
+        i.emailLinks?.some((l) => isLinkedThread(thread, l.threadId)),
       );
       const reviewed =
         !!(thread.reference && linked.length === 0) ||
@@ -196,7 +202,7 @@ export function inboxRows(inbox: Inbox, issues: Issue[]) {
           linked.every((i) =>
             i.emailLinks?.some(
               (l) =>
-                l.threadId === thread.id &&
+                isLinkedThread(thread, l.threadId) &&
                 l.reviewedMessageId === thread.latestMessageId,
             ),
           ));

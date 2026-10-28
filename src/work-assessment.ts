@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { freshness, type Snapshot } from "./model";
-import { currentInboxes } from "./inbox-model";
+import { currentInboxes, isLinkedThread } from "./inbox-model";
 import type { Issue } from "./work-model";
 
 // A source refresh is not a review. Only the issue's explicit evidence cutoff
@@ -76,7 +76,7 @@ export function assessmentSourceGap(
           (i) =>
             i.state === "ok" &&
             !freshness(i.observedAt, now) &&
-            i.threads.some((t) => t.id === link.threadId),
+            i.threads.some((t) => isLinkedThread(t, link.threadId)),
         ),
     )
   );

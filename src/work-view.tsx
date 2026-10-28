@@ -29,6 +29,7 @@ import {
   currentInboxes,
   inboxRows,
   inboxWithThread,
+  isLinkedThread,
   gmailUrl,
 } from "./inbox-model";
 import { Restart } from "./restart";
@@ -582,18 +583,13 @@ export function WorkCard({
           )}
           {(!!issue.emailLinks?.length || !!pulls.length) && (
             <ul className="work-links">
-              {(issue.emailLinks ?? []).map((link) => (
-                <li key={link.threadId}>
+              {(issue.emailLinks ?? []).map((link) => {
+                const thread = inboxWithThread(snapshots, link.threadId)
+                  ?.threads.find((t) => isLinkedThread(t, link.threadId));
+                return (<li key={link.threadId}>
                   {link.url ? (
-                    <Link
-                      to="/"
-                      search={{ view: "inbox", email: link.threadId }}
-                    >
-                      {link.subject ||
-                        inboxWithThread(snapshots, link.threadId)?.threads.find(
-                          (t) => t.id === link.threadId,
-                        )?.subject ||
-                        "Email conversation"}
+                    <Link to="/" search={{ view: "inbox", email: thread?.id ?? link.threadId }}>
+                      {link.subject || thread?.subject || "Email conversation"}
                     </Link>
                   ) : (
                     link.subject || "Email conversation"
@@ -601,8 +597,8 @@ export function WorkCard({
                   {link.context && (
                     <span className="subtle"> · {link.context}</span>
                   )}
-                </li>
-              ))}
+                </li>);
+              })}
               {pulls.map((pr) => (
                 <li key={pr.url}>
                   <a href={pr.url} target="_blank" rel="noreferrer">

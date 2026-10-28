@@ -52,7 +52,7 @@ New work needs an issue: `gh issue create -R <workRepo> --label work --type Feat
 
 ## Keep work items and email commitments current
 
-A reviewing agent can keep each work item's position on its issue in a `## Current position` block: `Status`, `Reviewed: YYYY-MM-DD`, `Outcome / why now`, `Position`, `Next`, and optional `Priority` (`now`, `next`, `later`) and `Due` (`YYYY-MM-DD`). Link each actionable inbox thread under `## Email threads` with its ordinary Gmail URL and `reviewed: LAST_MESSAGE_ID` for the exact last message reviewed; newer messages return the work for review. Metadata alone is not enough to resolve an obligation. The Projects web app has no email mutation or model calls. Never include mail bodies, attachments or access tokens in issue summaries or snapshots.
+A reviewing agent can keep each work item's position on its issue in a `## Current position` block: `Status`, `Reviewed: YYYY-MM-DD`, `Outcome / why now`, `Position`, `Next`, and optional `Priority` (`now`, `next`, `later`) and `Due` (`YYYY-MM-DD`). Link each actionable inbox thread under `## Email threads` with its ordinary Gmail URL, ending in the conversation's thread ID (a message's own ID is looked up to its conversation at an extra Gmail read every scan), and `reviewed: LAST_MESSAGE_ID` for the exact last message reviewed; newer messages return the work for review. Metadata alone is not enough to resolve an obligation. The Projects web app has no email mutation or model calls. Never include mail bodies, attachments or access tokens in issue summaries or snapshots.
 
 ## Conversations dispatched by Projects
 

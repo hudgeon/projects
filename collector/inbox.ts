@@ -258,96 +258,132 @@ export async function readInbox(
       if (!pageToken) break;
     }
     if (pageToken) result.state = "incomplete";
+    const listed = new Set(ids.keys());
     // Linked conversations remain observable after archiving. They have no
     // listing history marker, so always fetch current metadata for them.
     for (const id of tracked) if (!ids.has(id)) ids.set(id, undefined);
     if (ids.size > 500) result.state = "incomplete";
     const refs = [...ids.keys()].slice(0, 500);
-    for (let i = 0; i < refs.length; i += 4) {
-      const batch = await Promise.allSettled(
-        refs.slice(i, i + 4).map(async (id) => {
-          const hit = cached.get(id);
-          // A fresh Gmail list verifies the exact thread history. No messages
-          // need rereading while that history and the label mapping are unchanged.
-          if (hit && ids.get(id) === hit.historyId) {
-            nextCache.push(hit);
-            return hit.thread;
-          }
-          const t = threadSchema.parse(
-            await call("threads", "get", {
-              userId: "me",
-              id,
-              format: "metadata",
-              metadataHeaders: [
-                "Subject",
-                "From",
-                "List-Unsubscribe",
-                "List-Unsubscribe-Post",
-              ],
-              fields:
-                "id,historyId,messages(id,internalDate,labelIds,payload(headers))",
-            }),
-          );
-          if (t.id !== id) throw Error("Wrong thread");
-          const messages = t.messages
-            .filter((m) => !m.labelIds?.includes("DRAFT"))
-            .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
-          const inInbox = messages.some((m) => m.labelIds?.includes("INBOX"));
-          if (!messages.length || (!inInbox && !tracked.includes(id))) return null;
-          const latest = messages.at(-1)!;
-          const header = (name: string) =>
-            latest.payload?.headers?.find(
-              (h) => h.name.toLowerCase() === name.toLowerCase(),
-            )?.value ?? "";
-          // Only threads waiting in the inbox carry their latest message text.
-          // A failed text read keeps the thread, uncached, so it is read again.
-          let body: string | undefined;
-          let complete = true;
-          if (inInbox)
-            try {
-              body = messageText(
-                z
-                  .object({ payload: partSchema })
-                  .parse(
-                    await call("messages", "get", {
-                      userId: "me",
-                      id: latest.id,
-                      format: "full",
-                      fields: "payload",
-                    }),
-                  ).payload,
-              );
-            } catch {
-              complete = false;
-            }
-          const thread = inboxThreadSchema.parse({
-            id,
-            inInbox,
-            subject: header("Subject").slice(0, 300) || "(No subject)",
-            from: header("From").slice(0, 300),
-            latestMessageId: latest.id,
-            updatedAt: Number(latest.internalDate),
-            reference:
-              !!referenceLabel && !!latest.labelIds?.includes(referenceLabel),
-            lastSentByMe: latest.labelIds?.includes("SENT") ?? false,
-            unread: messages.some((m) => m.labelIds?.includes("UNREAD")),
-            messages: messages.length,
-            ...(body === undefined ? {} : { body }),
-            unsubscribe: unsubscribeOptions({
-              "list-unsubscribe": header("List-Unsubscribe"),
-              "list-unsubscribe-post": header("List-Unsubscribe-Post"),
-            }),
-          });
-          if (t.historyId && complete)
-            nextCache.push({ historyId: t.historyId, thread });
-          return thread;
+    const read = async (id: string, linked: boolean) => {
+      const hit = cached.get(id);
+      // A fresh Gmail list verifies the exact thread history. No messages
+      // need rereading while that history and the label mapping are unchanged.
+      if (hit && ids.get(id) === hit.historyId) {
+        nextCache.push(hit);
+        return hit.thread;
+      }
+      const t = threadSchema.parse(
+        await call("threads", "get", {
+          userId: "me",
+          id,
+          format: "metadata",
+          metadataHeaders: [
+            "Subject",
+            "From",
+            "List-Unsubscribe",
+            "List-Unsubscribe-Post",
+          ],
+          fields:
+            "id,historyId,messages(id,internalDate,labelIds,payload(headers))",
         }),
       );
-      for (const r of batch) {
-        if (r.status === "rejected") result.state = "incomplete";
-        else if (r.value) result.threads.push(r.value);
-      }
+      if (t.id !== id) throw Error("Wrong thread");
+      const messages = t.messages
+        .filter((m) => !m.labelIds?.includes("DRAFT"))
+        .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
+      const inInbox = messages.some((m) => m.labelIds?.includes("INBOX"));
+      if (!messages.length || (!inInbox && !linked)) return null;
+      const latest = messages.at(-1)!;
+      const header = (name: string) =>
+        latest.payload?.headers?.find(
+          (h) => h.name.toLowerCase() === name.toLowerCase(),
+        )?.value ?? "";
+      // Only threads waiting in the inbox carry their latest message text.
+      // A failed text read keeps the thread, uncached, so it is read again.
+      let body: string | undefined;
+      let complete = true;
+      if (inInbox)
+        try {
+          body = messageText(
+            z
+              .object({ payload: partSchema })
+              .parse(
+                await call("messages", "get", {
+                  userId: "me",
+                  id: latest.id,
+                  format: "full",
+                  fields: "payload",
+                }),
+              ).payload,
+          );
+        } catch {
+          complete = false;
+        }
+      const thread = inboxThreadSchema.parse({
+        id,
+        inInbox,
+        subject: header("Subject").slice(0, 300) || "(No subject)",
+        from: header("From").slice(0, 300),
+        latestMessageId: latest.id,
+        updatedAt: Number(latest.internalDate),
+        reference:
+          !!referenceLabel && !!latest.labelIds?.includes(referenceLabel),
+        lastSentByMe: latest.labelIds?.includes("SENT") ?? false,
+        unread: messages.some((m) => m.labelIds?.includes("UNREAD")),
+        messages: messages.length,
+        ...(body === undefined ? {} : { body }),
+        unsubscribe: unsubscribeOptions({
+          "list-unsubscribe": header("List-Unsubscribe"),
+          "list-unsubscribe-post": header("List-Unsubscribe-Post"),
+        }),
+      });
+      if (t.historyId && complete)
+        nextCache.push({ historyId: t.historyId, thread });
+      return thread;
+    };
+    const unfound: string[] = [];
+    for (let i = 0; i < refs.length; i += 4) {
+      const batch = refs.slice(i, i + 4);
+      const reads = await Promise.allSettled(
+        batch.map((id) => read(id, tracked.includes(id))),
+      );
+      reads.forEach((r, j) => {
+        if (r.status === "fulfilled") {
+          if (r.value) result.threads.push(r.value);
+        } else if (listed.has(batch[j])) result.state = "incomplete";
+        else unfound.push(batch[j]);
+      });
     }
+    // A work issue may link one message instead of its conversation; Gmail
+    // opens either in the browser. Read the conversation it belongs to and
+    // keep the linked ID on it, so the work link still finds it. A link Gmail
+    // knows neither way remains a failed read.
+    const linkedAs = new Map<string, string[]>();
+    for (const id of unfound)
+      try {
+        const { threadId } = z.object({ threadId: z.string() }).parse(
+          await call("messages", "get", {
+            userId: "me",
+            id,
+            format: "minimal",
+            fields: "threadId",
+          }),
+        );
+        if (threadId === id) throw Error("Unread thread");
+        linkedAs.set(threadId, [...(linkedAs.get(threadId) ?? []), id]);
+        if (ids.has(threadId)) continue;
+        if (ids.size >= 500) throw Error("Inbox limit");
+        ids.set(threadId, undefined);
+        const thread = await read(threadId, true);
+        if (thread) result.threads.push(thread);
+      } catch {
+        result.state = "incomplete";
+      }
+    result.threads = result.threads.map((t) =>
+      linkedAs.has(t.id)
+        ? { ...t, linkedAs: linkedAs.get(t.id)!.slice(0, 50) }
+        : t,
+    );
     if (file)
       try {
         await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
