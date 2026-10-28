@@ -7,14 +7,15 @@
 // profile is signed in to Teams once by the machine's owner; this process
 // never signs in or types to anyone. The reading, parsing and item logic are
 // in collector/teams.ts, which is tested; this file is the browser plumbing.
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { chatItemSchema, type ChatItem, type ChatRead } from "../src/chat-model";
 import { postChatRead, type Site } from "./upload";
 import { applyTeams, prune, teamsRead, teamsState, type TeamsRow } from "./teams";
+import { openTeamsBrowser, teamsPage } from "./teams-browser";
 
 const TICK_MS = 60_000;
 const SETTLE_MS = 3_000;
@@ -187,58 +188,6 @@ class Cdp {
     });
   }
 }
-async function pageSocketUrl(port: number): Promise<string | null> {
-  try {
-    const targets = (await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(5000) })).json()) as {
-      type: string;
-      url: string;
-      webSocketDebuggerUrl?: string;
-    }[];
-    const page =
-      targets.find((t) => t.type === "page" && /teams\.(cloud\.)?microsoft|login\.microsoft/.test(t.url)) ??
-      targets.find((t) => t.type === "page");
-    return page?.webSocketDebuggerUrl ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// Launch Chrome with the dedicated profile and read the debugging port it
-// writes into the profile. Port 0 lets Chrome choose, which avoids a clash.
-async function launch(chrome: string, profileDir: string): Promise<{ child: ChildProcess; port: number } | null> {
-  await mkdir(profileDir, { recursive: true, mode: 0o700 });
-  const child = spawn(
-    chrome,
-    [
-      `--user-data-dir=${profileDir}`,
-      "--remote-debugging-port=0",
-      // The DevTools endpoint stays bound to 127.0.0.1; the Node client sends
-      // no Origin, so no --remote-allow-origins is needed (it would only widen
-      // which web origins may drive this signed-in session).
-      "--no-first-run",
-      "--no-default-browser-check",
-      // Chrome treats a covered window, or every window while the displays
-      // sleep, as hidden: it stops drawing and slows timers, and Teams' list
-      // goes stale. These keep the page live; a minimised window still stops.
-      "--disable-backgrounding-occluded-windows",
-      "--disable-renderer-backgrounding",
-      "--disable-background-timer-throttling",
-      "--disable-features=Translate,IntensiveWakeUpThrottling",
-      TEAMS_URL,
-    ],
-    { stdio: "ignore", detached: false },
-  );
-  const portFile = path.join(profileDir, "DevToolsActivePort");
-  for (let waited = 0; waited < 30_000; waited += 500) {
-    await sleep(500);
-    if (child.exitCode !== null) return null;
-    const port = Number((await readFile(portFile, "utf8").catch(() => "")).split("\n")[0]);
-    if (port) return { child, port };
-  }
-  child.kill();
-  return null;
-}
-
 const savedSchema = z.object({
   items: z.array(chatItemSchema).default([]),
   seen: z.record(z.string(), z.string().regex(/^[a-f0-9]{16}$/)).default({}),
@@ -256,8 +205,6 @@ type Browser = {
   items: Map<string, ChatItem>;
   // Each previewed chat's latest message as last seen (applyTeams), hashed.
   seen: Map<string, string>;
-  // Polls in a row that found Teams signed in but no chat list.
-  unlisted: number;
 };
 // Read Teams for one person until stopped: keep a Chrome open for each of
 // their profiles, poll each list, and post one read with them all each poll
@@ -275,7 +222,6 @@ export function startTeams(options: Options): () => Promise<void> {
     problem: "Teams is not open yet",
     items: new Map(),
     seen: new Map(),
-    unlisted: 0,
   }));
   let stopped = false;
   let saveTimer: NodeJS.Timeout | undefined;
@@ -314,23 +260,25 @@ export function startTeams(options: Options): () => Promise<void> {
   async function connect(b: Browser): Promise<boolean> {
     if (b.ws) return true;
     let fresh = false;
+    let url: string | null;
     if (!b.child || b.child.exitCode !== null) {
-      const launched = await launch(chrome, b.profileDir);
+      const launched = await openTeamsBrowser(chrome, b.profileDir);
       if (!launched) return unreachable(b, "Teams' browser could not be started on this machine");
+      url = launched.url;
       const child = launched.child;
-      b.child = child;
-      child.once("exit", () => {
-        if (b.child !== child) return;
-        if (!stopped) log("teams_chrome_exited", {});
-        b.ws = null;
-        b.cdp = null;
-        b.child = null;
-      });
-      fresh = true;
-      await sleep(5_000);
-    }
-    const port = Number((await readFile(path.join(b.profileDir, "DevToolsActivePort"), "utf8").catch(() => "")).split("\n")[0]);
-    const url = port ? await pageSocketUrl(port) : null;
+      if (child) {
+        b.child = child;
+        child.once("exit", () => {
+          if (b.child !== child) return;
+          if (!stopped) log("teams_chrome_exited", {});
+          b.ws = null;
+          b.cdp = null;
+          b.child = null;
+        });
+        fresh = true;
+        await sleep(5_000);
+      }
+    } else url = await teamsPage(b.profileDir);
     if (!url) return unreachable(b, "Teams' browser could not be reached on this machine");
     try {
       const socket = new WebSocket(url);
@@ -388,19 +336,16 @@ export function startTeams(options: Options): () => Promise<void> {
       b.problem = "Teams needs you to sign in again on this machine";
       return;
     }
-    b.state = "ok";
-    b.problem = undefined;
     // Signed in but the list is not in the page yet (still loading, or just
     // sent back to it): keep what we had rather than clearing on a half-drawn
-    // page, unless it stays away.
+    // page. This was not a successful read, even during browser startup.
     if (!parsed.data.listed) {
-      if (++b.unlisted >= 5) {
-        b.state = "unavailable";
-        b.problem = "Teams' chat list is not showing on this machine";
-      }
+      b.state = "unavailable";
+      b.problem = "Teams' chat list is not showing on this machine";
       return;
     }
-    b.unlisted = 0;
+    b.state = "ok";
+    b.problem = undefined;
     const rows = parsed.data.rows.map(parseRow).filter((r): r is TeamsRow => r !== null);
     b.items = applyTeams(b.items, rows, Date.now(), b.seen);
     queueSave();

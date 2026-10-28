@@ -81,8 +81,12 @@ node scripts/install-machine.mjs --teams you@example.com=$HOME/Library/Projects-
 ```
 
 The watcher keeps a Chrome open for each profile and posts one read with
-both. If one profile needs its sign-in, the read says so; if one cannot be
-read, it shows as incomplete. `--remove-teams you@example.com=<folder>` stops
+both. After a watcher restart it reconnects to a profile's existing browser,
+instead of opening another tab. A saved debugging port counts only when its
+browser responds with the same instance id; a missing chat list keeps coverage
+unavailable until the list can be read. If one profile needs its sign-in, the
+read says so; if one cannot be read, it shows as incomplete.
+`--remove-teams you@example.com=<folder>` stops
 reading one profile, and `--remove-teams you@example.com` all of that
 person's.
 
