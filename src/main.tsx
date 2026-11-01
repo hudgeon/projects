@@ -1,5 +1,7 @@
+import { Badge, NativeSession } from "./native-session";
 import { ProjectActions, ProjectHeading } from "./project-id";
 import { InboxView, inboxCount } from "./inbox-view";
+import { useChats } from "./chat-view";
 import { Machines } from "./machines-view";
 import { UpkeepPanel } from "./upkeep-view";
 import { Restart } from "./restart";
@@ -165,15 +167,6 @@ function group(snapshots: Snapshot[]) {
   return [...groups.values()]
     .map((g) => g.sort((a, b) => b.at - a.at))
     .sort((a, b) => a[0].project.name.localeCompare(b[0].project.name));
-}
-function Badge({
-  children,
-  tone = "quiet",
-}: {
-  children: React.ReactNode;
-  tone?: string;
-}) {
-  return <span className={`badge ${tone}`}>{children}</span>;
 }
 function ProjectRow({
   observations,
@@ -482,48 +475,6 @@ function ProjectRow({
     </article>
   );
 }
-function NativeSession({
-  session: s,
-  host,
-  stale,
-  now,
-}: {
-  session: Session;
-  host: string;
-  stale?: boolean;
-  now: number;
-}) {
-  return (
-    <article className="session">
-      <div className="session-meta">
-        <span>
-          {s.app}{" "}
-          <span className="subtle">on {hostName(host)}</span>
-        </span>
-        <Badge
-          tone={stale ? "warning" : s.state === "running" ? "good" : "quiet"}
-        >
-          {stale ? "Last known: " : ""}
-          {s.state}
-        </Badge>
-      </div>
-      <p className="session-title">{s.title}</p>
-      <span className="subtle">
-        {ago(s.updatedAt, now)} · {s.evidence}
-      </span>
-      <div className="session-actions">
-        <Restart app={s.app} id={s.id} host={host} />
-        {machineIdSchema.safeParse(host).success && (
-          <ArchiveButton
-            target={{ kind: "session", host, app: s.app, sessionId: s.id }}
-            archived={false}
-            name={s.title}
-          />
-        )}
-      </div>
-    </article>
-  );
-}
 function Dashboard() {
   const navigation = useSearch({ from: "/" });
   const view = navigation.view;
@@ -534,6 +485,7 @@ function Dashboard() {
   // Whose work Today and Inbox show: the signed-in person's, or everyone's.
   const [everyone, setEveryone] = useEveryone();
   const me = useMe().data?.email;
+  const messages = useChats().data;
   const waiting = useWaiting(me, everyone);
   const signOut = useSignOut();
   if (query.error?.message === "SIGN_IN")
@@ -549,7 +501,7 @@ function Dashboard() {
     snapshots = query.data?.snapshots ?? [];
   const archives = query.data?.archives ?? [];
   const inboxActions = query.data?.inboxActions ?? [];
-  const toHandle = inboxCount(snapshots, email.data?.runs, inboxActions, now, me);
+  const toHandle = inboxCount(snapshots, email.data?.runs, inboxActions, now, me, messages);
   const groups = group(snapshots);
   const currentGroups = groups.filter(
     (g) =>

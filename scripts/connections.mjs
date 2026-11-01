@@ -46,6 +46,34 @@ export function applyConnections(config, { args, flags, expand, fail }) {
   if (inboxes.length > 10) fail("At most ten inboxes can be connected on one machine.");
   if (flags("add-inbox").length || flags("remove-inbox").length) config.inboxAccounts = inboxes;
 
+  // A shared support address belongs to its queue owner, not a new person.
+  // Sending is a separate explicit opt-in, and activation never backfills mail.
+  const support = flags("support").at(-1);
+  if (support !== undefined) {
+    const owner = flags("support-owner").at(-1) ?? config.support?.owner;
+    const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value ?? "");
+    if (!validEmail(support) || !validEmail(owner)) fail("Give --support as a mailbox address and --support-owner as its Projects owner.");
+    if (!config.doppler && !flags("support-gws-config").length) fail("Support needs the machine's Doppler delegation or --support-gws-config.");
+    const old = config.support?.account?.toLowerCase() === support.toLowerCase() ? config.support : undefined;
+    config.support = { ...old, account: support.toLowerCase(), owner: owner.toLowerCase(), aliases: old?.aliases ?? [], since: old?.since ?? new Date().toISOString(), acknowledge: old?.acknowledge ?? false };
+    const dir = flags("support-gws-config").at(-1);
+    if (dir) {
+      const configDir = expand(dir);
+      if (!path.isAbsolute(configDir)) fail("Support's Gmail sign-in directory must be absolute.");
+      const info = statSync(configDir);
+      if (!info.isDirectory() || info.uid !== process.getuid() || info.mode & 0o077) fail("Support's Gmail sign-in directory must belong to you and be readable by you alone.");
+      config.support.configDir = configDir;
+    }
+  }
+  if (args.includes("--acknowledge-support")) {
+    if (!config.support) fail("Connect --support before enabling acknowledgments.");
+    // Newly enabling sends starts now, even if monitoring began earlier.
+    if (!config.support.acknowledge) config.support.acknowledgeSince = new Date().toISOString();
+    config.support.acknowledge = true;
+  }
+  if (args.includes("--no-support-acknowledgments") && config.support) config.support.acknowledge = false;
+  if (args.includes("--no-support")) delete config.support;
+
   // Names reserved before their mailbox exists. No address or login is added.
   const placeholders = [...(config.inboxPlaceholders ?? [])];
   for (const value of flags("add-inbox-placeholder")) {

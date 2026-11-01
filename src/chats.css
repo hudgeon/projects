@@ -23,6 +23,9 @@
 .chat-teams {
   background: #5458b8;
 }
+.chat-support {
+  background: #176b60;
+}
 .chat-shared {
   padding: 0 5px;
   border: 1px solid var(--line);

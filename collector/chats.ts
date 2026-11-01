@@ -14,6 +14,7 @@ import { z } from "zod";
 import { configSchema } from "./config";
 import { siteHeaders } from "./upload";
 import { startTeams } from "./teams-chrome";
+import { startSupport } from "./support";
 import { chatItemSchema, type ChatItem, type ChatRead } from "../src/chat-model";
 import {
   applyEdit,
@@ -80,6 +81,7 @@ async function main() {
   if (!file) throw new Error("Usage: chats.mjs machine.json");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   const site = await siteHeaders(config);
+  const stopSupport = startSupport(config, site, path.dirname(file));
   // Teams runs its own browser-backed loop per person, beside Slack, with a
   // Chrome for each of their profiles (one per Teams organisation).
   const teamsPeople = new Map<string, { account: string; profileDirs: string[] }>();
@@ -335,6 +337,7 @@ async function main() {
       })();
   }, TICK_MS);
   process.on("SIGTERM", () => {
+    stopSupport();
     void Promise.allSettled([save(), ...stopTeams.map((stop) => stop())]).finally(() => process.exit(0));
   });
   if (connectable) await listen(appToken);

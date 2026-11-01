@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { messageKey } from "./mail-identity";
 import {
   INBOX_BODY_LIMIT,
   inboxSchema,
@@ -179,9 +180,9 @@ const threadSchema = z.object({
     .min(1)
     .max(2000),
 });
-// Version 2 caches carry message text; older caches are read again once.
+// Version 3 includes hashed RFC Message-IDs; older caches are read again once.
 const cacheSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   account: z.email(),
   referenceLabel: z.string().nullable(),
   entries: z
@@ -280,6 +281,7 @@ export async function readInbox(
           metadataHeaders: [
             "Subject",
             "From",
+            "Message-ID",
             "List-Unsubscribe",
             "List-Unsubscribe-Post",
           ],
@@ -325,6 +327,7 @@ export async function readInbox(
         subject: header("Subject").slice(0, 300) || "(No subject)",
         from: header("From").slice(0, 300),
         latestMessageId: latest.id,
+        latestMessageKey: messageKey(header("Message-ID")),
         updatedAt: Number(latest.internalDate),
         reference:
           !!referenceLabel && !!latest.labelIds?.includes(referenceLabel),
@@ -392,7 +395,7 @@ export async function readInbox(
           temp,
           JSON.stringify(
             cacheSchema.parse({
-              version: 2,
+              version: 3,
               account,
               referenceLabel: referenceLabel ?? null,
               entries: nextCache,

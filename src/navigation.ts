@@ -25,7 +25,7 @@ const searchSchema = z.object({
     .optional()
     .catch(undefined),
   // The Inbox shows email, one chat source, or everything.
-  source: z.enum(["email", "slack", "teams"]).optional().catch(undefined),
+  source: z.enum(["email", "slack", "teams", "support"]).optional().catch(undefined),
   archived: z.boolean().optional().catch(undefined),
   // An HTML mockup or slide deck open over the view, by its pinned GitHub link.
   doc: z

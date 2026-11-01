@@ -22,6 +22,7 @@ export const inboxThreadSchema = z
     subject: z.string().max(300),
     from: z.string().max(300),
     latestMessageId: id,
+    latestMessageKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     updatedAt: z.number().int().nonnegative(),
     reference: z.boolean().optional(),
     inInbox: z.boolean().optional(),

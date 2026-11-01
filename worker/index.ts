@@ -1,3 +1,6 @@
+import { runtimeStatus } from "./runtime-status";
+import { collectorRoutes, runnerRoutes, documentPath } from "./route-policy";
+export { collectorRoutes, runnerRoutes, documentPath } from "./route-policy";
 import { scheduled } from "./scheduled";
 import { DurableObject } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
@@ -7,6 +10,8 @@ import { Runs } from "./run-directory";
 import { PushDevices } from "./push";
 import { pushRoutes } from "./push-routes";
 import { Chats, chatRoutes } from "./chats";
+import { SupportAcknowledgments, supportRoutes } from "./support";
+import type { AcknowledgmentInput } from "../src/support-model";
 import type { ChatAction, ChatRead } from "../src/chat-model";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
@@ -60,6 +65,7 @@ export class Portfolio extends DurableObject<Env> {
   private pushes: PushDevices;
   private inbox: InboxRequests;
   private chats: Chats;
+  private support: SupportAcknowledgments;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.machines = new Machines(ctx.storage);
@@ -70,6 +76,7 @@ export class Portfolio extends DurableObject<Env> {
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
     this.chats = new Chats(ctx.storage);
+    this.support = new SupportAcknowledgments(ctx.storage);
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });
@@ -306,6 +313,7 @@ export class Portfolio extends DurableObject<Env> {
   inboxThread(threadId: string, account: string) { return this.inbox.thread(threadId, account); }
   // Chat is each person's own (worker/chats.ts).
   publishChats(read: ChatRead, host: string) { return this.chats.publish(read, host); }
+  supportAcknowledgment(input: AcknowledgmentInput, host: string) { return this.support.act(input, host); }
   chatList(email: string) { return this.chats.list(email); }
   chatText(key: string, email: string) { return this.chats.text(key, email); }
   actOnChat(key: string, email: string, action: ChatAction["action"], to?: string) { return this.chats.act(key, email, action, to); }
@@ -337,21 +345,6 @@ export class Portfolio extends DurableObject<Env> {
   }
 }
 
-// Routes authorised by the collector token; every other route needs a session.
-export const collectorRoutes = new Set(["/api/ingest", "/api/closes", "/api/inbox/actions", "/api/review", "/api/collector/duties", "/api/chats/read"]);
-export const runnerRoutes = new Set(["/api/runner/claim", "/api/runner/heartbeat", "/api/runner/report", "/api/runner/screenshot", "/api/runner/readiness", "/api/runner/browser", "/api/runner/document"]);
-// An owner's HTML edition, served only to their signed-in session.
-export const documentPath = /^\/api\/documents\/([a-f0-9]{64})$/;
-async function runtimeStatus(store: DurableObjectStub<Portfolio>, env: Env, id?: string) {
-  try {
-    const versions = await trace("runtime.check", {}, () => store.runtimeVersions(id));
-    const worker = env.CF_VERSION_METADATA?.id ?? "local";
-    return {worker, portfolio: versions.portfolio, conversation: versions.conversation,
-      ready: versions.portfolio === worker && versions.conversation === worker};
-  } catch {
-    return {ready: false};
-  }
-}
 // Each machine's runner IDs map to owners of its own, so one machine's token
 // can never act on a conversation another machine claimed. Still a UUID for
 // capabilities.
@@ -726,6 +719,8 @@ export async function handle(
   if (push) return push;
   const chats = await chatRoutes(request, store, caller, (email) => allowed(email, env));
   if (chats) return chats;
+  const support = await supportRoutes(request, store, caller, onDuty, (email) => allowed(email, env));
+  if (support) return support;
   if (url.pathname === "/api/work/close" && request.method === "POST") {
     let number;
     try {

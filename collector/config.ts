@@ -5,6 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 import { machineIdSchema } from "../src/telemetry";
 import { sameAccount, inboxPlaceholderNamesSchema } from "../src/inbox-model";
+import { supportConfigSchema } from "../src/support-model";
 
 const absolute = z.string().refine(path.isAbsolute);
 // A person's Gmail account this machine reads, and how: with the gws sign-in
@@ -41,6 +42,8 @@ export const configSchema = z.object({
     .optional(),
   // The owner's Gmail account, read with the machine's own gws sign-in.
   inboxAccount: z.email().optional(),
+  // A shared mailbox is a support source for its named owner, not a person.
+  support: supportConfigSchema.optional(),
   // Other people's: each with the gws sign-in they made on this machine, or
   // by delegation when it names no directory.
   inboxAccounts: z

@@ -209,14 +209,14 @@ const logins = [
 ];
 const profiles = (config.teams ?? []).reduce((count, t) => count.set(t.account, (count.get(t.account) ?? 0) + 1), new Map());
 const teamsRead = [...profiles].map(([account, n]) => (n > 1 ? `${account} (${n} profiles)` : account)).join(", ");
-const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${teamsRead || "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.`;
+const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${teamsRead || "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.${config.support ? `\nSupport: ${config.support.account}; owner ${config.support.owner}; acknowledgments ${config.support.acknowledge ? "on" : "off"}.` : ""}`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",
   });
 if (process.platform !== "darwin" || args.includes("--no-services")) {
   console.log(
-    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file}${config.slack?.length || config.teams?.length ? " and service.mjs --chats" : ""} running with your service manager.\n${connected}`,
+    `${installed} Run service.mjs every two minutes and keep runner.mjs ${file}${config.slack?.length || config.teams?.length || config.support ? " and service.mjs --chats" : ""} running with your service manager.\n${connected}`,
   );
   process.exit(0);
 }
@@ -253,7 +253,7 @@ const services = [
 ];
 // The chat watcher stays running, and a release restarts it on the new bundle.
 const watcher = config.collectorLabel ? `${config.collectorLabel}-chats` : "local.projects.chats";
-if (config.slack?.length || config.teams?.length)
+if (config.slack?.length || config.teams?.length || config.support)
   services.push({
     label: watcher,
     content: plist(
@@ -317,11 +317,11 @@ for (const service of services) {
 }
 // Nobody's Slack is read any more: the watcher stops and its job goes.
 const unused = path.join(agents, `${watcher}.plist`);
-if (!config.slack?.length && !config.teams?.length && existsSync(unused)) {
+if (!config.slack?.length && !config.teams?.length && !config.support && existsSync(unused)) {
   if (loaded(watcher)) stop(watcher);
   rmSync(unused);
 }
-const watching = (config.slack?.length || config.teams?.length) ? `\nChat watcher: ${status(watcher).pid ? "running" : "not running yet; launchd retries every 30 seconds"}. Its log is ${path.join(base, "chats.log")}.` : "";
+const watching = (config.slack?.length || config.teams?.length || config.support) ? `\nChat watcher: ${status(watcher).pid ? "running" : "not running yet; launchd retries every 30 seconds"}. Its log is ${path.join(base, "chats.log")}.` : "";
 console.log(`${installed}\nRunner: ${runnerState}.${watching}\n${connected}`);
 console.log(
   `${config.host} is connected: its collector reports every two minutes and its runner picks up conversations. It needs you logged in after a restart.`,

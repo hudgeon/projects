@@ -48,6 +48,11 @@ export class Chats {
       read.items.map(async (item) => ({ ...item, key: await itemKey(read.source, owner, item.id) })),
     );
     const previous = this.reads().find((r) => r.source === read.source && r.owner === owner);
+    // A failed/partial support read cannot erase an unresolved request.
+    if (read.source === "support" && read.state !== "ok" && previous) {
+      const current = new Set(items.map(i => i.id));
+      items.push(...previous.items.filter(i => !current.has(i.id)).slice(0, 200 - items.length));
+    }
     const stored: Stored = {
       ...read, owner, host, items,
       ...(read.state === "ok"

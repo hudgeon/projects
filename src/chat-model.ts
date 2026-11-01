@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { supportReceiptSchema } from "./support-model";
 
 // A machine's read of one person's chat in one source, made with that
 // person's own sign-in: each place with something new for them, and its
@@ -8,7 +9,7 @@ import { z } from "zod";
 export const CHAT_TEXT_LIMIT = 2000;
 export const CHAT_PREVIEW_LIMIT = 140;
 export const CHAT_ITEMS_LIMIT = 200;
-export const chatSourceSchema = z.enum(["slack", "teams"]);
+export const chatSourceSchema = z.enum(["slack", "teams", "support"]);
 export type ChatSource = z.infer<typeof chatSourceSchema>;
 const time = z.number().int().nonnegative();
 const line = (max: number) => z.string().trim().min(1).max(max);
@@ -53,6 +54,7 @@ export const chatItemSchema = z
     // A direct message, or one that names the person.
     mention: z.boolean(),
     text: z.string().max(CHAT_TEXT_LIMIT),
+    support: supportReceiptSchema.optional(),
   })
   .strict();
 export const chatReadSchema = z
@@ -131,7 +133,7 @@ export function chatState(
   return item.unread ? "fyi" : null;
 }
 export const sourceLabel = (source: ChatSource) =>
-  source === "slack" ? "Slack" : "Teams";
+  source === "slack" ? "Slack" : source === "support" ? "Support" : "Teams";
 // The place's name as rows and notices show it: a Teams chat with its
 // organisation first, a Slack channel by itself.
 export const placeTitle = (place: ChatPlace) =>

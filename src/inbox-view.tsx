@@ -17,6 +17,8 @@ import type { RunSummary } from "./run-model";
 import type { ArchiveEntry } from "./archive-model";
 import type { ChatSource } from "./chat-model";
 import { ChatSections, SourceFilter, useChats } from "./chat-view";
+import type { ChatList } from "./chat-model";
+import { withoutSupportCopies } from "./support-copies";
 
 // Emails to handle in one inbox, and whether that number covers the whole
 // inbox. A stale, truncated or failed read is never presented as an inbox with
@@ -39,6 +41,7 @@ export function inboxCount(
   actions: InboxAction[],
   now: number,
   account: string | undefined,
+  support?: ChatList,
 ) {
   const inbox = account ? currentInbox(snapshots, account) : undefined;
   if (!inbox || !runs) return null;
@@ -47,7 +50,7 @@ export function inboxCount(
       inbox.state === "unavailable"
         ? 0
         : inboxQueue(
-            inbox,
+            withoutSupportCopies(inbox, support, now),
             currentWork(snapshots)?.issues ?? [],
             runs,
             actions,
@@ -66,7 +69,7 @@ export function InboxView({
   return (
     <div className="inbox">
       {!email.emailHidden && <SourceFilter source={source} list={chats.data} />}
-      {source !== "slack" && source !== "teams" && <EmailInbox {...email} />}
+      {(!source || source === "email") && <EmailInbox {...email} />}
       {!email.emailHidden && source !== "email" && <ChatSections source={source} now={email.now} />}
     </div>
   );
@@ -94,6 +97,7 @@ function EmailInbox({
   onEveryone: (everyone: boolean) => void;
 }) {
   const me = useMe().data?.email;
+  const support = useChats().data;
   const ownerLabel = useOwnerLabel();
   const inboxes = currentInboxes(snapshots),
     work = currentWork(snapshots);
@@ -160,7 +164,7 @@ function EmailInbox({
             </li>
           ))}
           {inboxes.map((read) => {
-            const count = inboxCount(snapshots, runs, actions, now, read.account);
+            const count = inboxCount(snapshots, runs, actions, now, read.account, read.account === me ? support : undefined);
             return (
               <li className="mail" key={read.account}>
                 <span className="mail-subject">
@@ -197,7 +201,7 @@ function EmailInbox({
         </p>
       </section>
     );
-  const items = inboxQueue(inbox, work?.issues ?? [], runs, actions);
+  const items = inboxQueue(withoutSupportCopies(inbox, support, now), work?.issues ?? [], runs, actions);
   const selectedSource =
     selectedEmail && !items.some((i) => i.thread.id === selectedEmail)
       ? inboxRows(inbox, work?.issues ?? []).find(

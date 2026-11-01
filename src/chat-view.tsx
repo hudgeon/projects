@@ -23,6 +23,8 @@ import { Composer, errorText, LinkedText } from "./run-view";
 import { useMe, useOwnerLabel, usePeople } from "./people-view";
 import { chatSearch, conversationSearch, type Navigation } from "./navigation";
 import "./chats.css";
+import { currentInbox, gmailUrl } from "./inbox-model";
+import { supportCopy } from "./support-copies";
 
 // The signed-in person's items, without message text. A conversation
 // browser's own sign-in cannot read them, so it never asks.
@@ -68,6 +70,7 @@ export function ChatRow({
     kindLabel(item.source, item.place),
     ago(item.at, Date.now()),
     item.count > 1 ? `${item.count} new` : "",
+    item.support?.acknowledgment === "sent" ? "automated receipt sent" : item.support && ["failed", "uncertain"].includes(item.support.acknowledgment) ? "check acknowledgment delivery" : "",
     item.handedBy ? `handed to you by ${ownerLabel(item.handedBy)}` : "",
     item.handedTo ? `with ${ownerLabel(item.handedTo)}` : "",
     item.state === "action" ? "" : label.toLowerCase(),
@@ -197,9 +200,11 @@ export function ChatDetail({
     (person) => person.email !== me && person.email !== item.owner,
   );
   const chips = [
-    item.place.kind === "direct" ? "Direct message" : item.mention ? "Mentions you" : "",
-    item.unread ? `Unread in ${app}` : "",
+    item.support ? "Awaiting resolution" : item.place.kind === "direct" ? "Direct message" : item.mention ? "Mentions you" : "",
+    item.unread ? `Unread in ${item.support ? "Gmail" : app}` : "",
   ].filter(Boolean);
+  const personal = me ? currentInbox(snapshots, me) : undefined;
+  const copies = personal?.threads.filter(t => supportCopy(t, list.data, Date.now())?.key === item.key) ?? [];
   return (
     <article className="convo chat-detail">
       {backLink}
@@ -233,6 +238,17 @@ export function ChatDetail({
           </span>
         )}
       </div>
+      {item.support && <div className="support-receipt">
+        <p>{item.support.acknowledgment === "sent" ? (item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at ? "Automated acknowledgment sent." : "Automated acknowledgment sent. Waiting for a person to respond.")
+          : item.support.acknowledgment === "uncertain" ? "Acknowledgment delivery is uncertain. Check Sent before sending again."
+          : item.support.acknowledgment === "failed" ? "The automated acknowledgment could not be confirmed."
+          : item.support.acknowledgment === "off" ? "Automatic acknowledgments are off."
+          : item.support.acknowledgment === "skipped" ? "No automatic acknowledgment was sent for this message."
+          : "Waiting for the automated acknowledgment."}</p>
+        {item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at && <p>A person replied {ago(item.support.humanRepliedAt, Date.now()).toLowerCase()}. Mark Done when the request is resolved.</p>}
+        <p>Reply from {item.support.account} in its Gmail mailbox. Your reply stays in the same conversation.</p>
+        {personal && copies.map(copy => <p key={copy.id}><a href={gmailUrl(personal.account, copy.id)} target="_blank" rel="noreferrer">Copy in your Gmail</a></p>)}
+      </div>}
       <p className="subtle">
         {item.handedBy && `Handed to you by ${ownerLabel(item.handedBy)}. `}
         {item.handedTo && `With ${ownerLabel(item.handedTo)} until a new message arrives. `}
@@ -241,7 +257,7 @@ export function ChatDetail({
       <div className="chat-actions">
         {item.place.url && (
           <a className="btn-quiet" href={item.place.url} target="_blank" rel="noreferrer">
-            Open in {app}
+            {item.support ? "Open support in Gmail" : `Open in ${app}`}
           </a>
         )}
         {item.state !== "handed" && !composing && (
@@ -305,7 +321,7 @@ type InboxSource = "email" | ChatSource;
 // Which of the Inbox's sources to show. Chat sources appear once a machine
 // reads them.
 export function SourceFilter({ source, list }: { source?: InboxSource; list?: ChatList }) {
-  const sources = (["teams", "slack"] as const).filter(
+  const sources = (["support", "teams", "slack"] as const).filter(
     (s) => list?.reads.some((r) => r.source === s) || list?.items.some((i) => i.source === s),
   );
   if (!sources.length) return null;
@@ -364,7 +380,7 @@ export function ChatSections({ source, now }: { source?: ChatSource; now: number
   const count = (state: ChatState) => items.filter((i) => i.state === state).length;
   const problems = reads.map((read) => readProblem(read, now)).filter(Boolean);
   return (
-    <section className="chat-sections" aria-label="Slack and Teams">
+    <section className="chat-sections" aria-label="Support and messages">
       <div className="section-head">
         <h2>
           Messages that need you <span className="count">{count("action")}</span>
