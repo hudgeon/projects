@@ -9,6 +9,7 @@ import type { Portfolio } from "./index";
 import { acknowledgeSupport } from "../collector/support";
 import type { SupportThread } from "../collector/support-gmail";
 import type { Acknowledgment, AcknowledgmentInput, SupportConfig } from "../src/support-model";
+import { acknowledgmentText } from "../src/support-model";
 const owner = "owner@example.com", account = "help@example.com";
 const config: SupportConfig = { account, owner, aliases: [], since: "2026-11-01T00:00:00Z", acknowledge: true };
 test("durable send claims survive races, uncertain delivery and a process restart without replaying mail", async () => {
@@ -44,7 +45,16 @@ test("durable send claims survive races, uncertain delivery and a process restar
     let sends = 0, delivered = false, saved: string | undefined;
     const transport = {
       ack: async (t: SupportThread, action: AcknowledgmentInput["action"], token?: string) => store.supportAcknowledgment(input(t.key, action, token), "studio"),
-      gws: async (args: string[]) => { if (args.includes("send")) { sends++; throw Error("Response lost after Gmail accepted it"); } return JSON.stringify(delivered ? { messages: [{ id: "delivered" }] } : {}); },
+      gws: async (args: string[]) => {
+        if (args.includes("send")) { sends++; throw Error("Response lost after Gmail accepted it"); }
+        return JSON.stringify({ id: thread.id, messages: [
+          { id: "original", internalDate: String(thread.at), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: thread.from }, { name: "Message-ID", value: thread.messageId }] } },
+          ...(delivered ? [{ id: "delivered", internalDate: String(thread.at + 1000), labelIds: ["SENT"], payload: {
+            mimeType: "text/plain", headers: Object.entries({ From: account, To: thread.to, "Message-ID": "<gmail-replacement@mail.example.com>", "In-Reply-To": thread.messageId, "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All" }).map(([name, value]) => ({ name, value })),
+            body: { data: Buffer.from(acknowledgmentText("the export is empty")).toString("base64url") },
+          } }] : []),
+        ] });
+      },
       summarize: async () => ({ support: true, summary: "the export is empty" }),
       saveToken: async (value: string) => { saved = value; },
     };

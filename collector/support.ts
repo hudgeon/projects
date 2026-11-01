@@ -31,7 +31,7 @@ export async function acknowledgeSupport(thread: SupportThread, config: Support,
   const messageId = `<projects-support-${thread.key}@${config.account.split("@")[1]}>`;
   if (receipt.state !== "reserved") {
     // A prior attempt crossed the send boundary. Reconcile Sent, never replay.
-    if ((receipt.token ?? o.token) && await sentAcknowledgment(o.gws, messageId)) {
+    if ((receipt.token ?? o.token) && await sentAcknowledgment(o.gws, config, thread)) {
       const sent = await o.ack(thread, "sent", receipt.token ?? o.token);
       return sent?.state === "sent" ? { state: "sent", at: sent.acknowledgedAt } : { state: "uncertain" };
     }

@@ -81,8 +81,10 @@ count as a human reply or mark work Done.
 Before Gmail is called, the collector crosses a durable `reserved → sending`
 boundary. Only that transition grants send permission once. Delivery is then
 recorded, or stays uncertain if the response is lost. The originating machine
-checks Gmail Sent using the deterministic outbound Message-ID before recording
-a recovered delivery. A missing search result is never permission to resend;
+checks Sent in the exact shared-mailbox conversation before recording a recovered
+delivery. Gmail may replace the submitted Message-ID, so recognition also checks
+the shared sender, original request and reply recipient, automation headers and
+fixed acknowledgment copy. A missing receipt is never permission to resend;
 a fallback machine does not replay an uncertain send. The journal holds only
 reservation tokens and hashes in the private machine state directory.
 

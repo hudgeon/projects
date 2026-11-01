@@ -25,6 +25,21 @@ export function automatic(h: Record<string, string>) {
     /(?:mailer-daemon|postmaster|no[._-]?reply|do[._-]?not[._-]?reply)@/i.test(from) ||
     h["return-path"]?.trim() === "<>" || /multipart\/report/i.test(h["content-type"] ?? "");
 }
+function isAcknowledgment(message: Message, account: SupportConfig, incoming: Message[]) {
+  const h = headers(message);
+  if (!message.labelIds?.includes("SENT") || mailbox(h.from ?? "") !== account.account.toLowerCase() ||
+    h["auto-submitted"]?.trim().toLowerCase() !== "auto-replied") return false;
+  // Gmail can replace a submitted Message-ID. Recover only our own labelled
+  // Sent reply, tied to an actual request in this exact mailbox conversation.
+  const replyTo = rfcMessageId(h["in-reply-to"] ?? "");
+  const original = incoming.find(m => replyTo && rfcMessageId(headers(m)["message-id"] ?? "") === replyTo);
+  if (!original || h["x-auto-response-suppress"]?.trim().toLowerCase() !== "all") return false;
+  const request = headers(original);
+  if (mailbox(h.to ?? "") !== mailbox(request["reply-to"] ?? request.from ?? "")) return false;
+  const text = messageText(message.payload ?? {}).replace(/\s+/g, " ").trim();
+  return text.startsWith("Automated response from Support Thanks for your email. We understand that ") &&
+    text.endsWith("We're looking into it, and a person from our team will respond shortly. Support");
+}
 export function supportThread(account: SupportConfig, id: string, messages: Message[]): SupportThread | null {
   const own = new Set([account.account, account.owner, ...account.aliases].map(s => s.toLowerCase()));
   const sorted = messages.filter(m => !m.labelIds?.includes("DRAFT") && Number.isFinite(Number(m.internalDate)))
@@ -41,7 +56,7 @@ export function supportThread(account: SupportConfig, id: string, messages: Mess
   const messageId = rfcMessageId(h["message-id"] ?? "");
   const at = Number(latest.internalDate);
   const key = mailHash(`${account.account.toLowerCase()}\n${id}`);
-  const receipt = sorted.find(m => m.labelIds?.includes("SENT") && headers(m)["message-id"] === `<projects-support-${key}@${account.account.split("@")[1]}>`);
+  const receipt = sorted.find(m => isAcknowledgment(m, account, incoming));
   return {
     id, key,
     subject: (h.subject?.replace(/[\r\n]/g, " ").trim() || "Support request").slice(0, 300),
@@ -78,9 +93,10 @@ export async function readSupport(config: SupportConfig, gws: Gws): Promise<{ th
   }
   return { threads, complete: complete && !pageToken };
 }
-export async function sentAcknowledgment(gws: Gws, messageId: string) {
-  const result = await call(gws, "messages", "list", { userId: "me", q: `in:sent rfc822msgid:${messageId}`, maxResults: 2 });
-  return Array.isArray(result.messages) && result.messages.length > 0;
+export async function sentAcknowledgment(gws: Gws, account: SupportConfig, thread: SupportThread) {
+  const result = await call(gws, "threads", "get", { userId: "me", id: thread.id, format: "full", fields: "id,messages(id,internalDate,labelIds,payload)" });
+  if (result.id !== thread.id || !Array.isArray(result.messages)) throw Error("Invalid support conversation");
+  return supportThread(account, thread.id, result.messages)?.acknowledgedAt !== undefined;
 }
 export function acknowledgmentRaw(config: SupportConfig, thread: SupportThread, body: string, messageId: string) {
   if (!thread.to || !thread.messageId) throw Error("No safe reply address or Message-ID");

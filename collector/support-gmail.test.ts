@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acknowledgmentRaw, automatic, mailbox, readSupport, supportThread } from "./support-gmail";
+import { acknowledgmentRaw, automatic, mailbox, readSupport, sentAcknowledgment, supportThread } from "./support-gmail";
 import { messageKey } from "./mail-identity";
 import { acknowledgmentText, type SupportConfig } from "../src/support-model";
 const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-11-01T00:00:00Z", acknowledge: true };
@@ -12,7 +12,9 @@ const message = (when = at, extra: Record<string, string> = {}, sent = false) =>
 test("support uses the external request, while an automatic acknowledgment never becomes a human reply", () => {
   const first = supportThread(config, id, [message()])!;
   const receiptId = `<projects-support-${first.key}@example.com>`;
-  const received = supportThread(config, id, [message(), message(at + 1000, { "Auto-Submitted": "auto-replied", "Message-ID": receiptId }, true)])!;
+  const receipt = message(at + 1000, { "Auto-Submitted": "auto-replied", "Message-ID": receiptId, "X-Auto-Response-Suppress": "All", "In-Reply-To": "<original@example.org>", To: "customer@example.org" }, true);
+  receipt.payload.body.data = Buffer.from(acknowledgmentText("your export is empty")).toString("base64url");
+  const received = supportThread(config, id, [message(), receipt])!;
   assert.equal(received.body, "Our export is empty.");
   assert.equal(received.humanRepliedAt, undefined);
   assert.equal(received.acknowledgedAt, at + 1000);
@@ -48,6 +50,30 @@ test("acknowledgment names the automation, threads as support and replies only t
   const body = Buffer.from(raw.split("\r\n\r\n")[1].trim(), "base64").toString();
   assert.match(body, /^Automated response from Support/);
   assert.match(body, /person from our team will respond shortly/);
+});
+test("Gmail-rewritten Message-IDs reconcile through the actual labelled Sent reply without accepting unrelated mail", async () => {
+  const receipt = message(at + 1000, { "Message-ID": "<rewritten@mail.example.com>", "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All", "In-Reply-To": "<original@example.org>", To: "customer@example.org" }, true);
+  receipt.payload.body.data = Buffer.from(acknowledgmentText("your export is empty").replaceAll("\n", "\r\n")).toString("base64url");
+  const received = supportThread(config, id, [message(), receipt])!;
+  assert.equal(received.acknowledgedAt, at + 1000);
+  assert.equal(received.humanRepliedAt, undefined);
+  const get = async (args: string[]) => {
+    assert.deepEqual(args.slice(0, 4), ["gmail", "users", "threads", "get"]);
+    assert.equal(JSON.parse(args[args.indexOf("--params") + 1]).id, id);
+    return JSON.stringify({ id, messages: [message(), receipt] });
+  };
+  assert.equal(await sentAcknowledgment(get, config, received), true);
+  for (const changed of [{ From: "other@example.com" }, { To: "other@example.org" }, { "In-Reply-To": "<other@example.org>" }, { "Auto-Submitted": "no" }, { "X-Auto-Response-Suppress": "" }]) {
+    const unrelated = structuredClone(receipt);
+    for (const [name, value] of Object.entries(changed)) unrelated.payload.headers = [...unrelated.payload.headers.filter(h => h.name !== name), { name, value }];
+    assert.equal(supportThread(config, id, [message(), unrelated])!.acknowledgedAt, undefined);
+  }
+  const notice = structuredClone(receipt);
+  notice.payload.body.data = Buffer.from("A different automated notice").toString("base64url");
+  assert.equal(supportThread(config, id, [message(), notice])!.acknowledgedAt, undefined);
+  const notSent = { ...receipt, labelIds: ["INBOX"] };
+  assert.equal(supportThread(config, id, [message(), notSent])!.acknowledgedAt, undefined);
+  await assert.rejects(sentAcknowledgment(async () => JSON.stringify({ id: "wrong", messages: [message(), receipt] }), config, received), /Invalid support/);
 });
 test("a wrong mailbox or incomplete Gmail inventory never becomes a clean empty support queue", async () => {
   await assert.rejects(readSupport(config, async () => JSON.stringify({ emailAddress: "another@example.com" })), /identity/);
