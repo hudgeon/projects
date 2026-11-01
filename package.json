@@ -15,7 +15,7 @@
     "file-sizes:check": "node scripts/check-file-sizes.mjs",
     "collect": "tsx collector/main.ts",
     "work:rehearse": "tsx scripts/work-service-rehearsal.ts",
-    "collector:build": "esbuild collector=collector/main.ts service=collector/service.ts chats=collector/chats.ts work-item=hooks/work-item.ts runner=runner/main.ts --bundle --platform=node --format=esm --outdir=.local --out-extension:.js=.mjs",
+    "collector:build": "esbuild collector=collector/main.ts service=collector/service.ts chats=collector/chats.ts work-item=hooks/work-item.ts runner=runner/main.ts support-users=scripts/postgres-support-users.mjs --bundle --platform=node --format=esm --outdir=.local --out-extension:.js=.mjs",
     "runner": "tsx runner/main.ts",
     "context:evaluate": "tsx scripts/evaluate-context.ts",
     "context:replay": "tsx scripts/replay-project-context.ts",

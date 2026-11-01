@@ -65,8 +65,24 @@ export function applyConnections(config, { args, flags, expand, fail }) {
       config.support.configDir = configDir;
     }
   }
+  const usersCommand = flags("support-users-command").at(-1);
+  if (usersCommand !== undefined) {
+    if (!config.support) fail("Connect --support before its registered-user source.");
+    let parsed;
+    try { parsed = JSON.parse(usersCommand); } catch { fail("Give --support-users-command as a JSON command array."); }
+    if (!Array.isArray(parsed) || !parsed.length || parsed.length > 64 ||
+      parsed.some(value => typeof value !== "string" || !value.length || value.length > 2000 || /[\x00\r\n]/.test(value)))
+      fail("Give --support-users-command as a JSON command array.");
+    config.support.usersCommand = parsed;
+  }
+  const userPolicy = flags("support-user-policy").at(-1);
+  if (userPolicy !== undefined) {
+    if (!config.support || !["all", "sender"].includes(userPolicy)) fail("Give --support-user-policy as all or sender.");
+    config.support.registeredRecipients = userPolicy;
+  }
   if (args.includes("--acknowledge-support")) {
     if (!config.support) fail("Connect --support before enabling acknowledgments.");
+    if (!config.support.usersCommand?.length) fail("Connect --support-users-command before enabling acknowledgments.");
     // Newly enabling sends starts now, even if monitoring began earlier.
     if (!config.support.acknowledge) config.support.acknowledgeSince = new Date().toISOString();
     config.support.acknowledge = true;

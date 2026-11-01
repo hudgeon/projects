@@ -10,6 +10,7 @@ import { acknowledgeSupport } from "../collector/support";
 import type { SupportThread } from "../collector/support-gmail";
 import type { Acknowledgment, AcknowledgmentInput, SupportConfig } from "../src/support-model";
 import { acknowledgmentText } from "../src/support-model";
+import { mailHash } from "../collector/mail-identity";
 const owner = "owner@example.com", account = "help@example.com";
 const config: SupportConfig = { account, owner, aliases: [], since: "2026-11-01T00:00:00Z", acknowledge: true };
 test("durable send claims survive races, uncertain delivery and a process restart without replaying mail", async () => {
@@ -41,16 +42,17 @@ test("durable send claims survive races, uncertain delivery and a process restar
     await store.publishChats({ source: "support", owner, observedAt: readAt + 1, state: "unavailable", items: [] }, "studio");
     assert.equal((await store.chatList(owner)).items.length, 1, "a failed support read retains the unresolved request");
     assert.equal((await store.chatList(owner)).reads[0].state, "unavailable");
-    const thread: SupportThread = { id: "1234567890abcdef", key: "b".repeat(64), subject: "Export", from: "customer@example.org", to: "customer@example.org", at: Date.now(), body: "The export is empty.", messageId: "<original@example.org>", messageKeys: ["c".repeat(64)], unread: false, eligible: true };
+    const thread: SupportThread = { id: "1234567890abcdef", key: "b".repeat(64), subject: "Export", from: "customer@example.org", recipients: { to: ["customer@example.org"], cc: [] }, deliveryHistoryComplete: true, at: Date.now(), body: "The export is empty.", messageId: "<original@example.org>", messageKeys: ["c".repeat(64)], unread: false, eligible: true };
     let sends = 0, delivered = false, saved: string | undefined;
     const transport = {
+      users: async () => new Set([mailHash(thread.from)]),
       ack: async (t: SupportThread, action: AcknowledgmentInput["action"], token?: string) => store.supportAcknowledgment(input(t.key, action, token), "studio"),
       gws: async (args: string[]) => {
         if (args.includes("send")) { sends++; throw Error("Response lost after Gmail accepted it"); }
         return JSON.stringify({ id: thread.id, messages: [
           { id: "original", internalDate: String(thread.at), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: thread.from }, { name: "Message-ID", value: thread.messageId }] } },
           ...(delivered ? [{ id: "delivered", internalDate: String(thread.at + 1000), labelIds: ["SENT"], payload: {
-            mimeType: "text/plain", headers: Object.entries({ From: account, To: thread.to, "Message-ID": "<gmail-replacement@mail.example.com>", "In-Reply-To": thread.messageId, "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All" }).map(([name, value]) => ({ name, value })),
+            mimeType: "text/plain", headers: Object.entries({ From: account, To: thread.from, "Message-ID": "<gmail-replacement@mail.example.com>", "In-Reply-To": thread.messageId, "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All" }).map(([name, value]) => ({ name, value })),
             body: { data: Buffer.from(acknowledgmentText("the export is empty")).toString("base64url") },
           } }] : []),
         ] });

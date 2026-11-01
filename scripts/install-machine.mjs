@@ -48,7 +48,7 @@ const fail = (message) => {
   console.error(message);
   process.exit(1);
 };
-const bundles = ["collector", "service", "chats", "runner", "work-item"];
+const bundles = ["collector", "service", "chats", "runner", "work-item", "support-users"];
 // The bundles are built here, from the checkout as it is, so a release can
 // never install ones left by an earlier build. The checkout's commit is kept
 // beside them (release.json) and the runner logs it when it starts.

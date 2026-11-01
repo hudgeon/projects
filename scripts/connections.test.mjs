@@ -19,7 +19,8 @@ test("shared support keeps a real owner, defaults to monitoring only and starts 
   assert.equal(config.support.acknowledge, false);
   assert.equal(config.inboxAccounts, undefined, "support is not registered as a person");
   config.support.since = "2020-01-01T00:00:00Z";
-  apply(config, "--acknowledge-support");
+  assert.throws(() => apply(config, "--acknowledge-support"), /support-users-command/);
+  apply(config, "--support-users-command", '["node","/private/users.mjs"]', "--support-user-policy", "all", "--acknowledge-support");
   assert.equal(config.support.acknowledge, true);
   assert.equal(config.support.since, "2020-01-01T00:00:00Z", "enabling acknowledgments cannot drop previously monitored inquiries");
   assert.ok(Date.parse(config.support.acknowledgeSince) > Date.parse(config.support.since));

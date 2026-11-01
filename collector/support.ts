@@ -8,6 +8,9 @@ import { delegationKey, delegatedGws, gwsFor } from "./inbox-logins";
 import { GMAIL_MODIFY_SCOPE, GMAIL_READ_SCOPE } from "./delegation";
 import { readSupport, acknowledgmentRaw, sentAcknowledgment, type SupportThread } from "./support-gmail";
 import { summarizeSupport } from "./support-summary";
+import { readSupportUsers } from "./support-users";
+import { mailHash } from "./mail-identity";
+import type { DeliveryReport } from "./mail-delivery";
 import { acknowledgmentText, type Acknowledgment, type AcknowledgmentInput } from "../src/support-model";
 import { CHAT_TEXT_LIMIT, type ChatRead } from "../src/chat-model";
 import { gmailUrl } from "../src/inbox-model";
@@ -21,10 +24,18 @@ type SendState = "off" | "pending" | "sent" | "uncertain" | "failed" | "skipped"
 export async function acknowledgeSupport(thread: SupportThread, config: Support, o: {
   ack: Ack; gws: Gws; summarize: (body: string) => Promise<{ support: boolean; summary: string }>;
   token?: string; saveToken: (token: string) => Promise<void>;
+  users: () => Promise<ReadonlySet<string>>;
 }): Promise<{ state: SendState; at?: number }> {
   if (thread.acknowledgedAt !== undefined) return { state: "sent", at: thread.acknowledgedAt };
   if (!config.acknowledge) return { state: "off" };
-  if (!thread.eligible || !thread.to || !thread.body) return { state: "skipped" };
+  if (!thread.eligible || !thread.recipients || !thread.body) return { state: "skipped" };
+  if (!thread.deliveryHistoryComplete) return { state: "failed" };
+  const users = await o.users();
+  if (!users.has(mailHash(thread.from))) return { state: "skipped" };
+  const keep = (email: string) => config.registeredRecipients === "sender" || users.has(mailHash(email));
+  const recipients = { to: thread.recipients.to.filter(keep), cc: thread.recipients.cc.filter(keep) };
+  if (!recipients.to.length && recipients.cc.length) recipients.to.push(recipients.cc.shift()!);
+  if (!recipients.to.length) return { state: "skipped" };
   const receipt = await o.ack(thread, "reserve", o.token);
   if (!receipt) return { state: "failed" };
   if (receipt.state === "sent") return { state: "sent", at: receipt.acknowledgedAt };
@@ -41,7 +52,7 @@ export async function acknowledgeSupport(thread: SupportThread, config: Support,
   const summary = await o.summarize(thread.body);
   if (!summary.support) { await o.ack(thread, "release", receipt.token); return { state: "skipped" }; }
   await o.saveToken(receipt.token);
-  const raw = acknowledgmentRaw(config, thread, acknowledgmentText(summary.summary), messageId);
+  const raw = acknowledgmentRaw(config, thread, acknowledgmentText(summary.summary), messageId, recipients);
   const begun = await o.ack(thread, "begin", receipt.token);
   if (!begun?.send) return { state: begun?.state === "sent" ? "sent" : "uncertain", at: begun?.acknowledgedAt };
   try {
@@ -61,6 +72,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
   const tokensFile = path.join(stateDir, "support-send-tokens.json");
   const tokens: Record<string, string> = {};
   const skipped = new Map<string, number>();
+  const reports = new Map<string, DeliveryReport>();
   const ready = readFile(tokensFile, "utf8").then(text => {
     if (text.length > 100_000) throw Error();
     for (const [key, value] of Object.entries(JSON.parse(text)))
@@ -82,7 +94,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
       // accidentally cached for the lifetime of this continuous watcher.
       const as = (scope: string) => support.configDir ? gwsFor({ account: support.account, configDir: support.configDir })
         : delegatedGws(support.account, scope, () => delegationKey(config));
-      const read = await readSupport(support, as(GMAIL_READ_SCOPE));
+      const read = await readSupport(support, as(GMAIL_READ_SCOPE), reports);
       const items: ChatRead["items"] = read.threads.map(thread => ({ id: thread.key,
         place: { name: thread.subject.slice(0, 160), kind: "thread", url: gmailUrl(support.account, thread.id) },
         from: thread.from.slice(0, 120), at: thread.at, count: 1, unread: thread.unread, mention: true, text: thread.body.slice(0, CHAT_TEXT_LIMIT),
@@ -94,10 +106,20 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
       // Intake reaches its human owner before a model runs. A queue that could
       // not accept the request cannot send a receipt promising a human reply.
       if (await publish() !== 200) return;
+      let users: Promise<ReadonlySet<string>> | undefined, usersAt = 0;
+      const directory = () => {
+        if (!users || Date.now() - usersAt > 30_000) {
+          usersAt = Date.now();
+          users = readSupportUsers(support.usersCommand, stateDir);
+        }
+        return users;
+      };
       for (const [index, thread] of read.threads.entries()) {
         let sent: Awaited<ReturnType<typeof acknowledgeSupport>> = { state: support.acknowledge ? "pending" : "off" };
         try {
-          sent = skipped.get(thread.key) === thread.at ? { state: "skipped" } : await acknowledgeSupport(thread, support, {
+          sent = !read.complete && thread.acknowledgedAt === undefined ? { state: "failed" }
+            : skipped.get(thread.key) === thread.at ? { state: "skipped" } : await acknowledgeSupport(thread, support, {
+            users: directory,
             ack: async (t, action, token) => (await request("/api/support/ack", { key: t.key, owner: support.owner, account: support.account, action, ...(token ? { token } : {}) })).receipt as Acknowledgment | null,
             gws: as(GMAIL_MODIFY_SCOPE), token: tokens[thread.key],
             saveToken: async token => {

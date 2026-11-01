@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { acknowledgmentRaw, automatic, mailbox, readSupport, sentAcknowledgment, supportThread } from "./support-gmail";
-import { messageKey } from "./mail-identity";
+import { acknowledgmentRaw, automatic, readSupport, sentAcknowledgment, supportThread } from "./support-gmail";
+import type { DeliveryReport } from "./mail-delivery";
+import { mailbox, messageKey } from "./mail-identity";
 import { acknowledgmentText, type SupportConfig } from "../src/support-model";
 const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-11-01T00:00:00Z", acknowledge: true };
 const at = Date.parse("2026-11-02T00:00:00Z"), id = "1234567890abcdef";
@@ -33,13 +34,14 @@ test("old mail, bounces, lists, automation, malformed recipients and missing Mes
   assert.equal(supportThread({ ...config, acknowledgeSince: new Date(at + 1).toISOString() }, id, [message()])!.eligible, false);
   assert.equal(supportThread(config, id, [message(at, { "Auto-Submitted": "auto-replied" })]), null);
   assert.equal(supportThread(config, id, [message(at, { "Message-ID": "" })])!.eligible, false);
-  assert.equal(supportThread(config, id, [message(at, { "Reply-To": "one@example.org, two@example.org" })])!.to, null);
+  assert.equal(supportThread(config, id, [message(at, { To: "one@example.org, broken address" })])!.recipients, null);
+  assert.deepEqual(supportThread(config, id, [message(at, { "Reply-To": "other@example.org" })])!.recipients, { to: ["customer@example.org"], cc: [] });
   assert.equal(mailbox("Name <customer@example.org>"), "customer@example.org");
   for (const header of ["one@example.org, two@example.org", "one@example.org, Two <two@example.org>", "<one@example.org> extra", "https://one@example.org/path", "one@example.org\r\nBcc: other@example.org"]) assert.equal(mailbox(header), null);
   assert.equal(mailbox('"Customer, Example" <customer@example.org>'), "customer@example.org");
   assert.equal(messageKey("invalid"), undefined);
 });
-test("acknowledgment names the automation, threads as support and replies only to the sender", () => {
+test("acknowledgment names the automation and threads as support", () => {
   const thread = supportThread(config, id, [message()])!;
   const raw = Buffer.from(acknowledgmentRaw(config, thread, acknowledgmentText("your export is empty"), "<ack@example.com>"), "base64url").toString();
   assert.match(raw, /From: Support <help@example.com>/);
@@ -50,6 +52,37 @@ test("acknowledgment names the automation, threads as support and replies only t
   const body = Buffer.from(raw.split("\r\n\r\n")[1].trim(), "base64").toString();
   assert.match(body, /^Automated response from Support/);
   assert.match(body, /person from our team will respond shortly/);
+});
+test("reply-all excludes a recipient whose linked delivery report is in a separate Gmail conversation", async () => {
+  const reportId = "abcdef0123456789";
+  const original = message(at - 1000, { "Message-ID": "<earlier@example.com>" }, true);
+  const request = message(at, { To: config.account, Cc: "owner@example.com, lost@example.org" });
+  const report = { id: reportId, internalDate: String(at + 1000), payload: { mimeType: "multipart/report", parts: [
+    { mimeType: "message/delivery-status", body: { data: Buffer.from("Reporting-MTA: dns; mx.example.com\r\n\r\nFinal-Recipient: rfc822; lost@example.org\r\nAction: failed\r\nStatus: 5.1.1").toString("base64url") } },
+    { mimeType: "text/rfc822-headers", body: { data: Buffer.from("Message-ID: <earlier@example.com>\r\n").toString("base64url") } },
+  ] } };
+  let reportReads = 0;
+  const run = async (args: string[]) => {
+    const params = JSON.parse(args[args.indexOf("--params") + 1]);
+    if (args.includes("getProfile")) return JSON.stringify({ emailAddress: config.account });
+    if (args[2] === "threads" && args[3] === "list") return JSON.stringify({ threads: [{ id }] });
+    if (args[2] === "threads") return JSON.stringify({ id, messages: [original, request] });
+    if (args[3] === "list") {
+      assert.equal(params.includeSpamTrash, true);
+      return JSON.stringify({ messages: [{ id: reportId }] });
+    }
+    reportReads++;
+    return JSON.stringify(report);
+  };
+  const cache = new Map<string, DeliveryReport>();
+  const read = await readSupport(config, run, cache);
+  assert.equal(read.complete, true);
+  assert.deepEqual(read.threads[0].recipients, { to: ["customer@example.org"], cc: ["owner@example.com"] });
+  const raw = Buffer.from(acknowledgmentRaw(config, read.threads[0], acknowledgmentText("the export is empty"), "<ack@example.com>"), "base64url").toString();
+  assert.match(raw, /^Cc: owner@example.com\r?$/m);
+  assert.doesNotMatch(raw, /lost@example.org/);
+  assert.equal((await readSupport(config, run, cache)).complete, true);
+  assert.equal(reportReads, 1, "immutable report content is cached while every scan rechecks the inventory");
 });
 test("Gmail-rewritten Message-IDs reconcile through the actual labelled Sent reply without accepting unrelated mail", async () => {
   const receipt = message(at + 1000, { "Message-ID": "<rewritten@mail.example.com>", "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All", "In-Reply-To": "<original@example.org>", To: "customer@example.org" }, true);

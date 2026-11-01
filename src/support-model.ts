@@ -9,6 +9,8 @@ export const supportConfigSchema = z.object({
   acknowledgeSince: z.iso.datetime().optional(),
   acknowledge: z.boolean().default(false),
   configDir: z.string().startsWith("/").optional(),
+  usersCommand: z.array(z.string().min(1).max(2000).refine(s => !/[\x00\r\n]/.test(s))).min(1).max(64).optional(),
+  registeredRecipients: z.enum(["all", "sender"]).optional(),
 }).strict();
 export type SupportConfig = z.infer<typeof supportConfigSchema>;
 export const supportReceiptSchema = z.object({

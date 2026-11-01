@@ -8,7 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
-const BUNDLES = ["collector", "service", "chats", "runner", "work-item"];
+const BUNDLES = ["collector", "service", "chats", "runner", "work-item", "support-users"];
 // Each test installs a release into a home of its own, with stand-ins for the
 // commands the installer runs placed first on PATH: a git that answers for the
 // checkout, an npm whose build writes the bundles (stale ones are there
