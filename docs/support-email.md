@@ -222,3 +222,24 @@ reply, a later customer follow-up, uncertain-draft recovery and a duty-holder
 restart. Verify no Gmail send endpoint is called. Record observed
 latency and actual Gmail/Projects states; local tests alone do not establish a
 customer rollout.
+
+## Internal paste-and-preview
+
+The optional private application connection also serves explicit internal
+preview jobs from its authenticated, company-scoped preview page. The chat
+watcher polls separately from Gmail, only while its machine holds collector
+duties. `collector/support-preview.ts` calls the existing `summarizeSupport`,
+`groundedSupportSummary` and `acknowledgmentText` owners; it has no mailbox
+client, record tools or persistent model session. The installed release hash
+identifies the response version. Native failures remain failed previews.
+
+`/api/collector/support-preview` accepts only strict poll/finish messages from
+the collector on duty, through the existing private `SupportRead` binding's
+`/preview/poll` and `/preview/finish` protocol. The customer application owns
+authentication, current company access, temporary expiry, private saved cases,
+conditional claims and human feedback. Projects neither stores cases in its
+portfolio nor makes a support source, work item, consent grant, Gmail draft,
+receipt or deduplication entry. Only bounded pasted text and its initial
+response cross this path; customer-record readers and financial facts are
+unavailable. Feedback does not alter or train the model. No new binding or
+credential is required.

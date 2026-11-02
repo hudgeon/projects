@@ -9,6 +9,18 @@ import {
 } from "../src/telemetry";
 import { progressSchema } from "../src/run-model";
 
+test("preview availability logs only a fixed phase, never the pasted message or native error", (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "warn", (line: string) => lines.push(line));
+  telemetry("collector", "support_preview_unavailable", { ...{ message: "private pasted text", error: Error("private native output") }, supportPreviewPhase: "native" }, "warn");
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.component, "collector");
+  assert.equal(event.supportPreviewPhase, "native");
+  assert.equal(event.message, undefined);
+  assert.equal(event.error, undefined);
+  assert.doesNotMatch(lines[0], /private/);
+});
+
 test("telemetry strips unknown fields and never logs validation inputs or raw errors", (t) => {
   const lines: string[] = [];
   t.mock.method(Date, "now", () => 1791800000000);

@@ -1,6 +1,7 @@
 // Sending cannot be retried as though it were an ordinary failed read. This
 // ledger survives a machine change and records the boundary before Gmail.
 import { readJson } from "./auth";
+import { supportPreviewRoutes } from "./support-preview";
 import { acknowledgmentInputSchema, supportTaskPointerSchema, type Acknowledgment, type AcknowledgmentInput, type SupportTaskPointer } from "../src/support-model";
 import type { MachineCaller } from "./machines";
 import type { Portfolio } from "./index";
@@ -114,6 +115,8 @@ export class SupportAcknowledgments {
 }
 type Store = Pick<DurableObjectStub<Portfolio>, "supportAcknowledgment" | "supportSource" | "supportInvestigation" | "rate">;
 export async function supportRoutes(request: Request, store: Store, caller: string | MachineCaller, onDuty: () => Promise<boolean>, allowed: (email: string) => boolean, env: SupportEnvironment) {
+  const preview = await supportPreviewRoutes(request, caller, onDuty, env, () => store.rate(`support-preview:${typeof caller === "string" ? caller : caller.machine}`, 60, 60_000));
+  if (preview) return preview;
   const investigation = await investigationRoutes(request, store, caller, onDuty, allowed, env);
   if (investigation) return investigation;
   if (new URL(request.url).pathname !== "/api/support/ack") return null;

@@ -284,6 +284,7 @@ export const telemetryFieldsSchema = executionEventSchema
 export type TelemetryFields = z.infer<typeof telemetryFieldsSchema>;
 // These diagnostics belong to local runner logs, not Worker span attributes.
 const logFieldsSchema = telemetryFieldsSchema.extend({
+  supportPreviewPhase: z.enum(["poll", "native", "finish"]).optional(),
   admission: z.enum(["open", "paused"]).optional(),
   memoryPressure: z.enum(["normal", "warning", "critical", "unknown", "unsupported"]).optional(),
   contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
@@ -300,6 +301,8 @@ const logFieldsSchema = telemetryFieldsSchema.extend({
   upkeep: z.enum(["started", "exists", "active", "no_owner", "no_machine", "no_snapshot"]).optional(),
 });
 const logEventSchema = z.enum([
+  "support_preview_unavailable",
+  "support_preview_recovered",
   ...executionEventSchema.shape.event.options,
   "request_finished",
   "operation_failed",
@@ -347,7 +350,7 @@ const logEventSchema = z.enum([
   "upkeep_cycle",
 ]);
 export function telemetry(
-  component: "worker" | "conversation" | "runner",
+  component: "worker" | "conversation" | "runner" | "collector",
   event: z.infer<typeof logEventSchema>,
   fields: z.infer<typeof logFieldsSchema> = {},
   level: "info" | "warn" | "error" = "info",
