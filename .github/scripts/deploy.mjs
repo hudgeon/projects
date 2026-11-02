@@ -237,6 +237,12 @@ export async function verifyProduction({
         JSON.stringify([...config.secrets.required].sort()),
     "secret_bindings_mismatch",
   );
+  const bindings = await api("verify_support_binding", `scripts/${worker}/settings`);
+  const actualSupport = (bindings.bindings ?? []).filter(binding => binding.name === "SUPPORT_READER");
+  const expectedSupport = (config.services ?? []).find(binding => binding.binding === "SUPPORT_READER");
+  requireMatch(expectedSupport ? actualSupport.length === 1 && actualSupport[0].type === "service" &&
+    actualSupport[0].service === expectedSupport.service && actualSupport[0].entrypoint === "SupportRead"
+    : actualSupport.length === 0, "support_binding_mismatch");
 
   const domain = config.routes.find((r) => r.custom_domain)?.pattern;
   requireMatch(

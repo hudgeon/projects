@@ -10,8 +10,8 @@ import { Runs } from "./run-directory";
 import { PushDevices } from "./push";
 import { pushRoutes } from "./push-routes";
 import { Chats, chatRoutes } from "./chats";
-import { SupportAcknowledgments, supportRoutes } from "./support";
-import type { AcknowledgmentInput } from "../src/support-model";
+import { SupportAcknowledgments, supportRoutes, supportHealthy } from "./support";
+import type { AcknowledgmentInput, SupportTaskPointer } from "../src/support-model";
 import type { ChatAction, ChatRead } from "../src/chat-model";
 import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
@@ -54,7 +54,6 @@ import {
   type PendingClose,
 } from "../src/work-model";
 
-// A portfolio belongs to one owner, not a shared global collection.
 export class Portfolio extends DurableObject<Env> {
   private runs: Runs;
   private machines: Machines;
@@ -76,7 +75,7 @@ export class Portfolio extends DurableObject<Env> {
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
     this.chats = new Chats(ctx.storage);
-    this.support = new SupportAcknowledgments(ctx.storage);
+    this.support = new SupportAcknowledgments(ctx.storage, env, work => ctx.waitUntil(work));
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
       if (text) this.pushes.notify(text.to, { run: next.id, title: text.title, body: text.body });
@@ -187,7 +186,6 @@ export class Portfolio extends DurableObject<Env> {
     this.sessions.revoke(hash);
     this.signIns.revoke(hash);
   }
-  // Who a signed-in address is, as everyone sees them (worker/people.ts).
   person(email: string) {
     return this.profiles.get(email);
   }
@@ -303,7 +301,6 @@ export class Portfolio extends DurableObject<Env> {
       .filter((c) => c.state === "queued")
       .map(({ issue, requestedAt }) => ({ issue, requestedAt }));
   }
-  // Inbox requests and thread text are each inbox owner's (worker/inbox.ts).
   inboxActions() { return this.inbox.list(); }
   requestInboxAction(threadId: string, action: InboxAction["action"], requester: string, cancel = false, issue?: number) {
     return this.inbox.request(threadId, action, requester, cancel, issue);
@@ -311,14 +308,13 @@ export class Portfolio extends DurableObject<Env> {
   pendingInboxActions() { return this.inbox.pending(); }
   reportInboxAction(r: InboxActionReport) { return this.inbox.report(r); }
   inboxThread(threadId: string, account: string) { return this.inbox.thread(threadId, account); }
-  // Chat is each person's own (worker/chats.ts).
-  publishChats(read: ChatRead, host: string) { return this.chats.publish(read, host); }
+  publishChats(read: ChatRead, host: string) { return this.support.publish(this.chats, read, host); }
   supportAcknowledgment(input: AcknowledgmentInput, host: string) { return this.support.act(input, host); }
-  chatList(email: string) { return this.chats.list(email); }
+  supportSource(key: string, viewer: string, host?: string) { const source = this.chats.supportSource(key, viewer, host); return source ? { ...source, canBootstrap: this.support.canBootstrap(source.id, source.owner, source.request?.key) } : null; }
+  supportInvestigation(key: string, owner: string, pointer?: SupportTaskPointer) { return this.support.task(key, owner, pointer, this.chats.supportSource(key, owner, "")); }
+  chatList(email: string) { return this.support.decorate(this.chats.list(email)); }
   chatText(key: string, email: string) { return this.chats.text(key, email); }
   actOnChat(key: string, email: string, action: ChatAction["action"], to?: string) { return this.chats.act(key, email, action, to); }
-  // Notifications are each person's (worker/push.ts): their devices, their
-  // conversations' notices.
   subscribePush(endpoint: string, email: string) {
     this.pushes.subscribe(endpoint, email);
   }
@@ -695,13 +691,10 @@ export async function handle(
       );
     }
   }
-  // Legacy publishers fail closed without reading the payload or sending mail.
-  // Historical SQLite records are retained, but never returned or retried.
   if (url.pathname === "/api/review")
     return Response.json({ error: "Daily briefs have been retired." }, { status: 410 });
   if (url.pathname === "/api/collector/duties" && request.method === "GET")
-    return Response.json({ duties: await onDuty() });
-  // Requests go only to the machine on duty, so one machine applies each.
+    return Response.json({ duties: await onDuty(), supportInvestigation: await supportHealthy(env) });
   if (url.pathname === "/api/closes" && request.method === "GET")
     return Response.json({ closes: (await onDuty()) ? await store.pendingCloses() : [] });
   if (url.pathname === "/api/closes" && request.method === "POST") {
@@ -719,7 +712,7 @@ export async function handle(
   if (push) return push;
   const chats = await chatRoutes(request, store, caller, (email) => allowed(email, env));
   if (chats) return chats;
-  const support = await supportRoutes(request, store, caller, onDuty, (email) => allowed(email, env));
+  const support = await supportRoutes(request, store, caller, onDuty, (email) => allowed(email, env), env);
   if (support) return support;
   if (url.pathname === "/api/work/close" && request.method === "POST") {
     let number;

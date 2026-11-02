@@ -22,6 +22,14 @@ const extraHosts = browserHosts
 // signed in as the conversation's owner. Unset, every browser signs in by hand.
 const signIn = process.env.PROJECTS_BROWSER_SIGN_IN || "";
 const signInMachines = signIn ? signIn.split(",").map((entry) => entry.trim()) : [];
+const supportService = process.env.PROJECTS_SUPPORT_SERVICE || "";
+const supportUrl = process.env.PROJECTS_SUPPORT_URL || "";
+function supportOrigin(value) {
+  try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash; }
+  catch { return false; }
+}
+if (Boolean(supportService) !== Boolean(supportUrl) || supportService && (!/^[a-z0-9-]{1,63}$/.test(supportService) || !supportOrigin(supportUrl)))
+  throw Error("Configure both PROJECTS_SUPPORT_SERVICE and PROJECTS_SUPPORT_URL, or leave both unset.");
 const exactHost =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -91,6 +99,9 @@ config.vars = {
   OWNER_EMAIL: owner,
   EMAIL_FROM: from,
   TIME_ZONE: timeZone,
+  SUPPORT_APP_URL: supportUrl,
 };
+config.services = (config.services ?? []).filter(binding => binding.binding !== "SUPPORT_READER");
+if (supportService) config.services.push({ binding: "SUPPORT_READER", service: supportService, entrypoint: "SupportRead", props: { caller: "projects" } });
 writeFileSync("wrangler.jsonc", JSON.stringify(config, null, 2) + "\n");
 console.log(`Configured the deployment for ${host}.`);

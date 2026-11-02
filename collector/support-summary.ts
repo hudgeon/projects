@@ -3,24 +3,8 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { nativeEnv } from "../runner/native-env";
-import { supportSummarySchema, type SupportSummary } from "../src/support-model";
-export const pendingSupportSummary: SupportSummary = { kind: "needs-review", excerpt: "", area: "other" };
-export function supportText(body: string) {
-  // Do not classify a quoted older problem as the sender's new request.
-  return body.slice(0, 4000).split(/\n(?:On .{1,200}wrote:|From:|[-_]{5,}|>)/i)[0].trim();
-}
-export function groundedSupportSummary(value: unknown, body: string): SupportSummary {
-  const parsed = supportSummarySchema.safeParse(value);
-  if (!parsed.success) return pendingSupportSummary;
-  const summary = parsed.data;
-  const normal = (text: string) => text.replace(/\s+/g, " ").trim();
-  if (summary.kind !== "issue") return { ...summary, excerpt: "", area: "other" };
-  const excerpt = normal(summary.excerpt);
-  // Exact source grounding and conservative review of instruction-like text.
-  if (!excerpt || !normal(supportText(body)).includes(excerpt) || /[\p{Cc}<>]/u.test(excerpt) ||
-    /(?:^|[.!?]\s+)(?:please|try|you should|you must|run|restart|delete|change|ignore|use|click|send)\b/i.test(excerpt)) return pendingSupportSummary;
-  return { ...summary, excerpt };
-}
+import { supportSummarySchema, supportText, groundedSupportSummary } from "../src/support-model";
+export { pendingSupportSummary, supportText, groundedSupportSummary } from "../src/support-model";
 export async function summarizeSupport(body: string, directory: string) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   return new Promise<ReturnType<typeof supportSummarySchema.parse>>((resolve, reject) => {

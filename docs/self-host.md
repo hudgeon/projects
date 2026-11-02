@@ -36,6 +36,7 @@ variables on your copy of the repository.
 | `PROJECTS_TIME_ZONE` | Legacy daily-brief setting, retained for deployment compatibility; no longer affects the workspace. |
 | `PROJECTS_BROWSER_HOSTS` | Optional. Exact host names, comma separated, that conversation browsers may reach besides your site, such as `mockups.example.net`; at most ten, no wildcards. Unset, browsers reach only your site. |
 | `PROJECTS_BROWSER_SIGN_IN` | Optional. Machine IDs, comma separated, whose conversation browsers start signed in to your site as the conversation's owner, while that address is allowed, so their agents never wait for a code; at most ten. Each browser gets its own session, which ends when that browser closes; it cannot change machines, open other browsers, read or act on email, or change how agents run. Removing the machine in Settings revokes its browsers at once; removing its ID does so at the next Deploy. Unset, every browser signs in by hand. |
+| `PROJECTS_SUPPORT_SERVICE`, `PROJECTS_SUPPORT_URL` | Optional approved customer-data service and HTTPS app origin. Both unset leaves record checks disconnected. See [access approval, binding and recovery](support-email.md#authorised-record-checks). |
 | `SECURITY_REVIEW_BOT_ID` | The id of a bot whose passing `security-review` status each release needs, or `none`. `none` needs `"securityReview": "optional"` in `.github/release-policy.json`, changed by a reviewed pull request. |
 
 ## 2. Set up email sign-in

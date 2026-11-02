@@ -174,6 +174,10 @@ export function ChatDetail({
       if (input.action !== "reopen") void navigate({ to: "/", search: next ?? back });
     },
   });
+  const investigation = useMutation({
+    mutationFn: () => api("/api/support/investigation", { action: "prepare", key: chatKey }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["chats"] }),
+  });
   const backLink = (
     <nav className="convo-back">
       <Link to="/" search={back}>
@@ -255,6 +259,16 @@ export function ChatDetail({
           : item.support.acknowledgment === "skipped" ? "No automatic acknowledgment was sent for this message."
           : "Waiting for the automated acknowledgment."}</p>
         {item.support.triage === "needs-review" && <p>The email needs human triage. The draft contains a simple receipt.</p>}
+        {item.support.investigation && item.support.investigation.state !== "off" && <div>
+          <p>{item.support.investigation.state === "prepared" ? "Record checks are available for authorised review. The Gmail draft contains only the incoming report."
+            : item.support.investigation.state === "awaiting-verification" ? "Record checks need the email sender's sign-in and consent."
+            : "Record checks are held. The email still needs a person's review."}</p>
+          <div className="chat-actions">
+            {item.support.investigation.reviewUrl && <a className="btn-quiet" href={item.support.investigation.reviewUrl} target="_blank" rel="noreferrer">Review record checks</a>}
+            {!item.support.investigation.reviewUrl && item.support.investigation.verificationUrl && <button className="btn-quiet" type="button" disabled={investigation.isPending} onClick={() => investigation.mutate()}>Prepare record checks</button>}
+          </div>
+          {investigation.error && <p className="error">{errorText(investigation.error)}</p>}
+        </div>}
         {item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at && <p>A person replied {ago(item.support.humanRepliedAt, Date.now()).toLowerCase()}. Mark Done when the request is resolved.</p>}
         <p>Reply from {item.support.account} in its Gmail mailbox. Your reply stays in the same conversation.</p>
         {personal && copies.map(copy => <p key={copy.id}><a href={gmailUrl(personal.account, copy.id)} target="_blank" rel="noreferrer">Copy in your Gmail</a></p>)}

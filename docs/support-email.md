@@ -144,6 +144,56 @@ deleted draft is never permission to recreate it. Another machine cannot replay
 an uncertain creation. The private local journal retains reservation tokens
 only; neither those tokens nor raw email reach telemetry.
 
+## Authorised record checks
+
+This optional connection is absent by default. After the deployment owner
+approves the exact access grant, configure both `PROJECTS_SUPPORT_SERVICE` and
+`PROJECTS_SUPPORT_URL` and use the normal Deploy workflow. It binds only the
+customer application's private `SupportRead` entrypoint with platform-controlled
+`caller: projects` props. Deploy verifies the target and entrypoint; collector
+duties also probes the private health contract before offering verification.
+An arbitrary HTTP header, email instruction or request field cannot set these
+props. No database role, credential or Gmail scope is added.
+
+For an eligible issue, the initial email-only draft can include a task link.
+The link carries no bearer grant: the original sender must sign in normally
+to the customer application and consent to one account, the exact task and its
+immutable reply-all audience. A copied person cannot consent as the sender.
+Every remaining recipient needs current access to the requested records. One
+unknown or unauthorised recipient holds the entire protected brief. A normal
+registered-user directory check alone never permits record access.
+
+A support reviewer uses **Prepare record checks** in Projects after consent.
+Machines cannot invoke that action. Only exact, explicitly tagged invoice
+IDs/references or receipt-line IDs in the latest unquoted email are eligible;
+more than two distinct references or no exact references holds preparation.
+The adapter cannot submit SQL, choose an account/role, search broadly or read
+attachments. The customer application limits consent to ten minutes, 20 calls
+and 25 total returned records, and refreshes current access for each read.
+
+Projects receives readiness metadata and an authenticated **Review record
+checks** link. It never receives the grant, financial facts or protected reply
+body. The human review page regenerates stored observations and fixed
+investigation questions inside the source application, intersecting the human
+reviewer's access as well as the sender's and every recipient's. Changed facts
+or access hold the entire brief. It proposes no diagnosis, fix or workaround.
+No protected content enters a Gmail draft, native coding conversation or model
+cache. This release adds no protected-email send transport; all automatic sends
+remain disabled.
+
+Projects retains only the task ID, source/audience hashes, the email-only symptom
+and workflow state in its existing receipt ledger. A newer incoming sender,
+message, body or recipient list holds and permanently invalidates the old task.
+It never silently drops a copied recipient, reuses an old consent or overwrites
+the existing Gmail draft. Follow-ups remain for human review. Rejected older
+source reads cannot invalidate current tasks. An unavailable connection leaves
+the neutral email draft and visible support work available.
+
+To disconnect, remove both optional variables and run the normal Deploy
+workflow. This removes the binding and verification links while retaining mail,
+draft receipts and work history. Existing task grants expire within ten minutes
+and can also be withdrawn through their authenticated consent page.
+
 ## Human replies and completion
 
 Open the request's **Open support in Gmail** link and reply from that shared

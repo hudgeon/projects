@@ -6,7 +6,7 @@ import { messageKey, rfcMessageId } from "./mail-identity";
 import { mailHash } from "./mail-identity";
 import { groundedSupportSummary, pendingSupportSummary } from "./support-summary";
 import type { Gws } from "./inbox";
-import { acknowledgmentText, type Acknowledgment, type AcknowledgmentInput, type SupportConfig, type SupportSummary } from "../src/support-model";
+import { acknowledgmentText, type Acknowledgment, type AcknowledgmentInput, type SupportConfig, type SupportSummary, type SupportInvestigationView } from "../src/support-model";
 type DraftState = "off" | "pending" | "ready" | "uncertain" | "failed" | "stale" | "held" | "skipped";
 export type DraftOutcome = { state: DraftState; at?: number; triage?: SupportSummary["kind"] };
 type Ack = (thread: SupportThread, action: AcknowledgmentInput["action"], token?: string, details?: Pick<AcknowledgmentInput, "draftId" | "triage">) => Promise<Acknowledgment | null>;
@@ -39,11 +39,11 @@ export async function findSupportDraft(gws: Gws, config: SupportConfig, thread: 
   }
   throw Error("Incomplete draft inventory");
 }
-export async function createSupportDraft(gws: Gws, config: SupportConfig, thread: SupportThread, summary: SupportSummary) {
+export async function createSupportDraft(gws: Gws, config: SupportConfig, thread: SupportThread, summary: SupportSummary, verificationUrl?: string) {
   const requestKey = messageKey(thread.messageId ?? "");
   if (!requestKey) throw Error("Missing original message identity");
   const messageId = `<projects-support-${thread.key}@${config.account.split("@")[1]}>`;
-  const raw = acknowledgmentRaw(config, thread, acknowledgmentText(summary), messageId);
+  const raw = acknowledgmentRaw(config, thread, acknowledgmentText(summary, verificationUrl), messageId);
   const result = JSON.parse(await gws(["gmail", "users", "drafts", "create", "--params", JSON.stringify({ userId: "me" }), "--json", JSON.stringify({ message: { threadId: thread.id, raw } })]));
   if (typeof result.id !== "string" || !/^[\w-]{1,200}$/.test(result.id) || typeof result.message?.id !== "string" ||
     !/^[a-f0-9]{10,40}$/.test(result.message.id) || result.message.threadId !== thread.id)
@@ -54,6 +54,7 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   ack: Ack; gws: Gws; summarize: (body: string) => Promise<SupportSummary>;
   token?: string; saveToken: (token: string) => Promise<void>;
   users: () => Promise<ReadonlySet<string>>; reports?: DeliveryReport[];
+  investigate?: (summary: SupportSummary) => Promise<SupportInvestigationView>;
 }): Promise<DraftOutcome> {
   if (thread.acknowledgedAt !== undefined) return { state: "skipped" };
   if (!config.draft) return { state: "off" };
@@ -102,11 +103,15 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
     await o.ack(thread, "release", receipt.token); return { state: "stale" };
   }
   if (fresh.draftMessages?.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  let verificationUrl: string | undefined;
+  if (summary.kind === "issue" && o.investigate) {
+    try { verificationUrl = (await o.investigate(summary)).verificationUrl; } catch { /* Receipt drafting remains available. */ }
+  }
   await o.saveToken(receipt.token);
   const begun = await o.ack(thread, "begin-draft", receipt.token, { triage: summary.kind });
   if (!begun?.draft) return { state: "uncertain" };
   try {
-    const draftId = await createSupportDraft(o.gws, config, { ...fresh, recipients }, summary);
+    const draftId = await createSupportDraft(o.gws, config, { ...fresh, recipients }, summary, verificationUrl);
     const recorded = await o.ack(thread, "drafted", receipt.token, { draftId, triage: summary.kind });
     return recorded?.state === "drafted" ? { state: "ready", at: recorded.draftedAt, triage: summary.kind } : { state: "uncertain" };
   } catch {

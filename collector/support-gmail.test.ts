@@ -127,3 +127,10 @@ test("the new reviewed receipt is recognized only after send; an unsent draft ne
   assert.equal(sent.humanRepliedAt, undefined);
   assert.equal(supportThread({ ...config, draftSince: new Date(at + 1).toISOString() }, id, [message()])!.eligible, false);
 });
+test("a reviewed draft with an authenticated verification link retains automated attribution after manual send", () => {
+  const reply = message(at + 1000, { From: config.account, To: "customer@example.org", "Message-ID": "<draft@example.com>", "In-Reply-To": "<original@example.org>", "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All", "X-Projects-Support-Receipt": "2" }, true);
+  reply.payload.body.data = Buffer.from(draftText({ kind: "issue", excerpt: "Our export is empty.", area: "export" }, "https://source.example.com/support-investigation/19464d92-efbc-4117-a280-4c3834125b5c")).toString("base64url");
+  const result = supportThread(config, id, [message(), reply])!;
+  assert.equal(result.acknowledgedAt, at + 1000);
+  assert.equal(result.humanRepliedAt, undefined);
+});

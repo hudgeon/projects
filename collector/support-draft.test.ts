@@ -85,3 +85,15 @@ test("readiness checks the exact stable Gmail draft, rather than any draft in th
   assert.equal((await prepareSupportDraft(visible, config, { ...transport, gws: async () => { throw Error("Deleted or sent"); } })).state, "held");
   assert.deepEqual(f.mutations, []);
 });
+test("optional record verification follows registration and fresh mail checks, and adds only a sign-in link to the draft", async () => {
+  const f = fixture(), url = "https://source.example.com/support-investigation/19464d92-efbc-4117-a280-4c3834125b5c";
+  let calls = 0;
+  const investigate = async () => { calls++; assert.deepEqual(f.actions, ["reserve"]); return { state: "awaiting-verification" as const, verificationUrl: url }; };
+  await prepareSupportDraft({ ...thread, from: "unknown@example.org" }, config, { ...f.transport, investigate });
+  assert.equal(calls, 0);
+  assert.equal((await prepareSupportDraft(thread, config, { ...f.transport, investigate })).state, "ready");
+  assert.equal(calls, 1);
+  const body = Buffer.from(f.raw().split("\r\n\r\n")[1].trim(), "base64").toString();
+  assert.ok(body.includes(url)); assert.doesNotMatch(body, /sr_|sd_|database checked|solution|workaround/);
+  assert.deepEqual(f.mutations, ["gmail users drafts create"]);
+});

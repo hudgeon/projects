@@ -20,6 +20,7 @@ import {
 import { trace } from "./telemetry";
 import type { MachineCaller } from "./machines";
 import type { Portfolio } from "./index";
+import type { SupportSource } from "./support-investigation";
 
 const SKEW_MS = 10 * 60_000;
 // Marks outlive their items a while, so a gap in reads keeps what was done.
@@ -126,6 +127,15 @@ export class Chats {
   text(key: string, viewer: string) {
     const found = this.find(key, viewer);
     return found ? { text: found.item.text } : null;
+  }
+  supportSource(key: string, viewer: string, host?: string): SupportSource | null {
+    const found = host !== undefined ? this.reads().filter(read => read.source === "support" && same(read.owner, viewer))
+      .flatMap(read => read.items.filter(item => item.id === key).map(item => ({ read, item, state: "action" as const, mark: this.marks().get(item.key) })))[0] : this.find(key, viewer);
+    if (!found || found.read.source !== "support" || !found.item.support) return null;
+    const { read, item, state, mark } = found;
+    return { id: item.id, owner: read.owner, account: item.support!.account, text: item.text, subject: item.place.name,
+      request: item.support!.request, active: read.state === "ok" && Date.now()-read.observedAt < 90_000 && (!host || read.host === host) &&
+        state !== "handed" && !(mark?.doneAt && mark.doneAt >= item.at) && !(item.support!.humanRepliedAt && item.support!.humanRepliedAt >= item.at) };
   }
   // Done and Reopen by whoever holds the item; Hand over to another person,
   // or back to its owner, which ends the hand over. Each holds until a newer

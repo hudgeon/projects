@@ -12,10 +12,15 @@ import { summarizeSupport } from "./support-summary";
 import { readSupportUsers } from "./support-users";
 import { messageKey } from "./mail-identity";
 import type { DeliveryReport } from "./mail-delivery";
-import type { Acknowledgment } from "../src/support-model";
+import { supportInvestigationViewSchema, supportReceiptSchema, type Acknowledgment } from "../src/support-model";
 import { CHAT_TEXT_LIMIT, type ChatRead } from "../src/chat-model";
 import { gmailUrl } from "../src/inbox-model";
 import { postChatRead, type Site } from "./upload";
+function requestMetadata(thread: import("./support-gmail").SupportThread) {
+  if (!thread.eligible || !thread.deliveryHistoryComplete) return undefined;
+  const parsed = supportReceiptSchema.shape.request.safeParse({ key: messageKey(thread.messageId ?? ""), sender: thread.from, audience: thread.recipients });
+  return parsed.success ? parsed.data : undefined;
+}
 export function startSupport(config: Config, site: Site, stateDir: string) {
   const support = config.support;
   if (!support) return () => {};
@@ -38,7 +43,8 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
     await ready;
     let onDuty = false;
     try {
-      onDuty = (await request("/api/collector/duties")).duties === true;
+      const duty = await request("/api/collector/duties");
+      onDuty = duty.duties === true;
       if (!onDuty) return;
       // Fresh short-lived tokens for each scan, rather than an hour's token
       // accidentally cached for the lifetime of this continuous watcher.
@@ -49,6 +55,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
         place: { name: thread.subject.slice(0, 160), kind: "thread", url: gmailUrl(support.account, thread.id) },
         from: thread.from.slice(0, 120), at: thread.at, count: 1, unread: thread.unread, mention: true, text: thread.body.slice(0, CHAT_TEXT_LIMIT),
         support: { account: support.account, thread: thread.id, messageKeys: thread.messageKeys,
+          ...(requestMetadata(thread) ? { request: requestMetadata(thread) } : {}),
           ...(thread.humanRepliedAt === undefined ? {} : { humanRepliedAt: thread.humanRepliedAt }),
           acknowledgment: thread.acknowledgedAt !== undefined ? "sent" : "off",
           draft: support.draft ? "pending" : "off",
@@ -83,6 +90,15 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
               const summary = await summarizeSupport(body, path.join(stateDir, "support-summary"));
               return summary;
             },
+            ...(duty.supportInvestigation === true ? { investigate: async (summary: import("../src/support-model").SupportSummary) => {
+              let view: import("../src/support-model").SupportInvestigationView;
+              try {
+                const result = await request("/api/collector/support-investigation", { action: "bootstrap", key: thread.key, owner: support.owner, requestKey: messageKey(thread.messageId!), summary });
+                view = supportInvestigationViewSchema.parse(result.investigation);
+              } catch { view = { state: "unavailable" }; }
+              items[index].support = { ...items[index].support!, investigation: view };
+              return view;
+            } } : {}),
           });
         } catch { draft = { state: "failed" }; }
         items[index].support = { ...items[index].support!, draft: draft.state, ...(draft.at === undefined ? {} : { draftedAt: draft.at }), ...(draft.triage ? { triage: draft.triage } : {}) };

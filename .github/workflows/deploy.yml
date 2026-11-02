@@ -34,6 +34,8 @@ jobs:
           PROJECTS_TIME_ZONE: ${{ vars.PROJECTS_TIME_ZONE }}
           PROJECTS_BROWSER_HOSTS: ${{ vars.PROJECTS_BROWSER_HOSTS }}
           PROJECTS_BROWSER_SIGN_IN: ${{ vars.PROJECTS_BROWSER_SIGN_IN }}
+          PROJECTS_SUPPORT_SERVICE: ${{ vars.PROJECTS_SUPPORT_SERVICE }}
+          PROJECTS_SUPPORT_URL: ${{ vars.PROJECTS_SUPPORT_URL }}
         run: node .github/scripts/deployment-config.mjs
       - name: Verify release gates and identity
         env:
