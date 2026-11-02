@@ -1,4 +1,4 @@
-import { command } from "./command";
+import type { Gh } from "./work";
 // Work issues a pull request names: full issue links or OWNER/REPO#N.
 export function workIssueRefs(body: string, repo?: string) {
   if (!repo) return [];
@@ -11,9 +11,13 @@ export function workIssueRefs(body: string, repo?: string) {
     ...new Set(Array.from(body.matchAll(refs), (m) => Number(m[1]))),
   ].slice(0, 100);
 }
-export async function latestWorkMerge(repo: string, workRepo?: string) {
+export async function latestWorkMerge(
+  repo: string,
+  workRepo: string | undefined,
+  run: Gh,
+) {
   const rows = JSON.parse(
-    await command("gh", [
+    await run([
       "pr",
       "list",
       "--repo",

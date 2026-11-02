@@ -75,6 +75,9 @@ and store a read-only service token for that config in
 `~/.local/share/project-overview/doppler-token` (mode 600). The same config
 can also hold the machine's tokens (step 5) and the Gmail delegation key
 (Connect a person's inbox).
+The App reads each GitHub owner's repositories with a separate scoped token.
+If an installation is unavailable, only that owner's reads are unavailable;
+the collector never falls back to a broader sign-in for a configured App.
 
 ## 4. Deploy from GitHub
 

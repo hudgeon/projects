@@ -1,6 +1,6 @@
 import { latestWorkMerge, workIssueRefs } from "./work-delivery";
 import { readQuotas } from "./quotas";
-import { readWork } from "./work";
+import { readWork, type Gh } from "./work";
 import { readdir, readFile, stat, lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,7 +12,7 @@ import type {
   Source,
   Worktree,
 } from "../src/model";
-import { githubToken } from "./github";
+import { githubReaders } from "./github";
 import { command, subprocessEnv } from "./command";
 import { inboxLogins, type Config } from "./config";
 import { readInboxes } from "./inbox-logins";
@@ -543,6 +543,7 @@ async function collectProject(
   sessions: Session[],
   sources: Pick<Project["sources"], "codex" | "claude">,
   now: number,
+  gh: Gh,
 ): Promise<Project> {
   const root = path.resolve(config.root, item.directory);
   let repo = `local/${path.basename(item.directory).replace(/[^\w.-]/g, "-")}`;
@@ -658,11 +659,11 @@ async function collectProject(
     description = "";
   try {
     const metadata = JSON.parse(
-      await command("gh", ["repo", "view", repo, "--json", "description"]),
+      await gh(["repo", "view", repo, "--json", "description"]),
     );
     description = String(metadata.description ?? "").slice(0, 500);
     const raw = JSON.parse(
-      await command("gh", [
+      await gh([
         "pr",
         "list",
         "--repo",
@@ -685,7 +686,7 @@ async function collectProject(
       checks: checkState(p.statusCheckRollup as Record<string, unknown>[]),
       updatedAt: Date.parse(String(p.updatedAt)),
     }));
-    latestMerge = await latestWorkMerge(repo, config.workRepo);
+    latestMerge = await latestWorkMerge(repo, config.workRepo, gh);
     if (pulls.length === 100)
       github = source(
         "unavailable",
@@ -749,16 +750,10 @@ export async function collect(
   const projects: Project[] = [];
   // Bound concurrency across repositories; each subprocess has its own deadline.
   const items = await discover(config);
-  try {
-    await githubToken([
-      ...new Set([
-        ...(config.workRepo ? [config.workRepo] : []),
-        ...items.flatMap((i) => (i.repo ? [i.repo] : [])),
-      ]),
-    ]);
-  } catch {
-    process.env.GH_TOKEN = "unavailable";
-  }
+  const github = await githubReaders([
+    ...(config.workRepo ? [config.workRepo] : []),
+    ...items.flatMap((i) => (i.repo ? [i.repo] : [])),
+  ]);
   for (let i = 0; i < items.length; i += 3)
     projects.push(
       ...(await Promise.all(
@@ -771,6 +766,7 @@ export async function collect(
               [...c.sessions, ...a.sessions],
               sources,
               now,
+              github(item.repo ?? ""),
             ),
           ),
       )),
@@ -784,7 +780,7 @@ export async function collect(
     ids.add(p.id);
   }
   const work = config.workRepo
-    ? await readWork(config.home, (args) => command("gh", args), config.workRepo)
+    ? await readWork(config.home, github(config.workRepo), config.workRepo)
     : undefined;
   const assigned = new Set(
     projects.flatMap((p) => p.sessions.map((s) => `${s.app}:${s.id}`)),
