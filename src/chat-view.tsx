@@ -71,6 +71,7 @@ export function ChatRow({
     ago(item.at, Date.now()),
     item.count > 1 ? `${item.count} new` : "",
     item.support?.acknowledgment === "sent" ? "automated receipt sent" : item.support && ["failed", "uncertain"].includes(item.support.acknowledgment) ? "check acknowledgment delivery" : "",
+    item.support?.draft === "ready" ? "draft ready for review" : item.support?.draft === "stale" ? "draft needs updating" : "",
     item.handedBy ? `handed to you by ${ownerLabel(item.handedBy)}` : "",
     item.handedTo ? `with ${ownerLabel(item.handedTo)}` : "",
     item.state === "action" ? "" : label.toLowerCase(),
@@ -239,12 +240,21 @@ export function ChatDetail({
         )}
       </div>
       {item.support && <div className="support-receipt">
-        <p>{item.support.acknowledgment === "sent" ? (item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at ? "Automated acknowledgment sent." : "Automated acknowledgment sent. Waiting for a person to respond.")
+        <p>{item.support.draft === "ready" ? "A reply is drafted in the support mailbox. Review its recipients and wording in Gmail; nothing has been sent."
+          : item.support.draft === "stale" ? "New information arrived after this draft was prepared. Review the conversation and draft together."
+          : item.support.draft === "held" ? "Check the existing draft or Sent reply in Gmail. No replacement draft was created."
+          : item.support.draft === "uncertain" ? "Draft creation could not be confirmed. Check Drafts in Gmail before creating another."
+          : item.support.draft === "failed" ? "The reply could not be drafted. This email still needs review."
+          : item.support.draft === "pending" ? "Preparing a draft for review. Automatic sends are disabled."
+          : item.support.acknowledgment === "sent" ? (item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at ? "Automated acknowledgment sent." : "Automated acknowledgment sent. Waiting for a person to respond.")
+          : item.support.draft === "skipped" ? "No reply was drafted automatically. Review this email."
+          : item.support.draft === "off" ? "Draft preparation is off. Automatic sends are disabled."
           : item.support.acknowledgment === "uncertain" ? "Acknowledgment delivery is uncertain. Check Sent before sending again."
           : item.support.acknowledgment === "failed" ? "The automated acknowledgment could not be confirmed."
           : item.support.acknowledgment === "off" ? "Automatic acknowledgments are off."
           : item.support.acknowledgment === "skipped" ? "No automatic acknowledgment was sent for this message."
           : "Waiting for the automated acknowledgment."}</p>
+        {item.support.triage === "needs-review" && <p>The email needs human triage. The draft contains a simple receipt.</p>}
         {item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at && <p>A person replied {ago(item.support.humanRepliedAt, Date.now()).toLowerCase()}. Mark Done when the request is resolved.</p>}
         <p>Reply from {item.support.account} in its Gmail mailbox. Your reply stays in the same conversation.</p>
         {personal && copies.map(copy => <p key={copy.id}><a href={gmailUrl(personal.account, copy.id)} target="_blank" rel="noreferrer">Copy in your Gmail</a></p>)}

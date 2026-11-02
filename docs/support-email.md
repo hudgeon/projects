@@ -14,7 +14,7 @@ node scripts/install-machine.mjs --support help@example.com --support-owner owne
 ```
 
 This uses the machine's existing Workspace delegation, at `gmail.readonly` for
-reads and `gmail.modify` only for an enabled acknowledgment. The actual Gmail
+reads and `gmail.modify` only for enabled draft preparation. The actual Gmail
 profile must be the configured shared address. No key, delegation grant or
 OAuth scope is created by this command. If that access is not already approved
 and available, prepare the exact operation for the administrator before changing
@@ -37,19 +37,21 @@ complete support item contains its exact hashed RFC Message-ID. A matching
 subject or sender alone never hides an item. A stale or unavailable support
 read restores the personal copy. No mail is archived or deleted by deduplication.
 
-## Acknowledgments
+## Drafts for review
 
 They are off until explicitly enabled:
 
 ```sh
-node scripts/install-machine.mjs --acknowledge-support
+node scripts/install-machine.mjs --draft-support
 ```
 
-Enabling records a new activation time and cannot acknowledge earlier mail.
-Use the same activation configuration on the fallback machine after enabling;
-the durable Worker receipt prevents another machine sending a second receipt
-for the same Gmail conversation. Customer rollout requires a controlled
-end-to-end test and the separately approved customer announcement.
+Enabling records `draftSince` and cannot prepare replies to earlier mail.
+Use the same activation configuration on the fallback machine. Only the machine
+on duty prepares drafts, with a durable reservation for each conversation.
+Automatic sends are disabled, including for old enabled configurations;
+`--acknowledge-support` is refused. Review and send each draft yourself in the
+shared mailbox. Enabling drafts is never approval to send them. Customer
+announcements and channel retirement remain separate decisions.
 
 Before enabling, connect an authoritative registered-user reader:
 
@@ -61,7 +63,7 @@ The fixed local command must return only JSON with `complete: true`, a fresh
 millisecond `observedAt`, and `hashes`: SHA-256 hashes of trimmed, lowercase email
 addresses for active users with current customer memberships. Evidence older
 than one minute, partial reads, a failed command or a missing reader cannot
-authorize a send. The reader receives no email-supplied arguments, mailbox token
+authorize a draft. The reader receives no email-supplied arguments, mailbox token
 or Projects service credential. No directory roster is sent to Projects or the
 summary model. It is read when a new eligible inquiry needs a receipt.
 
@@ -81,20 +83,36 @@ requires registration only for the original sender and keeps the other original
 recipients subject to the delivery checks below. A Reply-To header cannot
 substitute another sender or redirect the receipt.
 
-The agent classifies incoming plain text and summarizes the issue. It runs with
-no tools or MCP servers, no mailbox token, and no session persistence. Only the
-latest bounded message is supplied; attachments, earlier conversations and
-private account data are not available to it. A failed or invalid summary sends
-nothing and leaves a visible request for the owner. Bulk mail, automatic
+The agent classifies bounded incoming plain text as an issue, other human mail
+or needing review. It runs with no tools or MCP servers, no mailbox token and
+no session persistence. It selects an exact factual symptom excerpt for an issue;
+the renderer supplies the investigation questions. It cannot propose a solution,
+workaround or diagnosis. General questions, administrative requests, ideas and
+thanks without a problem get a simple receipt. Thanks plus a continuing problem
+is an issue. Ambiguous, invalid or unavailable classification falls back to a
+simple receipt and visible human triage, provided all deterministic draft
+checks pass. It never suppresses or resolves work.
+
+Only the latest bounded message is supplied; quoted history is excluded.
+Attachments, earlier conversations and private account data are not available
+to this draft preparer. It cannot claim a database check. Protected reads
+require a separate verified-user authorization interface; registration alone
+does not authorize customer-data access. Bulk mail, automatic
 messages, bounces, the mailbox's own mail, previously answered inquiries and
 messages without safe reply headers cannot trigger a receipt.
 
-The reply is sent by Gmail from the shared mailbox in the same thread, using
+The reply is saved as an unsent Gmail draft in the shared mailbox and original
+thread, using
 reply-all to the original From, To and Cc addresses after policy filtering.
 The support mailbox, its aliases, duplicate addresses and addresses with a
 failed or delayed delivery in that conversation are omitted. The copied owner
 remains a recipient when eligible. No hidden Bcc recipients are discovered or
-added. Malformed recipient lists or incomplete delivery evidence cannot send.
+added. Malformed recipient lists or incomplete delivery evidence cannot create a draft.
+The conversation and mailbox identity are checked again after classification.
+Existing drafts are never overwritten; a later customer follow-up makes the
+old draft visibly stale instead of creating another one. Review the current
+conversation and recipients before manually sending. No draft update, deletion
+or send endpoint is called by this workflow.
 
 Delivery-status MIME reports identify failed recipients individually. Reports
 in another Gmail thread count only when their attached original Message-ID
@@ -103,32 +121,28 @@ bounce cannot exclude an address here. The bounded report inventory includes
 Spam and Trash; truncated or unreadable evidence leaves work for a person.
 See [RFC 3464](https://www.rfc-editor.org/rfc/rfc3464) for the report format.
 
-The fixed copy is:
+For an issue, the draft explicitly says it is automated, reflects an exact
+attributed symptom from the email, and says what the support team is being
+asked to investigate. The human queue accepts the incoming request before
+preparation starts; no draft claims that a person has started work or that the
+problem is fixed. A person will respond shortly, with no invented deadline.
+Other eligible human mail gets only a short received/response-soon draft.
 
-> Automated response from Support
->
-> Thanks for your email. We understand that [reported issue].
->
-> We're looking into it, and a person from our team will respond shortly.
->
-> Support
+`Auto-Submitted: auto-replied`, suppression headers and a version marker identify
+the automation even when a person later sends the reviewed draft. Sent recovery
+recognizes both the released acknowledgment and the new format. The model
+cannot change the sender, recipient, attribution, commitment or delivery mode.
+A draft never counts as a sent receipt, human response or resolution.
 
-`Auto-Submitted: auto-replied` and response suppression headers also identify
-the automation. The summary cannot change the sender, recipient, attribution,
-commitment or send policy. A receipt is sent once for the support conversation;
-later customer messages reopen its work state but do not generate repeated
-receipts. Automatic acknowledgments do not change the incoming request time,
-count as a human reply or mark work Done.
-
-Before Gmail is called, the collector crosses a durable `reserved → sending`
-boundary. Only that transition grants send permission once. Delivery is then
-recorded, or stays uncertain if the response is lost. The originating machine
-checks Sent in the exact shared-mailbox conversation before recording a recovered
-delivery. Gmail may replace the submitted Message-ID, so recognition also checks
-the shared sender, original request and reply recipient, automation headers and
-fixed acknowledgment copy. A missing receipt is never permission to resend;
-a fallback machine does not replay an uncertain send. The journal holds only
-reservation tokens and hashes in the private machine state directory.
+Before Gmail is called, the collector crosses a durable `reserved → drafting`
+boundary. Only that transition permits one `drafts.create`. The draft's stable
+ID, original-message hash, triage label and preparation time are recorded, never
+its body. A lost response leaves creation uncertain. The originating machine
+reconciles the exact marked draft in that Gmail conversation against the draft
+inventory, and records it without creating another. A missing, edited, sent or
+deleted draft is never permission to recreate it. Another machine cannot replay
+an uncertain creation. The private local journal retains reservation tokens
+only; neither those tokens nor raw email reach telemetry.
 
 ## Human replies and completion
 
@@ -143,17 +157,18 @@ support email is not silently included in their historical population.
 
 ## Stop or recover
 
-`--no-support-acknowledgments` stops future automatic sends while retaining
-monitoring. `--no-support` disconnects the source; its old read becomes visibly
+`--no-support-drafts` stops future draft preparation while retaining
+monitoring. Automatic sends stay disabled. `--no-support` disconnects the source; its old read becomes visibly
 stale and does not suppress personal copies. Neither command deletes Gmail
-messages or durable delivery history. Do not delete a delivery record to retry
-an uncertain send: reconcile its actual Sent state first. If necessary, a human
-can reply in the original thread after checking it.
+messages or durable delivery history. Do not delete a receipt record to retry
+uncertain creation: check the exact Drafts and Sent state first. If necessary,
+a human can reply in the original thread after checking it.
 
 Verify with synthetic or explicitly approved controlled mail: shared/private
 authorization, one request for a cc copy, distinct requests with identical
 subjects, no send for a bounce or historical message, automated attribution,
-one actual threaded receipt, a human shared-address reply, a later customer
-follow-up, uncertain-send recovery and a duty-holder restart. Record observed
+one actual threaded draft, issue/other/uncertain copy, a human shared-address
+reply, a later customer follow-up, uncertain-draft recovery and a duty-holder
+restart. Verify no Gmail send endpoint is called. Record observed
 latency and actual Gmail/Projects states; local tests alone do not establish a
 customer rollout.

@@ -9,6 +9,8 @@ export type SupportThread = {
   unread: boolean;
   humanRepliedAt?: number; eligible: boolean;
   acknowledgedAt?: number;
+  // Existing drafts are never overwritten or interpreted as a sent reply.
+  draftMessages?: string[];
 };
 export function automatic(h: Record<string, string>) {
   const from = mailbox(h.from ?? "") ?? "";
@@ -32,8 +34,11 @@ function isAcknowledgment(message: Message, account: SupportConfig, incoming: Me
   const addresses = new Set([...allowed.to, ...allowed.cc]);
   if (![...to, ...cc].every(address => addresses.has(address))) return false;
   const text = messageText(message.payload ?? {}).replace(/\s+/g, " ").trim();
-  return text.startsWith("Automated response from Support Thanks for your email. We understand that ") &&
+  const legacy = text.startsWith("Automated response from Support Thanks for your email. We understand that ") &&
     text.endsWith("We're looking into it, and a person from our team will respond shortly. Support");
+  const current = h["x-projects-support-receipt"] === "2" && text.startsWith("Automated response from Support Thanks for your email.") &&
+    text.endsWith("A person from our team will respond shortly. Support");
+  return legacy || current;
 }
 export function supportThread(account: SupportConfig, id: string, messages: Message[], reports: DeliveryReport[] = []): SupportThread | null {
   const own = new Set([account.account, account.owner, ...account.aliases].map(s => s.toLowerCase()));
@@ -62,7 +67,8 @@ export function supportThread(account: SupportConfig, id: string, messages: Mess
     messageKeys: sorted.flatMap(m => messageKey(headers(m)["message-id"] ?? "") ?? []).slice(-200),
     ...(humanRepliedAt === undefined ? {} : { humanRepliedAt }),
     ...(receipt ? { acknowledgedAt: Number(receipt.internalDate) } : {}),
-    eligible: !!messageId && at >= Date.parse(account.acknowledgeSince ?? account.since) && !(humanRepliedAt && humanRepliedAt >= at),
+    draftMessages: messages.filter(m => m.labelIds?.includes("DRAFT")).map(m => m.id),
+    eligible: !!messageId && at >= Date.parse(account.draftSince ?? account.acknowledgeSince ?? account.since) && !(humanRepliedAt && humanRepliedAt >= at),
   };
 }
 const call = async (gws: Gws, resource: string, method: string, params: object) => JSON.parse(await gws(["gmail", "users", ...(resource ? [resource] : []), method, "--params", JSON.stringify(params)]));
@@ -140,6 +146,7 @@ export function acknowledgmentRaw(config: SupportConfig, thread: SupportThread, 
     `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
     `Message-ID: ${messageId}`, `In-Reply-To: ${thread.messageId}`, `References: ${thread.messageId}`,
     "Auto-Submitted: auto-replied", "X-Auto-Response-Suppress: All", "MIME-Version: 1.0",
+    "X-Projects-Support-Receipt: 2",
     "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "",
     Buffer.from(body).toString("base64"), "",
   ].join("\r\n")).toString("base64url");

@@ -209,7 +209,7 @@ const logins = [
 ];
 const profiles = (config.teams ?? []).reduce((count, t) => count.set(t.account, (count.get(t.account) ?? 0) + 1), new Map());
 const teamsRead = [...profiles].map(([account, n]) => (n > 1 ? `${account} (${n} profiles)` : account)).join(", ");
-const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${teamsRead || "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.${config.support ? `\nSupport: ${config.support.account}; owner ${config.support.owner}; acknowledgments ${config.support.acknowledge ? "on" : "off"}.` : ""}`;
+const connected = `Slack: ${config.slack?.length ? config.slack.join(", ") : "none read"}.\nTeams: ${teamsRead || "none read"}.\nInboxes: ${logins.length ? logins.join("; ") : "none connected"}.${config.support ? `\nSupport: ${config.support.account}; owner ${config.support.owner}; drafts ${config.support.draft ? "on" : "off"}; automatic sends off.` : ""}`;
 if (args.includes("--hooks"))
   execFileSync(process.execPath, [path.join(repo, "scripts/install-hooks.mjs")], {
     stdio: "inherit",

@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { acknowledgmentRaw, automatic, readSupport, sentAcknowledgment, supportThread } from "./support-gmail";
 import type { DeliveryReport } from "./mail-delivery";
 import { mailbox, messageKey } from "./mail-identity";
-import { acknowledgmentText, type SupportConfig } from "../src/support-model";
+import { acknowledgmentText as draftText, type SupportConfig } from "../src/support-model";
 const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-11-01T00:00:00Z", acknowledge: true };
+const acknowledgmentText = (summary: string) => `Automated response from Support\n\nThanks for your email. We understand that ${summary}.\n\nWe're looking into it, and a person from our team will respond shortly.\n\nSupport`;
 const at = Date.parse("2026-11-02T00:00:00Z"), id = "1234567890abcdef";
 const message = (when = at, extra: Record<string, string> = {}, sent = false) => ({
   id, internalDate: String(when), labelIds: sent ? ["SENT"] : ["INBOX"],
@@ -112,4 +113,17 @@ test("a wrong mailbox or incomplete Gmail inventory never becomes a clean empty 
   await assert.rejects(readSupport(config, async () => JSON.stringify({ emailAddress: "another@example.com" })), /identity/);
   const result = await readSupport(config, async args => args.includes("getProfile") ? JSON.stringify({ emailAddress: config.account }) : JSON.stringify({ threads: [], nextPageToken: "more" }));
   assert.equal(result.complete, false);
+});
+test("the new reviewed receipt is recognized only after send; an unsent draft never becomes delivery or a human reply", () => {
+  const reply = message(at + 1000, { From: config.account, To: "customer@example.org", "Message-ID": "<draft@example.com>", "In-Reply-To": "<original@example.org>", "Auto-Submitted": "auto-replied", "X-Auto-Response-Suppress": "All", "X-Projects-Support-Receipt": "2" }, true);
+  reply.payload.body.data = Buffer.from(draftText({ kind: "other", excerpt: "", area: "other" })).toString("base64url");
+  const unsent = { ...reply, labelIds: ["DRAFT"] };
+  const pending = supportThread(config, id, [message(), unsent])!;
+  assert.equal(pending.acknowledgedAt, undefined);
+  assert.equal(pending.humanRepliedAt, undefined);
+  assert.deepEqual(pending.draftMessages, [id]);
+  const sent = supportThread(config, id, [message(), reply])!;
+  assert.equal(sent.acknowledgedAt, at + 1000);
+  assert.equal(sent.humanRepliedAt, undefined);
+  assert.equal(supportThread({ ...config, draftSince: new Date(at + 1).toISOString() }, id, [message()])!.eligible, false);
 });

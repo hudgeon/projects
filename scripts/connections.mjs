@@ -80,14 +80,16 @@ export function applyConnections(config, { args, flags, expand, fail }) {
     if (!config.support || !["all", "sender"].includes(userPolicy)) fail("Give --support-user-policy as all or sender.");
     config.support.registeredRecipients = userPolicy;
   }
-  if (args.includes("--acknowledge-support")) {
-    if (!config.support) fail("Connect --support before enabling acknowledgments.");
-    if (!config.support.usersCommand?.length) fail("Connect --support-users-command before enabling acknowledgments.");
-    // Newly enabling sends starts now, even if monitoring began earlier.
-    if (!config.support.acknowledge) config.support.acknowledgeSince = new Date().toISOString();
-    config.support.acknowledge = true;
+  if (args.includes("--acknowledge-support")) fail("Automatic support sends are disabled. Use --draft-support for review in Gmail.");
+  // Old enabled configs cannot reactivate sends when installed again.
+  if (config.support) config.support.acknowledge = false;
+  if (args.includes("--draft-support")) {
+    if (!config.support) fail("Connect --support before enabling drafts.");
+    if (!config.support.usersCommand?.length) fail("Connect --support-users-command before enabling drafts.");
+    if (!config.support.draft) config.support.draftSince = new Date().toISOString();
+    config.support.draft = true;
   }
-  if (args.includes("--no-support-acknowledgments") && config.support) config.support.acknowledge = false;
+  if (args.includes("--no-support-drafts") && config.support) config.support.draft = false;
   if (args.includes("--no-support")) delete config.support;
 
   // Names reserved before their mailbox exists. No address or login is added.
