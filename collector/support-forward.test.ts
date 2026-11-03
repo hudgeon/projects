@@ -7,7 +7,7 @@ import type { MailMessage } from "./mail-delivery";
 import { supportConfigSchema, type SupportConfig } from "../src/support-model";
 const at = Date.parse("2026-11-03T00:00:00Z"), id = "1234567890abcdef";
 const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [],
-  since: "2026-11-01T00:00:00Z", acknowledge: false, draft: true,
+  since: "2026-11-01T00:00:00Z", draft: true,
   forwarders: ["owner@example.com", "owner@another.example"], forwardSince: new Date(at).toISOString() };
 const auth = "mx.google.com; dkim=pass header.i=@example.com; dmarc=pass header.from=example.com";
 const source = "---------- Forwarded message ---------\nFrom: Customer <customer@example.org>\nDate: Tue, 3 Nov 2026\nSubject: Export\nTo: Owner <owner@example.com>\nCc: Colleague <colleague@example.org>, help@example.com\n\nThe export is empty.\n\nOn Monday, Old <old@example.net> wrote:\n> An older report with other people.";
@@ -27,7 +27,7 @@ test("an authenticated owner forward uses the first original envelope and exclud
   assert.equal(thread.body, "The export is empty.");
   assert.equal(thread.messageId, "<outer@example.com>");
   assert.equal(thread.subject, "Fwd: Export");
-  assert.deepEqual(thread.recipients, { to: ["customer@example.org", config.owner], cc: ["colleague@example.org"] });
+  assert.deepEqual(thread.recipients, { to: ["customer@example.org"], cc: [] });
   assert.equal(thread.eligible, true);
   assert.equal(supportThread({ ...config, forwardSince: new Date(at + 1).toISOString() }, id, [m])!.eligible, false);
   assert.equal(supportThread({ ...config, forwarders: undefined }, id, [m]), null, "owner forwards remain opt-in");
@@ -60,10 +60,10 @@ test("ambiguous or incomplete envelopes are held without selecting a later appar
   assert.equal(supportThread(config, id, [message(source, { "Auto-Submitted": "auto-generated" })]), null);
   assert.equal(supportConfigSchema.safeParse({ ...config, forwardSince: undefined }).success, false);
 });
-test("Outlook separators and folded recipients preserve the exact original reply-all audience", () => {
+test("Outlook separators and folded recipients identify the original sender without including copied recipients", () => {
   const outlook = "Please investigate.\n________________________________\nFrom: Customer <customer@example.org>\nSent: Tue, 3 Nov 2026\nTo: Owner <owner@example.com>; Other <other@example.org>\nCc: Colleague <colleague@example.org>;\n  Last <last@example.org>\nSubject: Export\n\nThe export is empty.";
   const result = supportThread(config, id, [message(outlook)])!;
-  assert.deepEqual(result.recipients, { to: ["customer@example.org", config.owner, "other@example.org"], cc: ["colleague@example.org", "last@example.org"] });
+  assert.deepEqual(result.recipients, { to: ["customer@example.org"], cc: [] });
   assert.equal(result.body, "The export is empty.");
 });
 test("normal inbox reads retain quote exclusion and never promote attached message text", () => {

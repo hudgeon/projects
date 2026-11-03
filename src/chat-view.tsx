@@ -270,7 +270,7 @@ export function ChatDetail({
           {investigation.error && <p className="error">{errorText(investigation.error)}</p>}
         </div>}
         {item.support.humanRepliedAt && item.support.humanRepliedAt >= item.at && <p>A person replied {ago(item.support.humanRepliedAt, Date.now()).toLowerCase()}. Mark Done when the request is resolved.</p>}
-        <p>Reply from {item.support.account} in its Gmail mailbox. Your reply stays in the same conversation.</p>
+        <p>Review drafts and reply from <a href={`https://mail.google.com/mail/u/?authuser=${encodeURIComponent(item.support.account)}#drafts`} target="_blank" rel="noreferrer">{item.support.account}</a>.</p>
         {personal && copies.map(copy => <p key={copy.id}><a href={gmailUrl(personal.account, copy.id)} target="_blank" rel="noreferrer">Copy in your Gmail</a></p>)}
       </div>}
       <p className="subtle">
@@ -281,7 +281,7 @@ export function ChatDetail({
       <div className="chat-actions">
         {item.place.url && (
           <a className="btn-quiet" href={item.place.url} target="_blank" rel="noreferrer">
-            {item.support ? "Open support in Gmail" : `Open in ${app}`}
+            {item.support ? "Open original email in Gmail" : `Open in ${app}`}
           </a>
         )}
         {item.state !== "handed" && !composing && (

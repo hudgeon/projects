@@ -16,17 +16,13 @@ node scripts/install-machine.mjs --support help@example.com --support-owner owne
 This uses the machine's existing Workspace delegation, at `gmail.readonly` for
 reads and `gmail.modify` only for enabled draft preparation. The actual Gmail
 profile must be the configured shared address. No key, delegation grant or
-OAuth scope is created by this command. If that access is not already approved
-and available, prepare the exact operation for the administrator before changing
-it. A supported alternative is an existing private Gmail sign-in directory:
-add `--support-gws-config /absolute/private/directory`.
+OAuth scope is created by this command. New access needs approval of the exact operation. For an existing private
+Gmail sign-in directory, add `--support-gws-config /absolute/private/directory`.
 
-The named owner must already be allowed to sign in. A watcher checks every 30
-seconds while its machine holds collector duties, independently of the slower
-repository scan. Actual latency includes Gmail reads and, for eligible new
-inquiries, the installed native model's summary. This is not a guarantee of
-instant delivery. Stale, failed and incomplete reads are visible in Projects;
-failed support reads retain previously observed unresolved items.
+The owner must already be allowed to sign in. The duty watcher checks every
+30 seconds, independently of repository scans. Gmail reads and model work add
+latency. Projects shows stale/failed/incomplete coverage and retains unresolved
+work after failed reads.
 Gmail thread reads allow at most 16 MB of subprocess output for long
 conversations; the bounded message text sent to the queue/model is unchanged.
 Other command output keeps its 4 MB limit. A still-oversized or unreadable
@@ -60,7 +56,7 @@ announcements and channel retirement remain separate decisions.
 Before enabling, connect an authoritative registered-user reader:
 
 ```sh
-node scripts/install-machine.mjs --support-users-command '["/absolute/private/read-active-users"]' --support-user-policy all
+node scripts/install-machine.mjs --support-users-command '["/absolute/private/read-active-users"]'
 ```
 
 The fixed local command must return only JSON with `complete: true`, a fresh
@@ -80,12 +76,15 @@ transaction-local `app.current_customer` for each customer. The command requires
 empty identity tables cannot qualify users. The adapter saves no roster or
 credential and changes no users, memberships or grants.
 
-The actual incoming From mailbox must be registered; a registered person on cc
-cannot qualify an unknown sender. The default `all` policy also filters every
-reply-all recipient against that directory. `--support-user-policy sender`
-requires registration only for the original sender and keeps the other original
-recipients subject to the delivery checks below. A Reply-To header cannot
-substitute another sender or redirect the receipt.
+Every new draft addresses only the actual incoming From sender, who must be an
+active registered application user. To/Cc/Bcc and Reply-To never add recipients
+or redirect the draft. A copied registered person cannot qualify an unknown
+sender. Registration qualifies an email-only draft; it never authorizes a
+customer-data query. The retired automatic-send and reply-all configuration
+fields are removed on reinstall. Existing drafts remain untouched for review;
+read-only recognition of historical sent receipts is retained.
+Older or edited drafts with copied recipients are held for review rather than
+presented as ready; their content and recipients are never overwritten.
 
 The agent classifies bounded incoming plain text as an issue, other human mail
 or needing review. It runs with no tools or MCP servers, no mailbox token and
@@ -148,6 +147,47 @@ deleted draft is never permission to recreate it. Another machine cannot replay
 an uncertain creation. The private local journal retains reservation tokens
 only; neither those tokens nor raw email reach telemetry.
 
+## Incoming mail in the owner's inbox
+
+An owner may also opt their already connected personal inbox into support:
+
+```sh
+node scripts/install-machine.mjs --support-personal-inbox owner@example.com --support-personal-since 2026-11-03T06:00:00.000Z
+```
+
+Use a fresh activation cutoff and the same configuration on every duty machine.
+Only the named support owner's existing inbox login is accepted; this does not
+connect another mailbox or grant new access. Reinstall preserves the cutoff and
+refuses to rewind it. `--no-support-personal-inbox` stops this additional source.
+Old inbox mail is not backfilled, while new follow-ups in older conversations
+are eligible for review. Personal mail from unregistered senders is filtered
+locally before queue publication, classification or record-task creation.
+A failed directory/source read holds preparation and retains prior work visibly.
+Each source scan is bounded to 200 conversations; exhausted coverage is
+incomplete and cannot authorize a new draft.
+An empty personal intake needs no delivery-history scan. When conversations
+exist, its independent complete DSN inventory allows up to 2,000 reports,
+including Spam/Trash, and caches only immutable complete evidence. This can
+make the first scan slower; exhausting that budget still holds all drafts.
+
+The personal mailbox is read-only. The same draft coordinator writes only in
+the support mailbox. If support has the exact RFC copy, that shared conversation
+is preferred; otherwise the draft is created without a mailbox-local thread ID,
+using the original RFC In-Reply-To/References for recipient threading. Projects
+links the original email separately from the support Drafts folder. No email is
+copied, forwarded, sent, marked read, archived or deleted by this intake.
+Existing manual drafts and matching Sent replies in the destination hold
+creation; ambiguous/incomplete inventories fail closed. Durable, owner/mailbox
+scoped RFC aliases prevent delayed copies or duty changes from creating a
+second draft. Conflicting historical case aliases require human review.
+Aliases share the durable receipt's lifetime: discarding completed identities
+on a timer would allow a late copy to recreate a previously reviewed draft.
+Missing/edited/sent/deleted and uncertain drafts are never permission to replay.
+
+Customer-record checks still require the actual sender's normal sign-in,
+account selection, task consent and current source permissions. Copied addresses
+are absent from the immutable audience. No protected facts enter Gmail drafts.
+
 ## Owner-forwarded requests
 
 An operator may explicitly enable draft preparation for new inline forwards
@@ -169,8 +209,8 @@ encapsulated/body authentication assertions are never trusted.
 
 The parser accepts the first complete English Gmail/Outlook/Apple inline
 forward envelope: From, To, optional Cc, Subject and Date/Sent. It derives
-reply-all from those headers only, keeping the existing original-sender
-registration and per-conversation failed-recipient checks. It ignores the
+the original From sender from those headers only, keeping registration and
+per-conversation failed-recipient checks. Copied people never enter a new draft. It ignores the
 forwarder's commentary, Reply-To, signatures and older participants; it does
 not union every address mentioned in the chain. Unsupported/ambiguous headers,
 attachment-only forwards or unverifiable forwarding are held for human review.
@@ -179,8 +219,7 @@ and issue/other renderer; older quoted history stays excluded.
 
 Drafts stay in the support mailbox's forwarding conversation with the outer
 subject and Message-ID, preserving durable draft reservations, stale-followup
-handling and uncertain-creation recovery. The original participants are visible
-in To/Cc for the reviewer. No send, draft overwrite, deletion or hidden Bcc
+handling and uncertain-creation recovery. Only the original sender is addressed. No send, draft overwrite, deletion or hidden Bcc
 expansion is added. A forward before activation is never backfilled. Quoted
 Message-IDs are not used for cross-mailbox deduplication.
 
@@ -204,9 +243,9 @@ props. No database role, credential or Gmail scope is added.
 For an eligible issue, the initial email-only draft can include a task link.
 The link carries no bearer grant: the original sender must sign in normally
 to the customer application and consent to one account, the exact task and its
-immutable reply-all audience. A copied person cannot consent as the sender.
-Every remaining recipient needs current access to the requested records. One
-unknown or unauthorised recipient holds the entire protected brief. A normal
+immutable sender-only audience. A copied person cannot consent as the sender.
+The verified sender needs current access to every requested record. A denied
+source holds the entire protected brief; copied people gain no access. A normal
 registered-user directory check alone never permits record access.
 
 A support reviewer uses **Prepare record checks** in Projects after consent.

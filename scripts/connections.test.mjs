@@ -16,17 +16,17 @@ test("shared support keeps a real owner, defaults to monitoring only and starts 
   const config = { doppler: { project: "example", config: "dev" } };
   assert.throws(() => apply(config, "--support", "help@example.com"), /support-owner/);
   apply(config, "--support", "help@example.com", "--support-owner", "owner@example.com");
-  assert.equal(config.support.acknowledge, false);
+  assert.equal(config.support.acknowledge, undefined);
   assert.equal(config.inboxAccounts, undefined, "support is not registered as a person");
   config.support.since = "2020-01-01T00:00:00Z";
   assert.throws(() => apply(config, "--draft-support"), /support-users-command/);
-  apply(config, "--support-users-command", '["node","/private/users.mjs"]', "--support-user-policy", "all", "--draft-support");
-  assert.equal(config.support.acknowledge, false);
+  apply(config, "--support-users-command", '["node","/private/users.mjs"]', "--draft-support");
+  assert.equal(config.support.acknowledge, undefined);
   assert.equal(config.support.draft, true);
   assert.equal(config.support.since, "2020-01-01T00:00:00Z", "enabling acknowledgments cannot drop previously monitored inquiries");
   assert.ok(Date.parse(config.support.draftSince) > Date.parse(config.support.since));
   apply(config, "--no-support-drafts");
-  assert.equal(config.support.acknowledge, false);
+  assert.equal(config.support.acknowledge, undefined);
   assert.equal(config.support.draft, false);
   assert.throws(() => apply(config, "--acknowledge-support"), /disabled/);
   apply(config, "--no-support");
@@ -40,7 +40,7 @@ test("support forwarding is explicit, draft-only and preserves its activation cu
   apply(config, "--support-forwarder", "OWNER@example.com");
   const cutoff = config.support.forwardSince;
   assert.deepEqual(config.support.forwarders, ["owner@example.com"]);
-  assert.equal(config.support.acknowledge, false);
+  assert.equal(config.support.acknowledge, undefined);
   assert.equal(config.support.draft, undefined, "forwarding never enables drafts or new access implicitly");
   apply(config, "--support-forwarder", "owner@example.com");
   assert.equal(config.support.forwardSince, cutoff);
@@ -51,6 +51,22 @@ test("support forwarding is explicit, draft-only and preserves its activation cu
   assert.deepEqual(config.support.forwarders, []);
   assert.equal(config.support.forwardSince, cutoff);
   assert.equal(config.inboxAccounts, undefined);
+});
+
+test("personal intake uses only the existing owner's inbox and a persistent fresh cutoff; retired controls are removed", () => {
+  const config = { inboxAccounts: [{ account: "owner@example.com" }, { account: "colleague@example.com" }], support: {
+    account: "help@example.com", owner: "owner@example.com", acknowledge: true, acknowledgeSince: "2020-01-01T00:00:00Z", registeredRecipients: "all", replyAudience: "all" } };
+  apply(config, "--support-personal-inbox", "owner@example.com");
+  const cutoff = config.support.personalInbox.since;
+  assert.ok(Date.parse(cutoff));
+  for (const field of ["acknowledge", "acknowledgeSince", "registeredRecipients", "replyAudience"]) assert.equal(config.support[field], undefined);
+  apply(config, "--support-personal-inbox", "OWNER@example.com");
+  assert.equal(config.support.personalInbox.since, cutoff);
+  assert.throws(() => apply(config, "--support-personal-inbox", "colleague@example.com"), /owner's existing inbox/);
+  assert.throws(() => apply(config, "--support-personal-inbox", "owner@example.com", "--support-personal-since", "2000-01-01T00:00:00Z"), /does not move backwards/);
+  assert.equal(config.inboxAccounts.length, 2, "no login or grant changes");
+  apply(config, "--no-support-personal-inbox");
+  assert.equal(config.support.personalInbox, undefined);
 });
 
 test("--teams adds a profile for each Teams organisation, and --remove-teams drops one or all of a person's", () => {

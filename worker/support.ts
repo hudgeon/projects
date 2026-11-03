@@ -16,6 +16,8 @@ export class SupportAcknowledgments {
     const columns = storage.sql.exec<{ name: string }>("PRAGMA table_info(support_acknowledgments)").toArray();
     for (const column of ["request_key", "draft_id", "triage", "investigation"])
       if (!columns.some(c => c.name === column)) storage.sql.exec(`ALTER TABLE support_acknowledgments ADD COLUMN ${column} TEXT`);
+    storage.sql.exec("CREATE INDEX IF NOT EXISTS support_request_identity ON support_acknowledgments(owner,account,request_key)");
+    storage.sql.exec("CREATE TABLE IF NOT EXISTS support_mail_aliases(owner TEXT NOT NULL,account TEXT NOT NULL,message_key TEXT NOT NULL,case_key TEXT NOT NULL,PRIMARY KEY(owner,account,message_key))");
   }
   canBootstrap(key: string, owner: string, requestKey?: string) {
     return !!requestKey && this.storage.sql.exec("SELECT key FROM support_acknowledgments WHERE key=? AND owner=? AND request_key=? AND state='reserved'", key, owner.toLowerCase(), requestKey).toArray().length === 1;
@@ -64,9 +66,19 @@ export class SupportAcknowledgments {
     return result;
   }
   act(input: AcknowledgmentInput, host: string): Acknowledgment | null {
-    const { key, action } = input;
-    // A stale installed collector can never obtain permission to send email.
-    if (action === "begin" || action === "uncertain") return null;
+    const { action } = input;
+    // RFC identities join copies even if the personal copy arrives first or
+    // the duty machine changes. Never merge by subject or mailbox-local ID.
+    const keys = [...new Set([...(input.messageKeys ?? []), ...(input.requestKey ? [input.requestKey] : [])])];
+    const candidates = new Set<string>();
+    const own = this.storage.sql.exec<Row>("SELECT * FROM support_acknowledgments WHERE key=?", input.key).toArray()[0];
+    if (own) candidates.add(own.key);
+    for (const identity of keys) {
+      for (const row of this.storage.sql.exec<{ key: string }>("SELECT key FROM support_acknowledgments WHERE owner=? AND account=? AND request_key=? UNION SELECT case_key AS key FROM support_mail_aliases WHERE owner=? AND account=? AND message_key=?",
+        input.owner.toLowerCase(), input.account.toLowerCase(), identity, input.owner.toLowerCase(), input.account.toLowerCase(), identity).toArray()) candidates.add(row.key);
+    }
+    if (candidates.size > 1) return null; // Conflicting history requires review.
+    const key = [...candidates][0] ?? input.key;
     let draft = false;
     let row = this.storage.sql.exec<Row>("SELECT * FROM support_acknowledgments WHERE key=?", key).toArray()[0];
     if (!row && action === "reserve") {
@@ -75,6 +87,8 @@ export class SupportAcknowledgments {
       row = this.storage.sql.exec<Row>("SELECT * FROM support_acknowledgments WHERE key=?", key).one();
     }
     if (!row || row.owner !== input.owner.toLowerCase() || row.account !== input.account.toLowerCase()) return null;
+    if (action === "reserve") for (const identity of keys)
+      this.storage.sql.exec("INSERT OR IGNORE INTO support_mail_aliases(owner,account,message_key,case_key) VALUES(?,?,?,?)", row.owner, row.account, identity, key);
     if (action === "reserve" && row.state === "reserved" && input.requestKey && row.request_key !== input.requestKey) {
       // Safe to replace an unsent reservation; never replace a drafting or
       // completed draft, including one a person has edited or deleted.
@@ -89,6 +103,7 @@ export class SupportAcknowledgments {
     if (action !== "reserve") {
       if (!owns) return null;
       if (action === "release" && row.state === "reserved") {
+        this.storage.sql.exec("DELETE FROM support_mail_aliases WHERE case_key=?", key);
         this.storage.sql.exec("DELETE FROM support_acknowledgments WHERE key=?", key);
         return null;
       }
@@ -97,9 +112,8 @@ export class SupportAcknowledgments {
       const next = action === "begin-draft" && row.state === "reserved" ? "drafting"
         : action === "drafted" && ["drafting", "draft-uncertain"].includes(row.state) ? "drafted"
         : action === "draft-uncertain" && row.state === "drafting" ? "draft-uncertain"
-        : action === "sent" && ["sending", "uncertain"].includes(row.state) ? "sent"
         : row.state;
-      const at = ["sent", "drafted"].includes(next) ? row.at ?? Date.now() : row.at;
+      const at = next === "drafted" ? row.at ?? Date.now() : row.at;
       const draftId = next === "drafted" ? row.draft_id ?? input.draftId! : row.draft_id;
       const triage = row.triage ?? input.triage ?? null;
       draft = action === "begin-draft" && row.state === "reserved";
@@ -122,9 +136,18 @@ export async function supportRoutes(request: Request, store: Store, caller: stri
   if (new URL(request.url).pathname !== "/api/support/ack") return null;
   if (typeof caller === "string" || caller.role !== "collector" || !(await onDuty())) return new Response("Only the collector on duty can acknowledge support", { status: 403 });
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-  const parsed = acknowledgmentInputSchema.safeParse(await readJson(request, 2048));
+  // 200 SHA-256 identities need 13,400 JSON bytes; the remaining bounded
+  // metadata fits within this ceiling. The collector rate limit is unchanged.
+  const parsed = acknowledgmentInputSchema.safeParse(await readJson(request, 16_000));
   if (!parsed.success || !allowed(parsed.data.owner.toLowerCase())) return new Response("Invalid acknowledgment", { status: 400 });
   if (!(await store.rate(`support:${caller.machine}`, 500, 60_000))) return new Response("Try later", { status: 429 });
+  // The native collector is the Gmail reader, not an arbitrary email/model.
+  // Claims must match its fresh, durably accepted intake on this duty machine;
+  // caller-supplied hashes cannot independently join an unrelated case.
+  const source = await store.supportSource(parsed.data.key, parsed.data.owner, caller.machine);
+  const identities = new Set(source?.messageKeys ?? []);
+  if (!source?.active || source.account !== parsed.data.account || !parsed.data.requestKey || !identities.has(parsed.data.requestKey) ||
+    parsed.data.messageKeys?.some(key => !identities.has(key))) return new Response("Support intake must be refreshed", { status: 409 });
   const receipt = await store.supportAcknowledgment(parsed.data, caller.machine);
   return Response.json({ receipt }, { headers: { "Cache-Control": "no-store" } });
 }

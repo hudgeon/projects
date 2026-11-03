@@ -1,9 +1,11 @@
 // Gmail transport for the existing support coordinator. Its only mutation is
 // drafts.create. Unknown outcomes are reconciled, never replayed or sent.
-import { acknowledgmentRaw, supportThread, type SupportThread } from "./support-gmail";
+import { acknowledgmentRaw, senderOnlyDraft, supportThread, type SupportThread } from "./support-gmail";
 import { mailHeaders, type DeliveryReport, type MailMessage } from "./mail-delivery";
 import { messageKey, rfcMessageId } from "./mail-identity";
 import { mailHash } from "./mail-identity";
+import { personalSupportConfig, personalThread } from "./support-personal";
+import { supportDestination, findDetachedSupportDraft } from "./support-destination";
 import { groundedSupportSummary, pendingSupportSummary } from "./support-summary";
 import type { Gws } from "./inbox";
 import { acknowledgmentText, type Acknowledgment, type AcknowledgmentInput, type SupportConfig, type SupportSummary, type SupportInvestigationView } from "../src/support-model";
@@ -19,11 +21,12 @@ export async function refreshSupportThread(gws: Gws, config: SupportConfig, thre
   return { thread: supportThread(config, thread.id, result.messages, reports), messages: result.messages as MailMessage[] };
 }
 export async function findSupportDraft(gws: Gws, config: SupportConfig, thread: SupportThread): Promise<string | undefined> {
+  if (thread.sourceAccount) return findDetachedSupportDraft(gws, config, thread);
   const { messages } = await refreshSupportThread(gws, config, thread);
   const ids = messages.filter(message => {
     const h = mailHeaders(message);
     return message.labelIds?.includes("DRAFT") && h["x-projects-support-receipt"] === "2" &&
-      rfcMessageId(h["in-reply-to"] ?? "") === thread.messageId;
+      rfcMessageId(h["in-reply-to"] ?? "") === thread.messageId && senderOnlyDraft(message, config, thread.from);
   }).map(m => m.id);
   if (!ids.length) return undefined;
   if (ids.length > 1) throw Error("Multiple support drafts need review");
@@ -44,9 +47,9 @@ export async function createSupportDraft(gws: Gws, config: SupportConfig, thread
   if (!requestKey) throw Error("Missing original message identity");
   const messageId = `<projects-support-${thread.key}@${config.account.split("@")[1]}>`;
   const raw = acknowledgmentRaw(config, thread, acknowledgmentText(summary, verificationUrl), messageId);
-  const result = JSON.parse(await gws(["gmail", "users", "drafts", "create", "--params", JSON.stringify({ userId: "me" }), "--json", JSON.stringify({ message: { threadId: thread.id, raw } })]));
+  const result = JSON.parse(await gws(["gmail", "users", "drafts", "create", "--params", JSON.stringify({ userId: "me" }), "--json", JSON.stringify({ message: { ...(!thread.sourceAccount ? { threadId: thread.id } : {}), raw } })]));
   if (typeof result.id !== "string" || !/^[\w-]{1,200}$/.test(result.id) || typeof result.message?.id !== "string" ||
-    !/^[a-f0-9]{10,40}$/.test(result.message.id) || result.message.threadId !== thread.id)
+    !/^[a-f0-9]{10,40}$/.test(result.message.id) || !/^[a-f0-9]{10,40}$/.test(result.message.threadId ?? "") || !thread.sourceAccount && result.message.threadId !== thread.id)
     throw Error("Draft creation could not be confirmed");
   return result.id as string;
 }
@@ -54,6 +57,7 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   ack: Ack; gws: Gws; summarize: (body: string) => Promise<SupportSummary>;
   token?: string; saveToken: (token: string) => Promise<void>;
   users: () => Promise<ReadonlySet<string>>; reports?: DeliveryReport[];
+  sourceGws?: Gws;
   investigate?: (summary: SupportSummary) => Promise<SupportInvestigationView>;
 }): Promise<DraftOutcome> {
   if (thread.acknowledgedAt !== undefined) return { state: "skipped" };
@@ -64,9 +68,7 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   if (!thread.deliveryHistoryComplete) return { state: "failed" };
   const users = await o.users();
   if (!users.has(mailHash(thread.from))) return { state: "skipped" };
-  const keep = (email: string) => config.registeredRecipients === "sender" || users.has(mailHash(email));
-  const recipients = { to: thread.recipients.to.filter(keep), cc: thread.recipients.cc.filter(keep) };
-  if (!recipients.to.length && recipients.cc.length) recipients.to.push(recipients.cc.shift()!);
+  const recipients = { to: thread.recipients.to.includes(thread.from) ? [thread.from] : [], cc: [] as string[] };
   if (!recipients.to.length) return { state: "skipped" };
   const receipt = await o.ack(thread, "reserve", o.token);
   if (!receipt) return { state: "failed" };
@@ -74,11 +76,12 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   if (receipt.requestKey && receipt.requestKey !== requestKey) return { state: "stale", triage: receipt.triage };
   if (receipt.state === "drafted") {
     let available = false;
-    if (receipt.draftId && thread.draftMessages?.length) {
+    if (receipt.draftId && (thread.sourceAccount || thread.draftMessages?.length)) {
       try {
-        const current = await params(o.gws, "drafts", "get", { userId: "me", id: receipt.draftId, format: "minimal", fields: "id,message(id,threadId,labelIds)" });
-        available = current.id === receipt.draftId && current.message?.threadId === thread.id &&
-          thread.draftMessages.includes(current.message.id) && current.message.labelIds?.includes("DRAFT");
+        if (thread.sourceAccount && (await params(o.gws, "", "getProfile", { userId: "me" })).emailAddress?.toLowerCase() !== config.account.toLowerCase()) throw Error("Support mailbox identity mismatch");
+        const current = await params(o.gws, "drafts", "get", { userId: "me", id: receipt.draftId, format: "metadata", fields: "id,message(id,threadId,labelIds,payload(headers))" });
+        available = current.id === receipt.draftId && (!!thread.sourceAccount || current.message?.threadId === thread.id &&
+          thread.draftMessages!.includes(current.message.id)) && current.message?.labelIds?.includes("DRAFT") && senderOnlyDraft(current.message, config, thread.from);
       } catch { /* Keep the draft held; failure is never permission to recreate. */ }
     }
     return { state: available ? "ready" : "held", at: receipt.draftedAt, triage: receipt.triage };
@@ -96,15 +99,27 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   }
   if (!receipt.token) return { state: "pending" };
   if (thread.draftMessages?.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  if (thread.sourceAccount) {
+    const target = await supportDestination(o.gws, config, thread);
+    if (target.sent || target.drafts.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  }
   let summary: SupportSummary;
   try { summary = groundedSupportSummary(await o.summarize(thread.body), thread.body); }
   catch { summary = pendingSupportSummary; }
-  const fresh = (await refreshSupportThread(o.gws, config, thread, o.reports)).thread;
+  if (thread.sourceAccount && (!o.sourceGws || thread.sourceAccount !== config.personalInbox?.account)) throw Error("Personal source unavailable");
+  const latest = (await refreshSupportThread(thread.sourceAccount ? o.sourceGws! : o.gws,
+    thread.sourceAccount ? personalSupportConfig(config) : config, thread, o.reports)).thread;
+  const fresh = latest && thread.sourceAccount ? personalThread(latest, config, thread.key) : latest;
   if (!fresh || !fresh.eligible || !fresh.deliveryHistoryComplete || fresh.messageId !== thread.messageId || fresh.from !== thread.from ||
     fresh.body !== thread.body || fresh.forwarded !== thread.forwarded || fresh.acknowledgedAt !== undefined || JSON.stringify(fresh.recipients) !== JSON.stringify(thread.recipients)) {
     await o.ack(thread, "release", receipt.token); return { state: "stale" };
   }
   if (fresh.draftMessages?.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  if (!(await o.users()).has(mailHash(fresh.from))) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  if (thread.sourceAccount) {
+    const target = await supportDestination(o.gws, config, fresh);
+    if (target.sent || target.drafts.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
+  }
   let verificationUrl: string | undefined;
   if (summary.kind === "issue" && !fresh.forwarded && o.investigate) {
     try { verificationUrl = (await o.investigate(summary)).verificationUrl; } catch { /* Receipt drafting remains available. */ }

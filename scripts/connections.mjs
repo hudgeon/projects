@@ -55,7 +55,7 @@ export function applyConnections(config, { args, flags, expand, fail }) {
     if (!validEmail(support) || !validEmail(owner)) fail("Give --support as a mailbox address and --support-owner as its Projects owner.");
     if (!config.doppler && !flags("support-gws-config").length) fail("Support needs the machine's Doppler delegation or --support-gws-config.");
     const old = config.support?.account?.toLowerCase() === support.toLowerCase() ? config.support : undefined;
-    config.support = { ...old, account: support.toLowerCase(), owner: owner.toLowerCase(), aliases: old?.aliases ?? [], since: old?.since ?? new Date().toISOString(), acknowledge: old?.acknowledge ?? false };
+    config.support = { ...old, account: support.toLowerCase(), owner: owner.toLowerCase(), aliases: old?.aliases ?? [], since: old?.since ?? new Date().toISOString() };
     const dir = flags("support-gws-config").at(-1);
     if (dir) {
       const configDir = expand(dir);
@@ -75,11 +75,17 @@ export function applyConnections(config, { args, flags, expand, fail }) {
       fail("Give --support-users-command as a JSON command array.");
     config.support.usersCommand = parsed;
   }
-  const userPolicy = flags("support-user-policy").at(-1);
-  if (userPolicy !== undefined) {
-    if (!config.support || !["all", "sender"].includes(userPolicy)) fail("Give --support-user-policy as all or sender.");
-    config.support.registeredRecipients = userPolicy;
+  const personalInbox = flags("support-personal-inbox").at(-1), personalSince = flags("support-personal-since").at(-1);
+  if (personalInbox !== undefined || personalSince !== undefined) {
+    if (!config.support || !personalInbox || !same(personalInbox, config.support.owner) || same(personalInbox, config.support.account) ||
+      !inboxes.some(l => same(l.account, personalInbox)) && !same(config.inboxAccount ?? "", personalInbox))
+      fail("Personal support intake requires its owner's existing inbox.");
+    const cutoff = personalSince ?? config.support.personalInbox?.since ?? new Date().toISOString();
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(cutoff) || !Number.isFinite(Date.parse(cutoff)) ||
+      config.support.personalInbox?.since && Date.parse(cutoff) < Date.parse(config.support.personalInbox.since)) fail("Give a UTC personal-intake cutoff that does not move backwards.");
+    config.support.personalInbox = { account: personalInbox.toLowerCase(), since: cutoff };
   }
+  if (args.includes("--no-support-personal-inbox") && config.support) delete config.support.personalInbox;
   const forwarders = flags("support-forwarder");
   const forwardSince = flags("support-forward-since").at(-1);
   if (forwarders.length || forwardSince !== undefined) {
@@ -99,8 +105,8 @@ export function applyConnections(config, { args, flags, expand, fail }) {
   }
   if (args.includes("--no-support-forwards") && config.support) config.support.forwarders = [];
   if (args.includes("--acknowledge-support")) fail("Automatic support sends are disabled. Use --draft-support for review in Gmail.");
-  // Old enabled configs cannot reactivate sends when installed again.
-  if (config.support) config.support.acknowledge = false;
+  // Remove retired send/reply-all controls while preserving actual receipts.
+  if (config.support) for (const key of ["acknowledge", "acknowledgeSince", "registeredRecipients", "replyAudience"]) delete config.support[key];
   if (args.includes("--draft-support")) {
     if (!config.support) fail("Connect --support before enabling drafts.");
     if (!config.support.usersCommand?.length) fail("Connect --support-users-command before enabling drafts.");

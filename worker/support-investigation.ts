@@ -2,12 +2,12 @@
 // invocation; callers receive workflow metadata and authenticated review links.
 import { z } from "zod";
 import { digest, readJson } from "./auth";
-import { groundedSupportSummary, supportSummarySchema, supportReferences, supportText, type SupportTaskPointer, type SupportInvestigationView } from "../src/support-model";
+import { groundedSupportSummary, supportSummarySchema, supportReceiptSchema, supportReferences, supportText, type SupportTaskPointer, type SupportInvestigationView } from "../src/support-model";
 import type { Portfolio } from "./index";
 import type { MachineCaller } from "./machines";
 export type SupportEnvironment = Env & { SUPPORT_READER?: Fetcher; SUPPORT_APP_URL?: string };
 export type SupportSource = { id: string; owner: string; account: string; active: boolean; text: string; subject: string;
-  canBootstrap?: boolean; request?: { key: string; sender: string; audience: { to: string[]; cc: string[] } } };
+  canBootstrap?: boolean; messageKeys?: string[]; request?: { key: string; sender: string; audience: { to: string[]; cc: string[] } } };
 type Store = Pick<DurableObjectStub<Portfolio>, "supportSource" | "supportInvestigation" | "rate">;
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const inputSchema = z.discriminatedUnion("action", [
@@ -42,7 +42,7 @@ export async function supportHealthy(env: SupportEnvironment) {
   catch { return false; }
 }
 export function supportMatches(pointer: SupportTaskPointer, source: SupportSource) {
-  return source.active && source.request?.key === pointer.requestKey && supportAudienceHash(source) === pointer.audienceHash && supportSourceHash(source) === pointer.sourceHash;
+  return source.active && !!source.request && supportReceiptSchema.shape.request.safeParse(source.request).success && source.request.key === pointer.requestKey && supportAudienceHash(source) === pointer.audienceHash && supportSourceHash(source) === pointer.sourceHash;
 }
 export async function investigationRoutes(request: Request, store: Store, caller: string | MachineCaller, onDuty: () => Promise<boolean>, allowed: (email: string) => boolean, env: SupportEnvironment) {
   const path = new URL(request.url).pathname, intake = path === "/api/collector/support-investigation";
@@ -65,7 +65,7 @@ export async function investigationRoutes(request: Request, store: Store, caller
     await store.supportInvestigation(source.id, source.owner, { ...pointer, state: "held", invalidated });
     return reply({ state: "held" });
   }
-  if (!source.active || !source.request) return reply({ state: "held" });
+  if (!source.active || !source.request || !supportReceiptSchema.shape.request.safeParse(source.request).success) return reply({ state: "held" });
   if (body.action === "bootstrap" && !source.canBootstrap) return reply({ state: "held" });
   if (body.action === "bootstrap" && (source.request.key !== body.requestKey || groundedSupportSummary(body.summary, source.text).kind !== "issue")) return reply({ state: "held" });
   if (body.action === "prepare" && !pointer) return reply({ state: "held" });

@@ -134,7 +134,7 @@ export class Chats {
     if (!found || found.read.source !== "support" || !found.item.support) return null;
     const { read, item, state, mark } = found;
     return { id: item.id, owner: read.owner, account: item.support!.account, text: item.text, subject: item.place.name,
-      request: item.support!.request, active: read.state === "ok" && Date.now()-read.observedAt < 90_000 && (!host || read.host === host) &&
+      request: item.support!.request, messageKeys: item.support!.messageKeys, active: read.state === "ok" && Date.now()-read.observedAt < 90_000 && (!host || read.host === host) &&
         state !== "handed" && !(mark?.doneAt && mark.doneAt >= item.at) && !(item.support!.humanRepliedAt && item.support!.humanRepliedAt >= item.at) };
   }
   // Done and Reopen by whoever holds the item; Hand over to another person,

@@ -39,7 +39,7 @@ function statusText(part: MailPayload, depth = 0): string | null {
     const text = decode(part);
     if (text === null) return null;
     chunks.push("", text);
-  } else if (part.body?.attachmentId) return null;
+  } else if (part.body?.attachmentId && !part.parts?.length) return null;
   for (const child of part.parts ?? []) {
     const text = statusText(child, depth + 1);
     if (text === null) return null;

@@ -40,7 +40,7 @@ test("only trusted fresh intake creates verification links; protected preparatio
   const post=(body:{action:string;[key:string]:unknown},headers:Record<string,string>,pathname=body.action==="bootstrap"?"/api/collector/support-investigation":"/api/support/investigation")=>mf.dispatchFetch("https://example.com"+pathname,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)});
   const collector={Authorization:`Bearer ${"c".repeat(64)}`};
   const incoming=(at:number,extra:object={}):ChatRead=>({source:"support",owner,observedAt:at,state:"ok",items:[{id:root,place:{name:"Export",kind:"thread"},from:customer,at:at-1000,count:1,unread:true,mention:true,
-    text:"The export is empty. Invoice ID: inv-test",support:{account:mailbox,thread:"1234567890abcdef",messageKeys:[requestKey],acknowledgment:"off",draft:"pending",request:{key:requestKey,sender:customer,audience:{to:[customer],cc:[owner]}}},...extra}]});
+    text:"The export is empty. Invoice ID: inv-test",support:{account:mailbox,thread:"1234567890abcdef",messageKeys:[requestKey],acknowledgment:"off",draft:"pending",request:{key:requestKey,sender:customer,audience:{to:[customer],cc:[]}}},...extra}]});
   try {
     let store=await storeFor();
     const signIn=async(email:string)=>{const salt=token(),value=token();assert.ok(await store.issue(email,salt,digest(`${salt}:123456`)));assert.ok(await store.verify(email,"123456",digest(value)));return{Cookie:`__Host-projects=${value}`,Origin:"https://example.com"};};
@@ -50,6 +50,11 @@ test("only trusted fresh intake creates verification links; protected preparatio
     assert.equal((await post(bootstrap,collector)).status,200);
     assert.equal((await (await post(bootstrap,collector)).json() as {investigation:{state:string}}).investigation.state,"held","no draft reservation means no task");
     await store.supportAcknowledgment({action:"reserve",key:root,owner,account:mailbox,requestKey},"studio");
+    const copied=incoming(at+1);
+    copied.items[0].support!.request!.audience.cc=[owner];
+    await store.publishChats(copied,"studio");
+    assert.equal((await(await post(bootstrap,collector)).json() as {investigation:{state:string}}).investigation.state,"held","old stored reply-all metadata cannot bootstrap a protected request");
+    await store.publishChats(incoming(at+2),"studio");
     const boot=await(await post(bootstrap,collector)).json() as {investigation:{state:string;verificationUrl:string}};
     assert.equal(boot.investigation.state,"awaiting-verification");
     assert.equal(boot.investigation.verificationUrl,`https://source.example.com/support-investigation/${task}`);
@@ -75,7 +80,7 @@ test("only trusted fresh intake creates verification links; protected preparatio
     await mf.dispose();mf=await start(settings);store=await storeFor();
     assert.equal((await store.chatList(owner)).items[0].support?.investigation?.state,"prepared");
     assert.equal((await store.chatList(other)).items.length,0);
-    const followup=incoming(at+1,{support:{account:mailbox,thread:"1234567890abcdef",messageKeys:[requestKey,"d".repeat(64)],acknowledgment:"off",draft:"stale",request:{key:"d".repeat(64),sender:"new@example.com",audience:{to:["new@example.com"],cc:[owner]}}}});
+    const followup=incoming(at+3,{support:{account:mailbox,thread:"1234567890abcdef",messageKeys:[requestKey,"d".repeat(64)],acknowledgment:"off",draft:"stale",request:{key:"d".repeat(64),sender:"new@example.com",audience:{to:["new@example.com"],cc:[]}}}});
     await store.publishChats(followup,"studio");
     const held=await(await post({action:"prepare",key},me)).json() as {investigation:{state:string;reviewUrl?:string}};
     assert.equal(held.investigation.state,"held");assert.equal(held.investigation.reviewUrl,undefined);

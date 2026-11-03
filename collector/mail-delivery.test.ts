@@ -47,3 +47,17 @@ test("Gmail's nested delivery-status representation preserves per-message header
   assert.deepEqual([...parsed.failed], ["lost@example.org"]);
   assert.equal(parsed.originals.has("<request@example.org>"), true);
 });
+test("Gmail can expose a status attachment as complete parsed child parts; unavailable leaves still fail closed", () => {
+  const report: MailMessage = { id: "report", internalDate: "2000", payload: { mimeType: "multipart/mixed", parts: [
+    { mimeType: "text/plain", body: { data: data("Please review this delivery report.") } },
+    { mimeType: "message/delivery-status", body: { attachmentId: "status-attachment" }, parts: [{ mimeType: "text/plain",
+      headers: [{ name: "Reporting-MTA", value: "dns; mx.example.com" }, { name: "X-Original-Message-ID", value: "<request@example.org>" }],
+      body: { data: data("Final-Recipient: rfc822; lost@example.org\r\nAction: failed\r\nStatus: 5.1.1") } }] },
+  ] } };
+  const parsed = deliveryReport(report);
+  assert.equal(parsed.report, true); assert.equal(parsed.complete, true);
+  assert.deepEqual([...parsed.originals], ["<request@example.org>"]);
+  assert.deepEqual([...failedRecipients([original], [parsed]).addresses], ["lost@example.org"]);
+  report.payload!.parts![1].parts = [];
+  assert.equal(deliveryReport(report).complete, false, "an unexpanded attachment is still unavailable evidence");
+});

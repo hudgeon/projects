@@ -27,7 +27,7 @@ else{
 `, { mode: 0o755 });
   const env = { PATH: `${bin}${path.delimiter}${process.env.PATH}` };
   const run = (args: string[]) => command("gws", args, root, env);
-  const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-01-01T00:00:00Z", acknowledge: false, draft: true };
+  const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-01-01T00:00:00Z", draft: true };
   const result = await readSupport(config, run);
   assert.equal(result.complete, true);
   assert.equal(result.threads.length, 2);

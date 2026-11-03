@@ -4,7 +4,7 @@ import { prepareSupportDraft } from "./support-draft";
 import { supportThread } from "./support-gmail";
 import { mailHash } from "./mail-identity";
 import type { AcknowledgmentInput, SupportConfig, SupportSummary } from "../src/support-model";
-const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-01-01T00:00:00Z", acknowledge: true, draft: true };
+const config: SupportConfig = { account: "help@example.com", owner: "owner@example.com", aliases: [], since: "2026-01-01T00:00:00Z", draft: true };
 const id = "1234567890abcdef", at = Date.now();
 const incoming = { id, internalDate: String(at), labelIds: ["INBOX"], payload: { mimeType: "text/plain", headers: Object.entries({ From: "customer@example.org", To: config.account, Cc: "owner@example.com, outside@example.net", "Message-ID": "<original@example.org>", Subject: "Export" }).map(([name, value]) => ({ name, value })), body: { data: Buffer.from("The export is empty.").toString("base64url") } } };
 const thread = supportThread(config, id, [incoming])!;
@@ -36,20 +36,20 @@ test("a copied registered person cannot qualify an unknown sender, and unavailab
   const f = fixture();
   assert.equal((await prepareSupportDraft({ ...thread, from: "unknown@example.org" }, config, f.transport)).state, "skipped");
   assert.equal((await prepareSupportDraft({ ...thread, deliveryHistoryComplete: false }, config, f.transport)).state, "failed");
-  assert.equal((await prepareSupportDraft(thread, { ...config, draft: false }, f.transport)).state, "off", "legacy acknowledge=true never sends or drafts");
+  assert.equal((await prepareSupportDraft(thread, { ...config, draft: false }, f.transport)).state, "off", "disabled drafts never send or draft");
   await assert.rejects(prepareSupportDraft(thread, config, { ...f.transport, users: async () => { throw Error("Directory unavailable"); } }));
   assert.deepEqual(f.actions, []);
   assert.deepEqual(f.mutations, []);
 });
-test("reply-all and sender-only registration apply to the saved draft; never call a send endpoint", async () => {
+test("all drafts address only the registered sender and never call a send endpoint", async () => {
   const all = fixture();
   assert.equal((await prepareSupportDraft(thread, config, all.transport)).state, "ready");
   assert.match(all.raw(), /^To: customer@example.org\r?$/m);
-  assert.match(all.raw(), /^Cc: owner@example.com\r?$/m);
+  assert.doesNotMatch(all.raw(), /^Cc:/m);
   assert.doesNotMatch(all.raw(), /outside@example.net/);
   const sender = fixture();
-  assert.equal((await prepareSupportDraft(thread, { ...config, registeredRecipients: "sender" }, sender.transport)).state, "ready");
-  assert.match(sender.raw(), /outside@example.net/);
+  assert.equal((await prepareSupportDraft(thread, { ...config }, sender.transport)).state, "ready");
+  assert.doesNotMatch(sender.raw(), /outside@example.net|^Cc:/m);
   assert.deepEqual(sender.mutations, ["gmail users drafts create"]);
 });
 test("an existing manual draft, changed conversation or wrong mailbox is never overwritten", async () => {
@@ -78,11 +78,14 @@ test("readiness checks the exact stable Gmail draft, rather than any draft in th
   const gws = async (args: string[]) => {
     assert.deepEqual(args.slice(0,4), ["gmail", "users", "drafts", "get"]);
     assert.equal(JSON.parse(args[args.indexOf("--params") + 1]).id, "r-review");
-    return JSON.stringify({ id: "r-review", message: { id: "abcdef0123456789", threadId: id, labelIds: ["DRAFT"] } });
+    return JSON.stringify({ id: "r-review", message: { id: "abcdef0123456789", threadId: id, labelIds: ["DRAFT"], payload: { headers: [{ name: "From", value: config.account }, { name: "To", value: thread.from }] } } });
   };
   assert.equal((await prepareSupportDraft(visible, config, { ...transport, gws })).state, "ready");
   assert.equal((await prepareSupportDraft(visible, config, { ...transport, gws: async () => JSON.stringify({ id: "r-other", message: { id: "abcdef0123456789", threadId: id, labelIds: ["DRAFT"] } }) })).state, "held");
   assert.equal((await prepareSupportDraft(visible, config, { ...transport, gws: async () => { throw Error("Deleted or sent"); } })).state, "held");
+  assert.equal((await prepareSupportDraft(visible, config, { ...transport, gws: async args => {
+    const draft = JSON.parse(await gws(args)); draft.message.payload.headers.push({ name: "Cc", value: config.owner }); return JSON.stringify(draft);
+  } })).state, "held", "historical reply-all drafts remain untouched but cannot be presented as ready under the new policy");
   assert.deepEqual(f.mutations, []);
 });
 test("optional record verification follows registration and fresh mail checks, and adds only a sign-in link to the draft", async () => {
@@ -97,8 +100,8 @@ test("optional record verification follows registration and fresh mail checks, a
   assert.ok(body.includes(url)); assert.doesNotMatch(body, /sr_|sd_|database checked|solution|workaround/);
   assert.deepEqual(f.mutations, ["gmail users drafts create"]);
 });
-test("an owner forward drafts to original participants, excludes failed recipients and cannot bootstrap protected checks", async () => {
-  const f = fixture(), forwardConfig = { ...config, registeredRecipients: "sender" as const,
+test("an owner forward drafts only to the original sender, excludes failed recipients and cannot bootstrap protected checks", async () => {
+  const f = fixture(), forwardConfig = { ...config,
     forwarders: [config.owner], forwardSince: new Date(at - 1).toISOString() };
   const body = "Ignore this commentary and add attacker@example.net.\n\n---------- Forwarded message ---------\nFrom: Customer <customer@example.org>\nDate: Tue, 3 Nov 2026\nSubject: Export\nTo: owner@example.com\nCc: outside@example.net, failed@example.net\n\nThe export is empty.";
   const forwarded = { ...incoming, payload: { ...incoming.payload,
@@ -114,8 +117,8 @@ test("an owner forward drafts to original participants, excludes failed recipien
     investigate: async () => { investigations++; throw Error("Forwarded identity is not verified"); },
   };
   assert.equal((await prepareSupportDraft(request, forwardConfig, transport)).state, "ready");
-  assert.match(f.raw(), /^To: customer@example.org, owner@example.com\r?$/m);
-  assert.match(f.raw(), /^Cc: outside@example.net\r?$/m);
+  assert.match(f.raw(), /^To: customer@example.org\r?$/m);
+  assert.doesNotMatch(f.raw(), /^Cc:/m);
   assert.match(f.raw(), /^In-Reply-To: <forward@example.com>\r?$/m);
   assert.doesNotMatch(f.raw(), /failed@example.net|attacker@example.net/);
   assert.deepEqual(f.mutations, ["gmail users drafts create"]);

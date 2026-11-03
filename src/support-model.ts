@@ -6,9 +6,7 @@ export const supportConfigSchema = z.object({
   aliases: z.array(z.email()).max(10).default([]),
   // Activation is explicit. An installation never acknowledges old mail.
   since: z.iso.datetime(),
-  acknowledgeSince: z.iso.datetime().optional(),
-  acknowledge: z.boolean().default(false),
-  // The only current output mode. The legacy acknowledgment flag never sends.
+  // The only output mode: unsent drafts for human review.
   draft: z.boolean().optional(),
   draftSince: z.iso.datetime().optional(),
   // Explicit operator addresses; quoted identities never authorize record reads.
@@ -16,8 +14,10 @@ export const supportConfigSchema = z.object({
   forwardSince: z.iso.datetime().optional(),
   configDir: z.string().startsWith("/").optional(),
   usersCommand: z.array(z.string().min(1).max(2000).refine(s => !/[\x00\r\n]/.test(s))).min(1).max(64).optional(),
-  registeredRecipients: z.enum(["all", "sender"]).optional(),
-}).strict().refine(s => !s.forwarders?.length || !!s.forwardSince, "Forwarding needs an activation cutoff.");
+  personalInbox: z.object({ account: z.email(), since: z.iso.datetime() }).strict().optional(),
+}).strict().refine(s => !s.forwarders?.length || !!s.forwardSince, "Forwarding needs an activation cutoff.")
+  .refine(s => !s.personalInbox || s.personalInbox.account.toLowerCase() === s.owner.toLowerCase() &&
+    s.personalInbox.account.toLowerCase() !== s.account.toLowerCase(), "Personal intake requires its owner's inbox.");
 export type SupportConfig = z.infer<typeof supportConfigSchema>;
 export const supportReceiptSchema = z.object({
   account: z.email(),
@@ -29,16 +29,18 @@ export const supportReceiptSchema = z.object({
   draft: z.enum(["off", "pending", "ready", "uncertain", "failed", "stale", "held", "skipped"]).optional(),
   draftedAt: z.number().int().nonnegative().optional(),
   triage: z.enum(["issue", "other", "needs-review"]).optional(),
-  request: z.object({ key: hash, sender: z.email(), audience: z.object({ to: z.array(z.email()).min(1).max(50), cc: z.array(z.email()).max(50) }).strict() }).strict().optional(),
+  request: z.object({ key: hash, sender: z.email(), audience: z.object({ to: z.array(z.email()).length(1), cc: z.array(z.email()).length(0) }).strict() }).strict()
+    .refine(r => r.audience.to[0].toLowerCase() === r.sender.toLowerCase(), "Only the sending user can receive a support reply.").optional(),
   investigation: z.lazy(() => supportInvestigationViewSchema).optional(),
 }).strict();
 export const acknowledgmentInputSchema = z.object({
   key: hash,
   owner: z.email(),
   account: z.email(),
-  action: z.enum(["reserve", "begin", "sent", "uncertain", "release", "begin-draft", "drafted", "draft-uncertain"]),
+  action: z.enum(["reserve", "release", "begin-draft", "drafted", "draft-uncertain"]),
   token: z.uuid().optional(),
   requestKey: hash.optional(),
+  messageKeys: z.array(hash).max(200).optional(),
   draftId: z.string().regex(/^[\w-]{1,200}$/).optional(),
   triage: z.enum(["issue", "other", "needs-review"]).optional(),
 }).strict();

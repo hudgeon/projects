@@ -7,13 +7,14 @@ import type { Config } from "./config";
 import { delegationKey, delegatedGws, gwsFor } from "./inbox-logins";
 import { GMAIL_MODIFY_SCOPE, GMAIL_READ_SCOPE } from "./delegation";
 import { readSupport } from "./support-gmail";
+import { mergeSupportCopies, personalSupportGws, readPersonalSupport } from "./support-personal";
 import { prepareSupportDraft, type DraftOutcome } from "./support-draft";
 import { summarizeSupport } from "./support-summary";
 import { readSupportUsers } from "./support-users";
 import { messageKey } from "./mail-identity";
 import type { DeliveryReport } from "./mail-delivery";
 import { supportInvestigationViewSchema, supportReceiptSchema, type Acknowledgment } from "../src/support-model";
-import { CHAT_TEXT_LIMIT, type ChatRead } from "../src/chat-model";
+import { CHAT_ITEMS_LIMIT, CHAT_TEXT_LIMIT, type ChatRead } from "../src/chat-model";
 import { gmailUrl } from "../src/inbox-model";
 import { postChatRead, type Site } from "./upload";
 function requestMetadata(thread: import("./support-gmail").SupportThread) {
@@ -28,6 +29,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
   const tokensFile = path.join(stateDir, "support-send-tokens.json");
   const tokens: Record<string, string> = {};
   const reports = new Map<string, DeliveryReport>();
+  const personalReports = new Map<string, DeliveryReport>();
   const ready = readFile(tokensFile, "utf8").then(text => {
     if (text.length > 100_000) throw Error();
     for (const [key, value] of Object.entries(JSON.parse(text)))
@@ -50,9 +52,29 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
       // accidentally cached for the lifetime of this continuous watcher.
       const as = (scope: string) => support.configDir ? gwsFor({ account: support.account, configDir: support.configDir })
         : delegatedGws(support.account, scope, () => delegationKey(config));
+      let users: Promise<ReadonlySet<string>> | undefined, usersAt = 0;
+      const directory = () => {
+        if (!users || Date.now() - usersAt > 30_000) {
+          usersAt = Date.now();
+          users = readSupportUsers(support.usersCommand, stateDir);
+        }
+        return users;
+      };
       const read = await readSupport(support, as(GMAIL_READ_SCOPE), reports);
+      const personalGws = support.personalInbox ? personalSupportGws(config) : undefined;
+      if (personalGws) {
+        try {
+          const personal = await readPersonalSupport(support, personalGws, directory, personalReports);
+          read.threads = mergeSupportCopies(read.threads, personal.threads);
+          read.complete &&= personal.complete;
+        } catch { read.complete = false; }
+      }
+      if (read.threads.length > CHAT_ITEMS_LIMIT) {
+        read.complete = false;
+        read.threads = read.threads.sort((a, b) => b.at - a.at).slice(0, CHAT_ITEMS_LIMIT);
+      }
       const items: ChatRead["items"] = read.threads.map(thread => ({ id: thread.key,
-        place: { name: thread.subject.slice(0, 160), kind: "thread", url: gmailUrl(support.account, thread.id) },
+        place: { name: thread.subject.slice(0, 160), kind: "thread", url: gmailUrl(thread.sourceAccount ?? support.account, thread.id) },
         from: `${thread.from}${thread.forwarded ? " (forwarded)" : ""}`.slice(0, 120), at: thread.at, count: 1, unread: thread.unread, mention: true, text: thread.body.slice(0, CHAT_TEXT_LIMIT),
         support: { account: support.account, thread: thread.id, messageKeys: thread.messageKeys,
           ...(requestMetadata(thread) ? { request: requestMetadata(thread) } : {}),
@@ -64,21 +86,13 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
       // Intake reaches its human owner before a model runs. A queue that could
       // not accept the request cannot send a receipt promising a human reply.
       if (await publish() !== 200) return;
-      let users: Promise<ReadonlySet<string>> | undefined, usersAt = 0;
-      const directory = () => {
-        if (!users || Date.now() - usersAt > 30_000) {
-          usersAt = Date.now();
-          users = readSupportUsers(support.usersCommand, stateDir);
-        }
-        return users;
-      };
       for (const [index, thread] of read.threads.entries()) {
         let draft: DraftOutcome = { state: support.draft ? "pending" : "off" };
         try {
           draft = !read.complete && thread.acknowledgedAt === undefined ? { state: "failed" }
             : await prepareSupportDraft(thread, support, {
-            users: directory, reports: [...reports.values()],
-            ack: async (t, action, token, details) => (await request("/api/support/ack", { key: t.key, owner: support.owner, account: support.account, action, requestKey: messageKey(t.messageId ?? ""), ...(token ? { token } : {}), ...details })).receipt as Acknowledgment | null,
+            users: directory, reports: [...reports.values(), ...personalReports.values()], ...(thread.sourceAccount ? { sourceGws: personalGws } : {}),
+            ack: async (t, action, token, details) => (await request("/api/support/ack", { key: t.key, owner: support.owner, account: support.account, action, requestKey: messageKey(t.messageId ?? ""), messageKeys: t.messageKeys, ...(token ? { token } : {}), ...details })).receipt as Acknowledgment | null,
             gws: as(GMAIL_MODIFY_SCOPE), token: tokens[thread.key],
             saveToken: async token => {
               tokens[thread.key] = token;
