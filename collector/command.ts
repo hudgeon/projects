@@ -72,10 +72,13 @@ export async function command(
   env: Record<string, string> = {},
   timeout = 20_000,
 ) {
+  // Full Gmail conversations can exceed 4 MB across many messages. Keep the
+  // larger budget confined to this read; other commands retain their limit.
+  const gmailThreadRead = bin === "gws" && args.slice(0, 4).join(" ") === "gmail users threads get";
   const { stdout } = await exec(bin, args, {
     cwd,
     timeout,
-    maxBuffer: 4_000_000,
+    maxBuffer: gmailThreadRead ? 16_000_000 : 4_000_000,
     env: {
       ...subprocessEnv(),
       GIT_OPTIONAL_LOCKS: "0",

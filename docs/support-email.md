@@ -27,6 +27,10 @@ repository scan. Actual latency includes Gmail reads and, for eligible new
 inquiries, the installed native model's summary. This is not a guarantee of
 instant delivery. Stale, failed and incomplete reads are visible in Projects;
 failed support reads retain previously observed unresolved items.
+Gmail thread reads allow at most 16 MB of subprocess output for long
+conversations; the bounded message text sent to the queue/model is unchanged.
+Other command output keeps its 4 MB limit. A still-oversized or unreadable
+conversation leaves coverage incomplete and drafts held for review.
 
 Monitoring includes the existing inbox and conversations updated since
 connection. Old inbox requests remain visible but cannot trigger an automatic
