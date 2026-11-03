@@ -11,10 +11,13 @@ export const supportConfigSchema = z.object({
   // The only current output mode. The legacy acknowledgment flag never sends.
   draft: z.boolean().optional(),
   draftSince: z.iso.datetime().optional(),
+  // Explicit operator addresses; quoted identities never authorize record reads.
+  forwarders: z.array(z.email()).max(10).optional(),
+  forwardSince: z.iso.datetime().optional(),
   configDir: z.string().startsWith("/").optional(),
   usersCommand: z.array(z.string().min(1).max(2000).refine(s => !/[\x00\r\n]/.test(s))).min(1).max(64).optional(),
   registeredRecipients: z.enum(["all", "sender"]).optional(),
-}).strict();
+}).strict().refine(s => !s.forwarders?.length || !!s.forwardSince, "Forwarding needs an activation cutoff.");
 export type SupportConfig = z.infer<typeof supportConfigSchema>;
 export const supportReceiptSchema = z.object({
   account: z.email(),

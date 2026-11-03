@@ -144,6 +144,48 @@ deleted draft is never permission to recreate it. Another machine cannot replay
 an uncertain creation. The private local journal retains reservation tokens
 only; neither those tokens nor raw email reach telemetry.
 
+## Owner-forwarded requests
+
+An operator may explicitly enable draft preparation for new inline forwards
+from their own addresses, using the same cutoff on every duty machine:
+
+```sh
+node scripts/install-machine.mjs --support-forwarder owner@example.com --support-forwarder owner@another.example --support-forward-since 2026-11-03T00:00:00.000Z
+```
+
+This changes no mailbox access or customer grants. The configured address must
+be the actual outer From sender, and Gmail's receiver Authentication-Results
+must show aligned DKIM and DMARC passes. Body headers and an unconfigured
+sender cannot opt into forwarding. Existing incoming-mail/automatic-message
+exclusions still apply. A future reinstall keeps the cutoff; it cannot move
+backwards. `--no-support-forwards` stops forwarding drafts without changing
+ordinary support intake or existing drafts.
+The receiver-only authentication boundary follows [RFC 8601](https://www.rfc-editor.org/rfc/rfc8601.html#section-5);
+encapsulated/body authentication assertions are never trusted.
+
+The parser accepts the first complete English Gmail/Outlook/Apple inline
+forward envelope: From, To, optional Cc, Subject and Date/Sent. It derives
+reply-all from those headers only, keeping the existing original-sender
+registration and per-conversation failed-recipient checks. It ignores the
+forwarder's commentary, Reply-To, signatures and older participants; it does
+not union every address mentioned in the chain. Unsupported/ambiguous headers,
+attachment-only forwards or unverifiable forwarding are held for human review.
+The newest original message body goes to the same bounded, tool-free classifier
+and issue/other renderer; older quoted history stays excluded.
+
+Drafts stay in the support mailbox's forwarding conversation with the outer
+subject and Message-ID, preserving durable draft reservations, stale-followup
+handling and uncertain-creation recovery. The original participants are visible
+in To/Cc for the reviewer. No send, draft overwrite, deletion or hidden Bcc
+expansion is added. A forward before activation is never backfilled. Quoted
+Message-IDs are not used for cross-mailbox deduplication.
+
+A forwarded identity is context for an email-only draft, never verified customer
+identity. Forwarded requests publish no protected-check request metadata, create
+no consent/record task and include no verification link or database observation.
+Genuine direct mail and its separately verified/consented record checks retain
+their existing boundary. Selecting an address from a forward grants no access.
+
 ## Authorised record checks
 
 This optional connection is absent by default. After the deployment owner

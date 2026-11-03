@@ -17,7 +17,7 @@ import { CHAT_TEXT_LIMIT, type ChatRead } from "../src/chat-model";
 import { gmailUrl } from "../src/inbox-model";
 import { postChatRead, type Site } from "./upload";
 function requestMetadata(thread: import("./support-gmail").SupportThread) {
-  if (!thread.eligible || !thread.deliveryHistoryComplete) return undefined;
+  if (thread.forwarded || !thread.eligible || !thread.deliveryHistoryComplete) return undefined;
   const parsed = supportReceiptSchema.shape.request.safeParse({ key: messageKey(thread.messageId ?? ""), sender: thread.from, audience: thread.recipients });
   return parsed.success ? parsed.data : undefined;
 }
@@ -53,7 +53,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
       const read = await readSupport(support, as(GMAIL_READ_SCOPE), reports);
       const items: ChatRead["items"] = read.threads.map(thread => ({ id: thread.key,
         place: { name: thread.subject.slice(0, 160), kind: "thread", url: gmailUrl(support.account, thread.id) },
-        from: thread.from.slice(0, 120), at: thread.at, count: 1, unread: thread.unread, mention: true, text: thread.body.slice(0, CHAT_TEXT_LIMIT),
+        from: `${thread.from}${thread.forwarded ? " (forwarded)" : ""}`.slice(0, 120), at: thread.at, count: 1, unread: thread.unread, mention: true, text: thread.body.slice(0, CHAT_TEXT_LIMIT),
         support: { account: support.account, thread: thread.id, messageKeys: thread.messageKeys,
           ...(requestMetadata(thread) ? { request: requestMetadata(thread) } : {}),
           ...(thread.humanRepliedAt === undefined ? {} : { humanRepliedAt: thread.humanRepliedAt }),
@@ -90,7 +90,7 @@ export function startSupport(config: Config, site: Site, stateDir: string) {
               const summary = await summarizeSupport(body, path.join(stateDir, "support-summary"));
               return summary;
             },
-            ...(duty.supportInvestigation === true ? { investigate: async (summary: import("../src/support-model").SupportSummary) => {
+            ...(duty.supportInvestigation === true && !thread.forwarded ? { investigate: async (summary: import("../src/support-model").SupportSummary) => {
               let view: import("../src/support-model").SupportInvestigationView;
               try {
                 const result = await request("/api/collector/support-investigation", { action: "bootstrap", key: thread.key, owner: support.owner, requestKey: messageKey(thread.messageId!), summary });

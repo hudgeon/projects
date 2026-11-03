@@ -95,7 +95,7 @@ export function latestOnly(text: string) {
     : text_;
 }
 function findPart(part: Part, type: string, depth = 0): Part | null {
-  if (depth > 20) return null;
+  if (depth > 20 || part.filename || /^message\//i.test(part.mimeType ?? "")) return null;
   if (
     part.mimeType?.toLowerCase() === type &&
     part.body?.data &&
@@ -118,13 +118,14 @@ function decodePart(part: Part) {
     ? bytes.toString("latin1")
     : bytes.toString("utf8");
 }
-export function messageText(payload: Part) {
+// Decoding is shared with the opt-in support forward parser. Ordinary inbox
+// reads still exclude quoted history through messageText below.
+export function messageBody(payload: Part): string {
   const plain = findPart(payload, "text/plain");
   const html = plain ? null : findPart(payload, "text/html");
-  return latestOnly(
-    plain ? decodePart(plain) : html ? htmlToText(decodePart(html)) : "",
-  );
+  return plain ? decodePart(plain) : html ? htmlToText(decodePart(html)) : "";
 }
+export const messageText = (payload: Part) => latestOnly(messageBody(payload));
 // RFC 2369 List-Unsubscribe, with RFC 8058 one-click only over HTTPS.
 export function unsubscribeOptions(headers: Record<string, string>) {
   const value = headers["list-unsubscribe"];

@@ -80,6 +80,24 @@ export function applyConnections(config, { args, flags, expand, fail }) {
     if (!config.support || !["all", "sender"].includes(userPolicy)) fail("Give --support-user-policy as all or sender.");
     config.support.registeredRecipients = userPolicy;
   }
+  const forwarders = flags("support-forwarder");
+  const forwardSince = flags("support-forward-since").at(-1);
+  if (forwarders.length || forwardSince !== undefined) {
+    if (!config.support || !forwarders.length || forwarders.length > 10 ||
+      forwarders.some(value => typeof value !== "string" || !/^[^\s@<>;,]+@[^\s@<>;,]+\.[^\s@<>;,]+$/.test(value)))
+      fail("Connect --support and give up to ten --support-forwarder addresses.");
+    const addresses = [...new Set(forwarders.map(value => value.toLowerCase()))];
+    const sameForwarders = JSON.stringify([...addresses].sort()) === JSON.stringify([...(config.support.forwarders ?? [])].sort());
+    const cutoff = forwardSince ?? (sameForwarders ? config.support.forwardSince : undefined) ?? new Date().toISOString();
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(cutoff) || !Number.isFinite(Date.parse(cutoff)))
+      fail("Give --support-forward-since as a UTC ISO timestamp.");
+    // A release reinstall cannot silently rewind the forwarding cutoff.
+    if (config.support.forwardSince && Date.parse(cutoff) < Date.parse(config.support.forwardSince))
+      fail("The support forwarding cutoff cannot move backwards.");
+    config.support.forwarders = addresses;
+    config.support.forwardSince = cutoff;
+  }
+  if (args.includes("--no-support-forwards") && config.support) config.support.forwarders = [];
   if (args.includes("--acknowledge-support")) fail("Automatic support sends are disabled. Use --draft-support for review in Gmail.");
   // Old enabled configs cannot reactivate sends when installed again.
   if (config.support) config.support.acknowledge = false;

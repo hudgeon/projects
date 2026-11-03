@@ -58,7 +58,9 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
 }): Promise<DraftOutcome> {
   if (thread.acknowledgedAt !== undefined) return { state: "skipped" };
   if (!config.draft) return { state: "off" };
-  if (!thread.eligible || !thread.recipients || !thread.body) return { state: "skipped" };
+  if (!thread.eligible) return { state: "skipped" };
+  if (thread.forwarded && !thread.recipients) return { state: "held", triage: "needs-review" };
+  if (!thread.recipients || !thread.body) return { state: "skipped" };
   if (!thread.deliveryHistoryComplete) return { state: "failed" };
   const users = await o.users();
   if (!users.has(mailHash(thread.from))) return { state: "skipped" };
@@ -99,12 +101,12 @@ export async function prepareSupportDraft(thread: SupportThread, config: Support
   catch { summary = pendingSupportSummary; }
   const fresh = (await refreshSupportThread(o.gws, config, thread, o.reports)).thread;
   if (!fresh || !fresh.eligible || !fresh.deliveryHistoryComplete || fresh.messageId !== thread.messageId || fresh.from !== thread.from ||
-    fresh.acknowledgedAt !== undefined || JSON.stringify(fresh.recipients) !== JSON.stringify(thread.recipients)) {
+    fresh.body !== thread.body || fresh.forwarded !== thread.forwarded || fresh.acknowledgedAt !== undefined || JSON.stringify(fresh.recipients) !== JSON.stringify(thread.recipients)) {
     await o.ack(thread, "release", receipt.token); return { state: "stale" };
   }
   if (fresh.draftMessages?.length) { await o.ack(thread, "release", receipt.token); return { state: "held" }; }
   let verificationUrl: string | undefined;
-  if (summary.kind === "issue" && o.investigate) {
+  if (summary.kind === "issue" && !fresh.forwarded && o.investigate) {
     try { verificationUrl = (await o.investigate(summary)).verificationUrl; } catch { /* Receipt drafting remains available. */ }
   }
   await o.saveToken(receipt.token);

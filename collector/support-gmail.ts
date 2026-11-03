@@ -2,6 +2,7 @@ import { messageText, type Gws } from "./inbox";
 import { mailbox, mailboxes, mailHash, messageKey, rfcMessageId } from "./mail-identity";
 import { mailHeaders as headers, failedRecipients, deliveryReport, replyRecipients, type MailMessage as Message, type ReplyRecipients, type DeliveryReport } from "./mail-delivery";
 import type { SupportConfig } from "../src/support-model";
+import { supportForward } from "./support-forward";
 export type SupportThread = {
   id: string; key: string; subject: string; from: string; recipients: ReplyRecipients | null;
   deliveryHistoryComplete: boolean;
@@ -11,6 +12,7 @@ export type SupportThread = {
   acknowledgedAt?: number;
   // Existing drafts are never overwritten or interpreted as a sent reply.
   draftMessages?: string[];
+  forwarded?: boolean;
 };
 export function automatic(h: Record<string, string>) {
   const from = mailbox(h.from ?? "") ?? "";
@@ -28,7 +30,8 @@ function isAcknowledgment(message: Message, account: SupportConfig, incoming: Me
   const replyTo = rfcMessageId(h["in-reply-to"] ?? "");
   const original = incoming.find(m => replyTo && rfcMessageId(headers(m)["message-id"] ?? "") === replyTo);
   if (!original || h["x-auto-response-suppress"]?.trim().toLowerCase() !== "all") return false;
-  const allowed = replyRecipients(account, headers(original), new Set());
+  const forward = supportForward(account, original);
+  const allowed = replyRecipients(account, forward ? forward.request?.headers ?? {} : headers(original), new Set());
   const to = mailboxes(h.to ?? ""), cc = mailboxes(h.cc ?? "");
   if (!allowed || !to || !cc || !to.length) return false;
   const addresses = new Set([...allowed.to, ...allowed.cc]);
@@ -46,11 +49,13 @@ export function supportThread(account: SupportConfig, id: string, messages: Mess
     .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
   const incoming = sorted.filter(m => {
     const h = headers(m), from = mailbox(h.from ?? "");
-    return from && !m.labelIds?.includes("SENT") && !own.has(from) && !automatic(h);
+    return from && !m.labelIds?.includes("SENT") && (!own.has(from) || !!supportForward(account, m)) && !automatic(h);
   });
   const latest = incoming.at(-1);
   if (!latest) return null;
-  const h = headers(latest), from = mailbox(h.from ?? "")!;
+  const h = headers(latest), forward = supportForward(account, latest);
+  const requestHeaders = forward ? forward.request && !automatic(forward.request.headers) ? forward.request.headers : {} : h;
+  const from = mailbox(requestHeaders.from ?? "") ?? mailbox(h.from ?? "")!;
   const human = sorted.filter(m => m.labelIds?.includes("SENT") && !automatic(headers(m))).at(-1);
   const humanRepliedAt = human ? Number(human.internalDate) : undefined;
   const messageId = rfcMessageId(h["message-id"] ?? "");
@@ -61,14 +66,16 @@ export function supportThread(account: SupportConfig, id: string, messages: Mess
   return {
     id, key,
     subject: (h.subject?.replace(/[\r\n]/g, " ").trim() || "Support request").slice(0, 300),
-    from, recipients: replyRecipients(account, h, failures.addresses), deliveryHistoryComplete: failures.complete,
-    at, body: messageText(latest.payload ?? {}), messageId,
+    from, recipients: replyRecipients(account, requestHeaders, failures.addresses), deliveryHistoryComplete: failures.complete,
+    at, body: forward?.request?.body ?? messageText(latest.payload ?? {}), messageId,
+    ...(forward ? { forwarded: true } : {}),
     unread: latest.labelIds?.includes("UNREAD") ?? false,
     messageKeys: sorted.flatMap(m => messageKey(headers(m)["message-id"] ?? "") ?? []).slice(-200),
     ...(humanRepliedAt === undefined ? {} : { humanRepliedAt }),
     ...(receipt ? { acknowledgedAt: Number(receipt.internalDate) } : {}),
     draftMessages: messages.filter(m => m.labelIds?.includes("DRAFT")).map(m => m.id),
-    eligible: !!messageId && at >= Date.parse(account.draftSince ?? account.acknowledgeSince ?? account.since) && !(humanRepliedAt && humanRepliedAt >= at),
+    eligible: !!messageId && at >= Date.parse(account.draftSince ?? account.acknowledgeSince ?? account.since) &&
+      (!forward || !!account.forwardSince && at >= Date.parse(account.forwardSince)) && !(humanRepliedAt && humanRepliedAt >= at),
   };
 }
 const call = async (gws: Gws, resource: string, method: string, params: object) => JSON.parse(await gws(["gmail", "users", ...(resource ? [resource] : []), method, "--params", JSON.stringify(params)]));
