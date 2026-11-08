@@ -7,7 +7,7 @@ import { reviewProjectContext } from "../runner/project-context";
 import { QUESTION_BYTES, REQUEST_BYTES } from "../runner/context";
 import { fixture, selector } from "./project-fixtures";
 
-test("the work issue's body sections and newest comments are candidates", async () => {
+test("only recent work comments enter the shortlist when a current position is present", async () => {
   const { cwd, options } = await fixture();
   // Candidates arrive over the review's batched requests.
   const sent: { path: string; section?: string }[] = [];
@@ -15,7 +15,7 @@ test("the work issue's body sections and newest comments are candidates", async 
     sent.push(...body.state.candidates);
   });
   try {
-    await reviewProjectContext({
+    const view = await reviewProjectContext({
       ...options,
       selector: mock.value,
       workIssue: { repo: "example/work", number: 9 },
@@ -30,7 +30,8 @@ test("the work issue's body sections and newest comments are candidates", async 
       }),
     });
     const paths = sent.map((c) => c.path);
-    assert.ok(paths.includes("https://github.com/example/work/issues/9"));
+    assert.ok(!paths.includes("https://github.com/example/work/issues/9"));
+    assert.match(view.prompt, /The delimiter check remains/);
     assert.ok(
       paths.includes(
         "https://github.com/example/work/issues/9#comment-2026-01-07T00:00:00Z",

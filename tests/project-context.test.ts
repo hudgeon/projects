@@ -165,6 +165,68 @@ test("a current work issue is evidence and changed issue contents invalidate a r
   }
 });
 
+test("an oversized work record supplies its latest position and a real comment link outside its archived body", async () => {
+  const { cwd, options } = await fixture();
+  const url = "https://github.com/example/work/issues/7";
+  let position = "Next: Verify the invoice account with the owner.";
+  const mock = selector((body) => {
+    assert.doesNotMatch(JSON.stringify(body), /Verify the invoice account|Recheck invoice boundaries|Old invoice history/);
+    position = "Next: Recheck invoice boundaries with the owner.";
+  });
+  const review = {
+    ...options,
+    workIssue: { repo: "example/work", number: 7 },
+    selector: mock.value,
+    readIssue: async () => ({
+      title: "Invoice work",
+      body: `## Current position\nStatus: being worked on. Reviewed: 2026-01-01.\n${position}\n\n## Superseded position\n${"Old invoice history. ".repeat(8_000)}`,
+      updatedAt: "2026-01-01T00:00:00Z",
+      comments: [{
+        body: "The invoice pipe delimiter still needs review.",
+        createdAt: "2026-01-01T00:00:00Z",
+        url: `${url}#issuecomment-123`,
+      }],
+    }),
+  };
+  try {
+    const view = await reviewProjectContext(review);
+    assert.equal(view.receipt.workBrief?.status, "read");
+    assert.match(view.prompt, /Recheck invoice boundaries with the owner/);
+    assert.match(view.prompt, /#issuecomment-123/);
+    assert.doesNotMatch(view.prompt, /Verify the invoice account|Old invoice history|#comment-2026/);
+    position = "Next: Compare the invoice output with the approved sample.";
+    const revised = await reviewProjectContext({ ...review, cached: view.record });
+    assert.equal(revised.receipt.cached, true);
+    assert.match(revised.prompt, /Compare the invoice output/);
+    assert.notEqual(revised.receipt.workBrief?.hash, view.receipt.workBrief?.hash);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("a long active position keeps complete priority fields and reports omitted detail", async () => {
+  const { cwd, options } = await fixture();
+  const readIssue = async () => ({
+    title: "Invoice work",
+    body: `## Current position\r\nStatus: needs verification. Reviewed: 2026-01-01.\r\nEvidence checked: 2026-01-01T00:00:00.000Z\r\nPosition: ${"Extra detail. ".repeat(180)}\r\nNext: Owner reviews the pending invoice decision.`,
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  try {
+    const view = await reviewProjectContext({
+      ...options,
+      workIssue: { repo: "example/work", number: 7 },
+      readIssue,
+    });
+    assert.equal(view.receipt.workBrief?.status, "partial");
+    assert.ok((view.receipt.workBrief?.chars ?? Infinity) <= 2_000);
+    assert.match(view.prompt, /Owner reviews the pending invoice decision/);
+    assert.match(view.prompt, /Evidence checked: 2026-01-01T00:00:00.000Z/);
+    assert.doesNotMatch(view.prompt, /Extra detail/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("sources changing during Jev selection discard that judgment and retain a fresh baseline", async () => {
   const { cwd, options } = await fixture();
   const mock = selector(async () => {

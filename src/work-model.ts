@@ -47,12 +47,15 @@ export const positionSchema = z
   })
   .strict();
 export type Position = z.infer<typeof positionSchema>;
+export function currentPositionSection(body: string) {
+  return body.match(
+    /^## Current position\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m,
+  )?.[1];
+}
 // Only the documented Current position block is an assessment. Arbitrary issue
 // prose, timestamps and session activity cannot manufacture a business priority.
 export function currentPosition(body: string): Position | null {
-  const block = body.match(
-    /^## Current position\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m,
-  )?.[1];
+  const block = currentPositionSection(body);
   if (!block) return null;
   const field = (name: string) =>
     block.match(new RegExp(`^${name}:\\s*(.+)$`, "mi"))?.[1].trim() ?? "";

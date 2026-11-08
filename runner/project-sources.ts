@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { z } from "zod";
+import { currentPositionSection } from "../src/work-model";
 import { nativeEnv } from "./native";
 
 // Which project files may become evidence, and how they and the work issue
@@ -53,16 +54,63 @@ export const credentialLike = (text: string, name = "") =>
   (/\.ya?ml$/i.test(name) && yamlSecret(text));
 export type Source = {
   path: string;
+  url?: string;
   hash: string | null;
   status: string;
   chars?: number;
 };
-export type Issue = {
-  title: string;
-  body: string;
-  updatedAt: string;
-  comments?: { body: string; createdAt: string }[];
+const issueComment = z.object({
+  body: z.string(),
+  createdAt: z.string(),
+  url: z.string().optional(),
+});
+export const issueSchema = z.object({
+  title: z.string(),
+  body: z.string(),
+  updatedAt: z.string(),
+  comments: z.array(issueComment).default([]),
+});
+export type Issue = z.input<typeof issueSchema>;
+export type WorkBrief = {
+  url: string;
+  status: "read" | "partial" | "missing" | "credential_like_content" | "unavailable";
+  updatedAt?: string;
+  hash?: string;
+  text?: string;
 };
+
+const WORK_BRIEF_CHARS = 2_000;
+const workFields = [
+  "Status", "Evidence checked", "Next", "Position", "Priority", "Due",
+  "Outcome / why now", "Evidence", "Coverage", "Source limits",
+];
+const workFieldBoundary = new RegExp(`\\r?\\n(?=(?:${workFields.join("|")}):)`, "i");
+
+export function linkedWorkBrief(issue: Issue, url: string): WorkBrief {
+  const source = { url, updatedAt: issue.updatedAt };
+  const block = currentPositionSection(issue.body)?.trim();
+  if (!block) return { ...source, status: "missing" };
+  if (credentialLike(block)) return { ...source, status: "credential_like_content" };
+  const digest = hash(block);
+  if (block.length <= WORK_BRIEF_CHARS)
+    return { ...source, status: "read", hash: digest, text: block };
+
+  // A long assessment keeps complete fields. A clipped sentence can reverse
+  // a decision or hide a condition. Keep Next even when it follows a long Position.
+  const fields = block.split(workFieldBoundary);
+  const kept = new Set<number>();
+  let room = WORK_BRIEF_CHARS;
+  for (const name of workFields) {
+    const prefix = `${name.toLowerCase()}:`;
+    const index = fields.findIndex((field) => field.toLowerCase().startsWith(prefix));
+    const field = fields[index];
+    if (!field || field.length > room) continue;
+    kept.add(index);
+    room -= field.length + 1;
+  }
+  const text = fields.filter((_, index) => kept.has(index)).join("\n");
+  return { ...source, status: "partial", hash: digest, text };
+}
 
 export async function command(
   cwd: string,
@@ -204,9 +252,7 @@ export async function fetchIssue(
             body: z.string(),
             updatedAt: z.string(),
             comments: z.object({
-              nodes: z.array(
-                z.object({ body: z.string(), createdAt: z.string() }),
-              ),
+              nodes: z.array(issueComment),
             }),
           }),
         }),
@@ -221,7 +267,7 @@ export async function fetchIssue(
             "api",
             "graphql",
             "-f",
-            `query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){title body updatedAt comments(last:${RECENT_COMMENTS}){nodes{body createdAt}}}}}`,
+            `query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){title body updatedAt comments(last:${RECENT_COMMENTS}){nodes{body createdAt url}}}}}`,
             "-f",
             `owner=${owner}`,
             "-f",

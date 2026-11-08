@@ -63,13 +63,24 @@ the most recent child's project); a conversation choosing its first project
 still routes from the registry. Before a helper starts, review uses its actual
 prepared workspace. Recovery inspection remains read-only.
 
+A linked issue's `Current position` is retained separately before applying
+the full-body size limit. The agent receives up to 2,000 characters of this
+section, its issue link and source status. An over-budget section keeps
+complete fields, prioritising status, the evidence cutoff and the next
+action, and is marked partial. The private receipt records its hash and
+length. The section stays outside Jev's request. To investigate history or
+omitted detail, use the issue link to read the relevant sections or exact
+comments and verify the date and any superseding decision.
+
 Project review splits every eligible text source (markdown, code, YAML and
 `package.json`) into natural units: markdown sections at headings, YAML
 records (list items and nested blocks at column 0 or one level beneath a
 top-level key, each with the comments directly above it and labelled by its
 key; other top-level lines start a unit after a blank line, as in code),
 code's top-level statements (imports dropped), and the linked work issue's
-body sections and five newest comments. Small neighbours merge and long units split at
+five newest comments. A work issue without a `Current position` still
+contributes eligible body sections. Recent comments carry their GitHub
+links. Small neighbours merge and long units split at
 paragraphs, then lines, up to 1,200 characters each; a YAML value is cut only
 where its line is longer than that. BM25
 ranks the units by the brief's opening 1,000 characters (a brief states its

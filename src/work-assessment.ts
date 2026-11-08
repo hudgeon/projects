@@ -1,14 +1,12 @@
 import { z } from "zod";
 import { freshness, type Snapshot } from "./model";
 import { currentInboxes, isLinkedThread } from "./inbox-model";
-import type { Issue } from "./work-model";
+import { currentPositionSection, type Issue } from "./work-model";
 
 // A source refresh is not a review. Only the issue's explicit evidence cutoff
 // can establish which observations its Current position has reconciled.
 export function evidenceChecked(body: string): number | null {
-  const block = body.match(
-    /^## Current position\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m,
-  )?.[1];
+  const block = currentPositionSection(body);
   const value = block?.match(
     /^Evidence checked:\s*(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z)\s*$/m,
   )?.[1];

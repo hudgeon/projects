@@ -15,7 +15,7 @@ import { savePrivate } from "../runner/engine";
 import { contextConfigSchema, JEV_MODEL, keptKey } from "../runner/context";
 import { nativeEnv } from "../runner/native";
 import { BATCH, KEEP_FROM } from "../runner/project-context";
-import { RECENT_COMMENTS } from "../runner/project-sources";
+import { issueSchema, RECENT_COMMENTS } from "../runner/project-sources";
 import { reviewsDir } from "../runner/project-turn";
 import { registry } from "../runner/workspaces";
 import { checkDirs, followUp, formatChecks, judgedNames, parseCheck, replayChecks, scoreChecks, storedChecks, type Check, type CheckLabels } from "./check-metrics";
@@ -216,14 +216,14 @@ if (command === "checks") {
   if (!chosen.length) throw Error("No stored reviews to replay on this machine.");
   const projects = await registry(machine);
   await readKey();
-  const issues = new Map<string, Promise<{ title: string; body: string; updatedAt: string; comments: { body: string; createdAt: string }[] }>>();
+  const issues = new Map<string, Promise<z.output<typeof issueSchema>>>();
   const readIssue = async (repo: string, number: number, before: number) => {
     const name = `${repo}#${number}`;
     if (!issues.has(name))
       issues.set(
         name,
         exec("gh", ["issue", "view", String(number), "--repo", repo, "--json", "title,body,updatedAt,comments"], { env: nativeEnv(), timeout: 60_000, maxBuffer: 64_000_000 }).then(({ stdout }) =>
-          z.object({ title: z.string(), body: z.string(), updatedAt: z.string(), comments: z.array(z.object({ body: z.string(), createdAt: z.string() })) }).parse(JSON.parse(stdout)),
+          issueSchema.parse(JSON.parse(stdout)),
         ),
       );
     // Today's body, and the comments the review could have seen.
