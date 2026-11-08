@@ -25,9 +25,10 @@ export const waitInstructions = `While anything you run takes more than two minu
 // which macOS guards with a permission prompt on the machine's screen that
 // names the runner's node, and it is slow.
 export const searchInstructions = `Search only inside your working folder, the repository or another folder you can name. Never search the whole home folder or ~/Library: macOS stops to ask the machine's owner for permission when a search reaches other apps' data, and such searches are slow. Use a skill by its name from your skill list rather than searching for its files.`;
+export const planReadingInstructions = `Read applicable repository instructions. For routine tasks, read only the plan sections that govern the task, including applicable constraints and acceptance gates. Locate them by heading or search and read the relevant ranges. Read the whole plan when the task spans it or calls for a full review. For a narrow evidence check, finish once the relevant original sources answer it. Retrieve older evidence for a specific unresolved question, check the dated original and any superseding decision that affects the answer, and cite the original source.`;
 // What every helper is told besides its task.
 export const helperInstructions = (agent: "codex" | "claude", fullAccess = false, person?: Person) =>
-  `${connectorInstructions(person)}\n\n${waitInstructions}\n\n${searchInstructions}${agent === "codex" && !fullAccess ? `\n\n${codexBrowserInstructions}` : ""}`;
+  `${planReadingInstructions}\n\n${connectorInstructions(person)}\n\n${waitInstructions}\n\n${searchInstructions}${agent === "codex" && !fullAccess ? `\n\n${codexBrowserInstructions}` : ""}`;
 // The mailbox a conversation's email work may use: its owner's own, when it
 // is one of the accounts connected on this machine, with the gws sign-in that
 // reads it. Nobody's email is handled from another person's mailbox.

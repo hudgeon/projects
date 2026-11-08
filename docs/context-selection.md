@@ -107,8 +107,13 @@ at or above 0.5, best first, within the 6,000-character budget; shadow mode and
 failures supply the retrieval order within the same budget. The review records
 full-file hashes, character offsets, retrieval scores and missing/partial
 coverage; it is a bounded relevance selection, not a code review or proof of
-completion. Agents still read applicable instructions and the complete relevant
-plan. People, legal, HR and personnel folders, documents and YAML files,
+completion. Agents read applicable repository instructions. For routine work
+they use headings or search to locate the plan sections governing the task
+and read those ranges. A narrow evidence check can finish at the verified
+original. A task spanning the whole plan can require reading it in full.
+Older evidence is retrieved by source link for a specific question, with
+the dated original and any relevant superseding decision checked before citation.
+People, legal, HR and personnel folders, documents and YAML files,
 hidden folders (including `.github`) and ignored files, secret-named paths,
 generated lockfiles, recognizable credential content, links outside the
 project and binary content are not supplied. In YAML, recognizable credentials

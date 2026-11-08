@@ -47,6 +47,8 @@ test("a first turn selects project evidence through the priced gateway and retai
       /Drafting only\. Publishing requires the owner's approval/,
     );
     assert.match(view.prompt, /pipe delimiter/);
+    assert.match(view.prompt, /Use the excerpts that apply to the task/);
+    assert.doesNotMatch(view.prompt, /complete plan/);
     assert.doesNotMatch(view.prompt, /sunny/);
     assert.equal(view.receipt.coverage, "bounded_excerpts");
     assert.equal(mock.calls, 1);

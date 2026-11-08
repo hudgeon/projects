@@ -67,3 +67,13 @@ test("routine drafts keep source reads and verification in one helper without we
   assert.match(text, /wording revisions or recipient corrections/);
   assert.match(text, /send still needs Owner's explicit approval of that message/);
 });
+
+test("coordinators and helpers scope plan reads and verify older evidence at its source", () => {
+  for (const text of [masterInstructions(), helperInstructions("codex"), helperInstructions("claude")]) {
+    assert.match(text, /Read applicable repository instructions/);
+    assert.match(text, /For routine tasks, read only the plan sections that govern the task/);
+    assert.match(text, /Read the whole plan when the task spans it or calls for a full review/);
+    assert.match(text, /For a narrow evidence check, finish once the relevant original sources answer it/);
+    assert.match(text, /Retrieve older evidence for a specific unresolved question, check the dated original and any superseding decision that affects the answer, and cite the original source/);
+  }
+});
