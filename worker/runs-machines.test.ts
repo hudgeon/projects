@@ -7,24 +7,24 @@ import { build } from "esbuild";
 import { digest, token } from "./auth";
 import type { Portfolio } from "./index";
 import { randomUUID } from "node:crypto";
-import type { Run, RunInput } from "../src/run-model";
+import type { Lane, Run, RunInput } from "../src/run-model";
 import { start, options } from "./miniflare-fixtures";
 import { archiveSnapshot } from "./snapshot-fixtures";
 
-test("the Laptop starts conversations only while the Studio is away, and each stays on its machine", async () => {
+test("new conversations follow runner capacity and existing conversations stay on their machine", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-fallback-")), script = path.join(dir, "worker.mjs");
   await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
   const studio = "m".repeat(64), laptop = "a".repeat(64), origin = "https://example.com";
   const mf = await start(await options(script, dir, {ALLOWED_EMAILS: "owner@example.com", RUNNER_TOKEN: studio, LAPTOP_RUNNER_TOKEN: laptop}));
   const miniId = randomUUID(), airId = randomUUID();
   const post = (route: string, body: unknown, headers: Record<string, string>) => mf.dispatchFetch(origin + route, {method: "POST", headers: {"Content-Type": "application/json", ...headers}, body: JSON.stringify(body)});
-  const claim = async (bearer: string, runnerId: string, activeRunIds: string[] = []) => {
-    const response = await post("/api/runner/claim", {runnerId, activeRunIds}, {Authorization: `Bearer ${bearer}`});
+  const claim = async (bearer: string, runnerId: string, activeRunIds: string[] = [], lanes?: Lane[]) => {
+    const response = await post("/api/runner/claim", {runnerId, activeRunIds, lanes}, {Authorization: `Bearer ${bearer}`});
     assert.equal(response.status, 200);
     return (await response.json() as {run: Run | null}).run;
   };
   const store = async () => { const ns = await mf.getDurableObjectNamespace("PORTFOLIOS"); return ns.get(ns.idFromName("test")) as unknown as Portfolio; };
-  const create = async (text: string) => JSON.parse(JSON.stringify(await (await store()).createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null}, "owner@example.com"))) as Run;
+  const create = async (text: string, lane?: Lane) => JSON.parse(JSON.stringify(await (await store()).createRun({requestId: randomUUID(), text, projectId: null, agent: "auto", workIssue: null, lane}, "owner@example.com"))) as Run;
   const finish = async (bearer: string, runnerId: string, run: Run) => {
     const progress = {seq: 1, state: "completed" as const, summary: "Done", masterSessionId: randomUUID(), children: [], reviewedMessageIds: [run.messages[0].id]};
     const response = await post("/api/runner/report", {runnerId, id: run.id, generation: run.generation, progress}, {Authorization: `Bearer ${bearer}`});
@@ -57,10 +57,23 @@ test("the Laptop starts conversations only while the Studio is away, and each st
     const minis = (await (await store()).getRun(present.id))!;
     await finish(studio, miniId, minis);
     await (await store()).messageRun(present.id, {requestId: randomUUID(), text: "Follow up on the Studio's work"});
-    await miniGoesQuiet();
-    assert.equal(await claim(laptop, airId, [early.id, away.id]), null, "the Studio's conversation waits for the Studio");
+    assert.equal(await claim(studio, miniId, [], []), null, "a full or paused runner checks in without claiming");
+    const overflow = await create("Started while the Studio has no capacity");
+    assert.equal((await claim(laptop, airId, [early.id, away.id]))?.id, overflow.id, "a free Laptop takes the new conversation");
+    assert.equal((await (await store()).getRun(present.id))?.state, "queued", "the Studio's follow-up waits for the Studio");
+    assert.equal(await (await store()).moveRun(present.id), "machine-present", "a paused runner is still online");
     assert.deepEqual([(await claim(studio, miniId))!.id, (await (await store()).getRun(present.id))!.host], [present.id, "studio"]);
     assert.equal((await (await store()).listRuns()).find((r) => r.id === away.id)?.host, "laptop", "lists name the machine");
+    // An older runner can offer only certain lanes. Its heartbeat doesn't renew that offer.
+    assert.equal(await claim(studio, miniId, [present.id], ["quick"]), null);
+    const quick = await create("Ready for a quick worker", "quick");
+    const standard = await create("Ready for a standard worker");
+    const laptopActive = [early.id, away.id, overflow.id];
+    assert.equal((await claim(laptop, airId, laptopActive))?.id, standard.id, "the Laptop skips the lane the Studio is offering");
+    const storage = await mf.unsafeGetDurableObjectStorage("test", "Portfolio", {name: "test"});
+    await storage.exec("UPDATE runner_contact SET offered_at=? WHERE host='studio'", Date.now() - 120_000);
+    assert.equal((await post("/api/runner/heartbeat", {...beat, generation: 2}, {Authorization: `Bearer ${studio}`})).status, 200);
+    assert.equal((await claim(laptop, airId, [...laptopActive, standard.id]))?.id, quick.id, "a fresh heartbeat does not renew expired capacity");
     // An old Studio inventory no longer blocks new work; an unknown project still does.
     const db = await store(), salt = token(), cookie = token();
     await db.issue("owner@example.com", salt, digest(`${salt}:123456`));

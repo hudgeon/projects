@@ -82,17 +82,6 @@ export class Runs {
     storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS runner_slots(owner TEXT PRIMARY KEY,id TEXT NOT NULL)",
     );
-    storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS runner_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL)",
-    );
-  }
-  // Every claim, heartbeat and report counts as the machine being present.
-  private contact(host: RunnerHost) {
-    this.storage.sql.exec(
-      "INSERT INTO runner_contact(host,at) VALUES(?,?) ON CONFLICT(host) DO UPDATE SET at=excluded.at",
-      host,
-      Date.now(),
-    );
   }
   private stub(id: string) {
     return this.env.CONVERSATIONS.getByName(
@@ -337,7 +326,8 @@ export class Runs {
   ): Promise<Run | null> {
     return this.select(async () => {
       await this.migrate();
-      this.contact(host);
+      const now = Date.now();
+      this.machines.runnerContact(host, lanes, now);
       // A full or pressure-paused runner stays present without consuming or
       // recovering any reservation. Retry it unchanged when capacity returns.
       if (!lanes.length) return null;
@@ -347,24 +337,22 @@ export class Runs {
           owner,
         )
         .toArray()[0];
-      // Recovery of this runner's own active claims ignores lanes; new work is
-      // taken only from the offered lanes. A conversation
-      // stays with the runner that first claimed it, where its native sessions
-      // and worktrees live; new ones go to the first machine in order that is
-      // present.
-      const accepted = [...new Set(lanes)];
-      const unclaimed = this.machines.takesNewWork(host) ? 1 : 0;
+      // Recovery of active claims ignores lanes. Queued follow-ups use this
+      // runner's offer; unclaimed work also respects earlier machines' offers.
+      const unclaimedLanes = this.machines.newWorkLanes(host, lanes, now);
       const rows = this.storage.sql
         .exec<IndexRow>(
           `SELECT * FROM conversation_index WHERE
         (owner=? AND json_extract(payload,'$.state') IN ('running','cancelling')) OR
-        ((owner=? OR (owner IS NULL AND ?)) AND json_extract(payload,'$.state')='queued'
-          AND COALESCE(json_extract(payload,'$.lane'),'standard') IN (${accepted.map(() => "?").join(",")}))
+        ((owner=? OR owner IS NULL) AND json_extract(payload,'$.state')='queued'
+          AND COALESCE(json_extract(payload,'$.lane'),'standard') IN (
+            SELECT value FROM json_each(CASE WHEN conversation_index.owner IS NULL THEN ? ELSE ? END)
+          ))
         ORDER BY (owner=?) DESC,json_extract(payload,'$.updatedAt')`,
           owner,
           owner,
-          unclaimed,
-          ...accepted,
+          JSON.stringify(unclaimedLanes),
+          JSON.stringify(lanes),
           owner,
         )
         .toArray();
@@ -425,7 +413,7 @@ export class Runs {
     generation: number,
     host: RunnerHost,
   ) {
-    this.contact(host);
+    this.machines.runnerContact(host);
     if (!(await this.get(id))) return null;
     const result = await this.stub(id).heartbeat(owner, id, generation);
     await this.get(id);
@@ -438,7 +426,7 @@ export class Runs {
     progress: Progress,
     host: RunnerHost,
   ) {
-    this.contact(host);
+    this.machines.runnerContact(host);
     if (!(await this.get(id))) return false;
     const accepted = await this.stub(id).report(
       owner,

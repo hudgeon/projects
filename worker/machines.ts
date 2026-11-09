@@ -1,11 +1,11 @@
 import { digest, token } from "./auth";
-import { FALLBACK_AFTER_MS } from "../src/run-model";
+import { FALLBACK_AFTER_MS, type Lane } from "../src/run-model";
 import type { MachineView } from "../src/model";
 
 // A machine publishes its own snapshot with its collector token and runs
 // conversations with its runner token; only their hashes are kept. Machines
-// are ordered: the first one heard from recently takes the shared duties
-// (work items, Mark done, inbox) and new conversations.
+// are ordered: recent collector contact selects shared duties; recent
+// runner offers select who can start new conversations.
 export const COLLECTOR_SILENCE_MS = 5 * 60_000;
 export type MachineRole = "collector" | "runner";
 export type MachineCaller = {
@@ -37,8 +37,13 @@ export class Machines {
       "CREATE TABLE IF NOT EXISTS collector_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL)",
     );
     sql.exec(
-      "CREATE TABLE IF NOT EXISTS runner_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS runner_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL,offered_at INTEGER,lanes TEXT)",
     );
+    const columns = sql.exec<{ name: string }>("PRAGMA table_info(runner_contact)").toArray();
+    if (!columns.some((column) => column.name === "offered_at"))
+      sql.exec("ALTER TABLE runner_contact ADD COLUMN offered_at INTEGER");
+    if (!columns.some((column) => column.name === "lanes"))
+      sql.exec("ALTER TABLE runner_contact ADD COLUMN lanes TEXT");
   }
   private rows() {
     return this.storage.sql
@@ -72,17 +77,32 @@ export class Machines {
     }
     return true;
   }
-  // New conversations go to the first machine in order whose runner called
-  // in the last two minutes; a runner that is not registered (only a direct
-  // call, as in tests) takes them only when no machine is present. A
-  // conversation stays with the machine that claimed it.
-  takesNewWork(host: string, now = Date.now()) {
-    for (const row of this.rows()) {
-      if (row.id === host) return true;
-      if (this.present("runner_contact", row.id, FALLBACK_AFTER_MS, now))
-        return false;
+  // Claims report which lanes have room. Heartbeats and reports only prove
+  // the runner is alive; they do not extend its last offer of capacity.
+  runnerContact(host: string, lanes?: Lane[], now = Date.now()) {
+    this.storage.sql.exec(
+      `INSERT INTO runner_contact(host,at,offered_at,lanes) VALUES(?,?,?,?)
+      ON CONFLICT(host) DO UPDATE SET at=excluded.at,
+        offered_at=COALESCE(excluded.offered_at,runner_contact.offered_at),
+        lanes=COALESCE(excluded.lanes,runner_contact.lanes)`,
+      host, now, lanes ? now : null, lanes ? JSON.stringify(lanes) : null,
+    );
+  }
+  private offeredLanes(host: string, now: number) {
+    const cutoff = now - FALLBACK_AFTER_MS;
+    return this.storage.sql.exec<{ lane: Lane }>(
+      "SELECT value AS lane FROM runner_contact, json_each(lanes) WHERE host=? AND at>? AND offered_at>?",
+      host, cutoff, cutoff,
+    ).toArray().map(({ lane }) => lane);
+  }
+  // Only fresh offers from earlier machines have priority for new work.
+  newWorkLanes(host: string, lanes: Lane[], now = Date.now()): Lane[] {
+    const available = new Set(lanes);
+    for (const { id } of this.rows()) {
+      if (id === host || !available.size) break;
+      for (const lane of this.offeredLanes(id, now)) available.delete(lane);
     }
-    return true;
+    return [...available];
   }
   runnerAway(host: string, now = Date.now()) {
     return !this.present("runner_contact", host, FALLBACK_AFTER_MS, now);
@@ -95,7 +115,7 @@ export class Machines {
       lastCollected: this.contact("collector_contact", row.id),
       lastRunner: this.contact("runner_contact", row.id),
       duties: this.collectorDuties(row.id, now),
-      newWork: this.takesNewWork(row.id, now),
+      newWork: this.newWorkLanes(row.id, this.offeredLanes(row.id, now), now).length > 0,
     }));
   }
   // The token's hash, from the Worker; the token itself never arrives here.
@@ -121,6 +141,7 @@ export class Machines {
       digest(runner),
       id,
     );
+    this.storage.sql.exec("UPDATE runner_contact SET offered_at=NULL,lanes=NULL WHERE host=?", id);
     return { collector, runner };
   }
   // A new machine goes last.

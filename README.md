@@ -73,10 +73,9 @@ never act on another's claim.
 
 Machines are ordered. The first machine heard from in the last five minutes is
 **on duty**: it reads the inboxes and applies Mark done and inbox actions. Every collector asks the Worker whether it is on
-duty before each scan, so one machine applies each request. New
-conversations go to the first machine whose runner called in the last two
-minutes (an idle runner claims every two seconds and a busy one heartbeats
-every ten, so a restart or short network drop hands nothing over).
+duty before each scan. New work goes to the first runner in machine order
+that offered room for its lane in the last two minutes. Full or paused
+runners keep checking in and leave new work for another machine.
 A conversation stays on the machine that claimed it, where its native sessions,
 journal and worktrees live.
 

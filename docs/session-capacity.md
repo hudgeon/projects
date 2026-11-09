@@ -1,7 +1,7 @@
 # Session capacity
 
 Every runner has one shared ceiling, `concurrency` in `machine.json`: 1–11
-conversations, default 9. Standard, quick and upkeep work can use any free
+conversations, default 9. Standard, quick, review and upkeep work can use any free
 place. There are no reserved places or extra pools. Lane labels still choose
 the appropriate instructions and preserve compatibility with older runners;
 they do not imply memory cost or grant priority. Existing queue order is kept.
@@ -21,8 +21,10 @@ normal pressure reopens admission. Running work is never cancelled to reclaim
 memory. Healthy work may fill the pool again, up to the ceiling.
 
 The runner continues checking in and serving opened documents while full or
-paused. Empty offered lanes do not recover a saved reservation or start work;
-the same reservation remains available when admission reopens. Executors
+paused. New conversations go to the first machine in order with a fresh offer
+for that lane. An empty offer leaves new work for other machines. Heartbeats
+keep the runner present without refreshing its offer. Existing conversations
+and reservations stay on their machine and resume when admission reopens. Executors
 adopted across an update count against the shared ceiling, including when an
 older runner left more running than the new ceiling permits.
 
