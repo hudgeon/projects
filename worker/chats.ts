@@ -10,6 +10,7 @@ import {
   URGENT_MAIL_ALERT_MS,
   chatActionSchema,
   chatReadSchema,
+  chatSourceSchema,
   chatState,
   type ChatAction,
   type ChatItem,
@@ -36,11 +37,14 @@ async function itemKey(source: string, owner: string, id: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 export class Chats {
+  private sources: ReadonlySet<string>;
   constructor(
     private storage: DurableObjectStorage,
     private pushes: PushDevices,
     private mailOnDuty: (host: string) => boolean,
+    configuredSources?: string,
   ) {
+    this.sources = new Set(configuredSources?.split(",") ?? chatSourceSchema.options);
     storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS chat_reads (source TEXT NOT NULL, owner TEXT NOT NULL, observed INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (source, owner))",
     );
@@ -50,6 +54,7 @@ export class Chats {
   }
   // The newest read per source and person wins; an older one changes nothing.
   async publish(read: ChatRead, host: string) {
+    if (!this.sources.has(read.source)) return { accepted: false };
     const owner = read.owner.toLowerCase();
     const items = await Promise.all(
       read.items.map(async (item) => ({ ...item, key: await itemKey(read.source, owner, item.id) })),
@@ -89,8 +94,9 @@ export class Chats {
   }
   private reads(): Stored[] {
     return this.storage.sql
-      .exec<{ payload: string }>("SELECT payload FROM chat_reads ORDER BY source,owner")
+      .exec<{ source: string; payload: string }>("SELECT source,payload FROM chat_reads ORDER BY source,owner")
       .toArray()
+      .filter((row) => this.sources.has(row.source))
       .map((row) => JSON.parse(row.payload) as Stored);
   }
   private marks() {

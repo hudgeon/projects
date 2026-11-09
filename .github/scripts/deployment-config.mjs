@@ -12,6 +12,8 @@ const {
 } = process.env;
 // Optional: an unset repository variable arrives empty.
 const timeZone = process.env.PROJECTS_TIME_ZONE || "UTC";
+const sources = process.env.PROJECTS_CHAT_SOURCES || "slack,teams,support";
+const chatSources = sources.split(",").map(source => source.trim());
 // Optional: exact host names, comma separated, that conversation browsers may
 // reach besides the site itself. No wildcards, schemes, ports or paths.
 const browserHosts = process.env.PROJECTS_BROWSER_HOSTS || "";
@@ -49,6 +51,7 @@ for (const [name, value, valid] of [
   ["PROJECTS_OWNER_EMAIL", owner, email.test(owner)],
   ["PROJECTS_EMAIL_FROM", from, email.test(from)],
   ["PROJECTS_TIME_ZONE", timeZone, validZone(timeZone)],
+  ["PROJECTS_CHAT_SOURCES", sources, chatSources.every(source => ["slack", "teams", "support"].includes(source))],
   [
     "PROJECTS_BROWSER_HOSTS",
     browserHosts,
@@ -99,6 +102,7 @@ config.vars = {
   OWNER_EMAIL: owner,
   EMAIL_FROM: from,
   TIME_ZONE: timeZone,
+  CHAT_SOURCES: [...new Set(chatSources)].join(","),
   SUPPORT_APP_URL: supportUrl,
 };
 config.services = (config.services ?? []).filter(binding => binding.binding !== "SUPPORT_READER");

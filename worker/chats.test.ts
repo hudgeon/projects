@@ -29,7 +29,8 @@ test("each person's Slack and Teams items: the newest read wins, lists carry no 
   const dir = await mkdtemp(path.join(tmpdir(), "projects-chats-")), script = path.join(dir, "worker.mjs");
   await build({ entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script });
   const origin = "https://example.com", collector = `Bearer ${"c".repeat(64)}`, runner = `Bearer ${"r".repeat(64)}`;
-  const mf = await start(await options(script, dir, { ALLOWED_EMAILS: `${owner}, ${colleague}`, OWNER_EMAIL: owner, COLLECTOR_TOKEN: "c".repeat(64), RUNNER_TOKEN: "r".repeat(64) }));
+  const bindings = { ALLOWED_EMAILS: `${owner}, ${colleague}`, OWNER_EMAIL: owner, COLLECTOR_TOKEN: "c".repeat(64), RUNNER_TOKEN: "r".repeat(64) };
+  let mf = await start(await options(script, dir, bindings));
   const get = (route: string, headers: Record<string, string>) => mf.dispatchFetch(origin + route, { headers });
   const post = (route: string, body: unknown, headers: Record<string, string>) =>
     mf.dispatchFetch(origin + route, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -108,6 +109,18 @@ test("each person's Slack and Teams items: the newest read wins, lists carry no 
     assert.deepEqual(states((await (await act(me, { action: "hand", to: owner })).json()) as ChatList)[0], ["Sam", "action"], "taken back");
     assert.equal((await get(`/api/chats/${key}`, them)).status, 404);
     assert.equal((await post("/api/chats/act", { key: "x", action: "done" }, me)).status, 400);
+
+    // Deploying with those sources retired hides saved reads and items, even
+    // after an older collector attempts to publish again. Support still reports gaps.
+    assert.deepEqual((await list(me)).reads.map(r => r.source), ["slack", "teams"]);
+    await mf.dispose();
+    mf = await start(await options(script, dir, { ...bindings, CHAT_SOURCES: "support" }));
+    assert.deepEqual(await list(me), { reads: [], items: [] });
+    assert.equal((await get(`/api/chats/${key}`, me)).status, 404);
+    for (const source of ["slack", "teams"])
+      assert.equal((await post("/api/chats/read", read(now + 5000, now, { source }), { Authorization: collector })).status, 409);
+    assert.equal((await post("/api/chats/read", read(now + 5000, now, { source: "support", state: "incomplete", items: [] }), { Authorization: collector })).status, 200);
+    assert.deepEqual((await list(me)).reads.map(r => [r.source, r.state]), [["support", "incomplete"]]);
   } finally {
     await mf.dispose();
     await rm(dir, { recursive: true, force: true });

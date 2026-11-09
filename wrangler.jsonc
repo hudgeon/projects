@@ -30,6 +30,7 @@
     "OWNER_EMAIL": "owner@example.com",
     "EMAIL_FROM": "projects@notify.example.com",
     "TIME_ZONE": "UTC",
+    "CHAT_SOURCES": "slack,teams,support",
   },
   // Weekly upkeep (worker/upkeep.ts); src/upkeep-model.ts names the same schedule.
   "triggers": { "crons": ["0 18 * * 5", "30 * * * *"] },

@@ -20,3 +20,9 @@ device are reachable. A person reviews and replies from Gmail.
 `--no-email-queue` returns to the standalone Support feed. Drafts require
 separate activation. Changing queue mode preserves Gmail drafts and the
 existing delivery history.
+
+For an email-only site, set the repository variable `PROJECTS_CHAT_SOURCES`
+to `support` and deploy. The checker serves only enabled sources and rejects
+new reads from disabled sources. This also hides previously saved reads from
+Today and Inbox. An unset variable enables `slack,teams,support`. Stop the
+local Slack and Teams readers with `--no-slack --no-teams` on their machines.

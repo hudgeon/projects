@@ -74,7 +74,7 @@ export class Portfolio extends DurableObject<Env> {
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
-    this.chats = new Chats(ctx.storage, this.pushes, host => this.machines.registered(host) && this.collectorDuties(host));
+    this.chats = new Chats(ctx.storage, this.pushes, host => this.machines.registered(host) && this.collectorDuties(host), env.CHAT_SOURCES);
     this.support = new SupportAcknowledgments(ctx.storage, env, work => ctx.waitUntil(work));
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
@@ -367,7 +367,7 @@ export async function handle(
       { error: "Sign in with your email code to view projects." },
       { status: 401 },
     );
-  // A conversation browser has restricted owner access.
+  // Restricted browser sign-in.
   const browser = typeof signedIn !== "string" && signedIn.role === "browser" ? signedIn : null;
   if (browser && !browserMay(url.pathname, request.method))
     return Response.json(
