@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { messageKey } from "./mail-identity";
+import { mailbox, mailboxes, messageKey } from "./mail-identity";
+import { urgentMail } from "./mail-urgency";
 import {
   INBOX_BODY_LIMIT,
   inboxSchema,
@@ -200,8 +201,10 @@ export async function readInbox(
   home?: string,
   tracked: string[] = [],
   cacheName = "inbox-cache.json",
+  recentSince?: number,
 ): Promise<Inbox> {
   const result: Inbox = { account, observedAt: now, state: "ok", threads: [] };
+  const deadline = recentSince === undefined ? Infinity : Date.now() + 75_000;
   const call = async (resource: string, method: string, params: object) =>
     JSON.parse(
       await run([
@@ -247,10 +250,13 @@ export async function readInbox(
     // Pagination is bounded and explicitly incomplete at the limit, never an
     // apparently empty or fully reviewed inbox after a failed read.
     for (let page = 0; page < 2; page++) {
+      if (Date.now() >= deadline) { result.state = "incomplete"; break; }
       const list = listSchema.parse(
         await call("threads", "list", {
           userId: "me",
-          q: "in:inbox",
+          q: recentSince === undefined
+            ? "in:inbox"
+            : `{in:inbox after:${Math.floor(recentSince / 1000)}} -in:spam -in:trash -in:drafts`,
           maxResults: 100,
           ...(pageToken ? { pageToken } : {}),
         }),
@@ -285,6 +291,7 @@ export async function readInbox(
             "Message-ID",
             "List-Unsubscribe",
             "List-Unsubscribe-Post",
+            ...(recentSince === undefined ? [] : ["Auto-Submitted", "List-Id", "Importance", "To", "Cc"]),
           ],
           fields:
             "id,historyId,messages(id,internalDate,labelIds,payload(headers))",
@@ -295,17 +302,26 @@ export async function readInbox(
         .filter((m) => !m.labelIds?.includes("DRAFT"))
         .sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
       const inInbox = messages.some((m) => m.labelIds?.includes("INBOX"));
-      if (!messages.length || (!inInbox && !linked)) return null;
-      const latest = messages.at(-1)!;
-      const header = (name: string) =>
-        latest.payload?.headers?.find(
+      if (!messages.length || (!inInbox && !linked && recentSince === undefined)) return null;
+      const value = (message: (typeof messages)[number], name: string) =>
+        message.payload?.headers?.find(
           (h) => h.name.toLowerCase() === name.toLowerCase(),
         )?.value ?? "";
+      const incoming = recentSince !== undefined ? messages.findLast(m => !m.labelIds?.includes("SENT")) : undefined;
+      const from = incoming && mailbox(value(incoming, "From"));
+      const replied = from && messages.some(m =>
+        Number(m.internalDate) >= Number(incoming!.internalDate) && m.labelIds?.includes("SENT") &&
+        ["", "no"].includes(value(m, "Auto-Submitted").trim().toLowerCase()) &&
+        [...mailboxes(value(m, "To")) ?? [], ...mailboxes(value(m, "Cc")) ?? []].includes(from),
+      );
+      const latest = incoming && !replied ? incoming : messages.at(-1)!;
+      const header = (name: string) => value(latest, name);
       // Only threads waiting in the inbox carry their latest message text.
       // A failed text read keeps the thread, uncached, so it is read again.
       let body: string | undefined;
       let complete = true;
-      if (inInbox)
+      const lastSentByMe = latest.labelIds?.includes("SENT") ?? false;
+      if (inInbox || (recentSince !== undefined && !lastSentByMe))
         try {
           body = messageText(
             z
@@ -321,6 +337,7 @@ export async function readInbox(
           );
         } catch {
           complete = false;
+          if (recentSince !== undefined) result.state = "incomplete";
         }
       const thread = inboxThreadSchema.parse({
         id,
@@ -329,11 +346,14 @@ export async function readInbox(
         from: header("From").slice(0, 300),
         latestMessageId: latest.id,
         latestMessageKey: messageKey(header("Message-ID")),
+        ...(replied && incoming && { repliedMessageKey: messageKey(value(incoming, "Message-ID")) }),
         updatedAt: Number(latest.internalDate),
         reference:
           !!referenceLabel && !!latest.labelIds?.includes(referenceLabel),
-        lastSentByMe: latest.labelIds?.includes("SENT") ?? false,
+        lastSentByMe,
         unread: messages.some((m) => m.labelIds?.includes("UNREAD")),
+        ...(recentSince !== undefined && !lastSentByMe &&
+          urgentMail(header("Subject"), body ?? "", header, latest.labelIds ?? []) && { urgent: true }),
         messages: messages.length,
         ...(body === undefined ? {} : { body }),
         unsubscribe: unsubscribeOptions({
@@ -347,6 +367,7 @@ export async function readInbox(
     };
     const unfound: string[] = [];
     for (let i = 0; i < refs.length; i += 4) {
+      if (Date.now() >= deadline) { result.state = "incomplete"; break; }
       const batch = refs.slice(i, i + 4);
       const reads = await Promise.allSettled(
         batch.map((id) => read(id, tracked.includes(id))),

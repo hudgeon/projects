@@ -15,10 +15,9 @@ try {
     execFileSync(process.execPath, [`${base}/collector.mjs`, file, "--project", id], { stdio: "inherit", timeout: 30000 });
     process.exit(0);
   }
-  // The collector validates the whole config; this reads only its Doppler
-  // names, so the service stays small.
-  const { doppler } = JSON.parse(readFileSync(file, "utf8")) as {
+  const { doppler, slack } = JSON.parse(readFileSync(file, "utf8")) as {
     doppler?: { project?: unknown; config?: unknown };
+    slack?: unknown[];
   };
   const name = (value: unknown): value is string =>
     typeof value === "string" && /^\w[\w.-]*$/.test(value);
@@ -40,7 +39,9 @@ try {
     // Only the secrets each reads; the config also holds the runner's token,
     // which stays out of both environments, and Slack's tokens reach only the
     // watcher.
-    const secrets = chats ? "COLLECTOR_TOKEN,SLACK_APP_TOKEN,SLACK_USER_TOKENS" : "COLLECTOR_TOKEN,GITHUB_APP_ID,GITHUB_APP_PRIVATE_KEY";
+    const secrets = chats
+      ? (slack?.length ? "COLLECTOR_TOKEN,SLACK_APP_TOKEN,SLACK_USER_TOKENS" : "COLLECTOR_TOKEN")
+      : "COLLECTOR_TOKEN,GITHUB_APP_ID,GITHUB_APP_PRIVATE_KEY";
     execFileSync(
       "doppler",
       ["run", "--config-dir", `${base}/doppler`, "--project", doppler.project as string, "--config", doppler.config as string, "--only-secrets", secrets, "--no-exit-on-missing-only-secrets", "--", process.execPath, ...collector],

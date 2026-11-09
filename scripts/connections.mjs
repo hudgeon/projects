@@ -107,13 +107,24 @@ export function applyConnections(config, { args, flags, expand, fail }) {
   if (args.includes("--acknowledge-support")) fail("Automatic support sends are disabled. Use --draft-support for review in Gmail.");
   // Remove retired send/reply-all controls while preserving actual receipts.
   if (config.support) for (const key of ["acknowledge", "acknowledgeSince", "registeredRecipients", "replyAudience"]) delete config.support[key];
+  if (args.includes("--no-email-queue") && config.support) delete config.support.emailQueue;
   if (args.includes("--draft-support")) {
     if (!config.support) fail("Connect --support before enabling drafts.");
+    if (config.support.emailQueue) fail("Turn off --email-queue before enabling drafts.");
     if (!config.support.usersCommand?.length) fail("Connect --support-users-command before enabling drafts.");
     if (!config.support.draft) config.support.draftSince = new Date().toISOString();
     config.support.draft = true;
   }
   if (args.includes("--no-support-drafts") && config.support) config.support.draft = false;
+  if (args.includes("--email-queue")) {
+    if (!config.support) fail("Connect --support before selecting the email queue.");
+    if (!inboxes.some(login => same(login.account, config.support.owner)) && !same(config.inboxAccount ?? "", config.support.owner))
+      fail("The email queue needs the support owner's existing inbox.");
+    config.support.emailQueue = true;
+    config.support.draft = false;
+    delete config.support.personalInbox;
+    config.support.forwarders = [];
+  }
   if (args.includes("--no-support")) delete config.support;
 
   // Names reserved before their mailbox exists. No address or login is added.

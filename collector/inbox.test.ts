@@ -105,6 +105,39 @@ test("linked message IDs are not cached with the conversation", async () => {
   }
 });
 
+test("urgent scan reads archived arrivals, ignores drafts and only counts a later human reply to the sender", async () => {
+  const from = "person@example.net", original = "<request@example.net>";
+  const inbound = message(conversation, [], "100");
+  inbound.payload.headers = [
+    { name: "Subject", value: "Urgent: service outage" },
+    { name: "From", value: from },
+    { name: "Message-ID", value: original },
+  ];
+  const followUp = (address: string, auto = "no", labels = ["SENT"]) => ({
+    ...message(sent, labels, "200"),
+    payload: { headers: [{ name: "To", value: address }, { name: "Auto-Submitted", value: auto }] },
+  });
+  async function scan(messages: typeof inbound[]) {
+    const normal = gmail();
+    const run = async (args: string[]) => {
+      if (args[3] === "list" && args[2] === "threads") {
+        assert.match(JSON.parse(args.at(-1)!).q, /after:1/);
+        return JSON.stringify({ threads: [{ id: conversation, historyId: "1" }] });
+      }
+      if (args[3] === "get" && args[2] === "threads") return JSON.stringify({ id: conversation, messages });
+      if (args[3] === "get" && args[2] === "messages") return JSON.stringify({ payload: { mimeType: "text/plain" } });
+      return normal.run(args);
+    };
+    return (await readInbox(account, run, 2000, undefined, [], "unused", 1000)).threads[0];
+  }
+  assert.equal((await scan([inbound, followUp(from, "no", ["DRAFT"])]))?.urgent, true);
+  assert.equal((await scan([inbound, followUp("staff@example.com")]))?.urgent, true);
+  assert.equal((await scan([inbound, followUp(from, "auto-replied")]))?.urgent, true);
+  const replied = await scan([inbound, followUp(from)]);
+  assert.equal(replied.urgent, undefined);
+  assert.equal(replied.repliedMessageKey, (await scan([inbound])).latestMessageKey);
+});
+
 test("work links by message ID find their conversation in the inbox and in assessments", async () => {
   const { run } = gmail();
   const inbox = await readInbox(account, run, 1000, undefined, [sent]);

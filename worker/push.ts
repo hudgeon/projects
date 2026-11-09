@@ -99,7 +99,7 @@ export async function sendPush(
     return "failed";
   }
 }
-type Notice = { run: string | null; title: string; body: string };
+type Notice = { run: string | null; title: string; body: string; id?: string };
 export type PushEvent = {
   id: string;
   title: string;
@@ -198,27 +198,29 @@ export class PushDevices {
         title: e.title,
         body: e.body,
         at: e.at,
-        url: e.run ? `/?run=${e.run}` : "/",
+        url: e.id.startsWith("email:") ? "/?view=inbox&source=email" : e.run ? `/?run=${e.run}` : "/",
       }));
   }
   // Pushes carry nothing; each of the person's devices fetches events() with
   // its own sign-in.
   notify(email: string, event: Notice, endpoints?: string[]) {
     const at = Date.now();
-    this.storage.sql.exec(
-      "INSERT INTO push_events(id,run,title,body,at,email) VALUES(?,?,?,?,?,?)",
-      crypto.randomUUID(),
+    const inserted = this.storage.sql.exec(
+      "INSERT INTO push_events(id,run,title,body,at,email) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING RETURNING id",
+      event.id ?? crypto.randomUUID(),
       event.run,
       event.title,
       event.body,
       at,
       email,
-    );
+    ).toArray().length;
+    if (!inserted) return;
     this.storage.sql.exec(
-      "DELETE FROM push_events WHERE at<? OR (COALESCE(email,?)=? AND id NOT IN (SELECT id FROM push_events WHERE COALESCE(email,?)=? ORDER BY at DESC LIMIT 50))",
+      "DELETE FROM push_events WHERE at<? OR (COALESCE(email,?)=? AND (id NOT LIKE 'email:%' OR at<?) AND id NOT IN (SELECT id FROM push_events WHERE COALESCE(email,?)=? ORDER BY at DESC LIMIT 50))",
       at - 86400_000,
       this.deploymentOwner,
       email,
+      at - 10 * 60_000,
       this.deploymentOwner,
       email,
     );

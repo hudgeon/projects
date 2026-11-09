@@ -6,6 +6,7 @@ export const supportConfigSchema = z.object({
   aliases: z.array(z.email()).max(10).default([]),
   // Activation is explicit. An installation never acknowledges old mail.
   since: z.iso.datetime(),
+  emailQueue: z.boolean().optional(),
   // The only output mode: unsent drafts for human review.
   draft: z.boolean().optional(),
   draftSince: z.iso.datetime().optional(),

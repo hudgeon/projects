@@ -74,7 +74,7 @@ export class Portfolio extends DurableObject<Env> {
     this.pushes = new PushDevices(ctx.storage, env, deploymentOwner(env), (work) => ctx.waitUntil(work));
     this.signIns = new BrowserSignIns(ctx.storage, env, (id) => this.machines.registered(id));
     this.inbox = new InboxRequests(ctx.storage, () => this.overview(), deploymentOwner(env));
-    this.chats = new Chats(ctx.storage);
+    this.chats = new Chats(ctx.storage, this.pushes, host => this.machines.registered(host) && this.collectorDuties(host));
     this.support = new SupportAcknowledgments(ctx.storage, env, work => ctx.waitUntil(work));
     this.runs = new Runs(ctx.storage, env, this.machines, (previous, next) => {
       const text = notice(previous, next);
@@ -367,7 +367,7 @@ export async function handle(
       { error: "Sign in with your email code to view projects." },
       { status: 401 },
     );
-  // A conversation browser's own sign-in acts as the owner within its limits.
+  // A conversation browser has restricted owner access.
   const browser = typeof signedIn !== "string" && signedIn.role === "browser" ? signedIn : null;
   if (browser && !browserMay(url.pathname, request.method))
     return Response.json(
@@ -375,8 +375,7 @@ export async function handle(
       { status: 403 },
     );
   const caller: string | MachineCaller = browser ? browser.email : (signedIn as string | MachineCaller);
-  // A machine's tokens never reach a session route, and the bearer, not the
-  // request body, says which machine is calling.
+  // Machine bearers identify hosts and are scoped to machine routes.
   const machine = typeof caller === "string" ? null : caller;
   const collecting = machine?.role === "collector";
   if (collecting && !collectorRoutes.has(url.pathname))
@@ -389,7 +388,7 @@ export async function handle(
   if (runnerRoutes.has(url.pathname) && !runner)
     return new Response("Unauthorized", { status: 401 });
   const store = env.PORTFOLIOS.getByName(env.PORTFOLIO_ID);
-  // Only the machine on duty applies requests; the owner may act as it.
+  // The owner and duty machine apply requests.
   const onDuty = async () => !collecting || (await store.collectorDuties(machine!.machine));
   if (url.pathname === "/api/runner/readiness") {
     if (request.method !== "GET") return new Response("Method not allowed", {status: 405});

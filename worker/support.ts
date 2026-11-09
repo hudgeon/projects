@@ -45,7 +45,7 @@ export class SupportAcknowledgments {
   }
   async publish(chats: Chats, read: ChatRead, host: string) {
     const result = await chats.publish(read, host);
-    if (result.accepted && read.source === "support" && this.env && supportAvailable(this.env)) {
+    if (result.accepted && read.source === "support" && !read.emailQueue && this.env && supportAvailable(this.env)) {
       const pointers = this.storage.sql.exec<Row>("SELECT * FROM support_acknowledgments WHERE owner=? AND investigation IS NOT NULL", read.owner.toLowerCase()).toArray();
       let scheduled = 0;
       for (const row of pointers) {

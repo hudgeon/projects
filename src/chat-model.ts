@@ -9,6 +9,7 @@ import { supportReceiptSchema } from "./support-model";
 export const CHAT_TEXT_LIMIT = 2000;
 export const CHAT_PREVIEW_LIMIT = 140;
 export const CHAT_ITEMS_LIMIT = 200;
+export const URGENT_MAIL_ALERT_MS = 10 * 60_000;
 export const chatSourceSchema = z.enum(["slack", "teams", "support"]);
 export type ChatSource = z.infer<typeof chatSourceSchema>;
 const time = z.number().int().nonnegative();
@@ -55,6 +56,12 @@ export const chatItemSchema = z
     mention: z.boolean(),
     text: z.string().max(CHAT_TEXT_LIMIT),
     support: supportReceiptSchema.optional(),
+    mail: z.object({
+      account: z.email(),
+      thread: z.string().regex(/^[a-f0-9]{10,40}$/),
+      messageKey: z.string().regex(/^[a-f0-9]{64}$/),
+      urgent: z.boolean(),
+    }).strict().optional(),
   })
   .strict();
 export const chatReadSchema = z
@@ -66,9 +73,12 @@ export const chatReadSchema = z
     state: z.enum(["ok", "incomplete", "unavailable", "signed-out"]),
     // Why a read is not ok, in a few plain words.
     problem: line(200).optional(),
+    emailQueue: z.literal(true).optional(),
     items: z.array(chatItemSchema).max(CHAT_ITEMS_LIMIT),
   })
-  .strict();
+  .strict().refine(read => read.emailQueue
+    ? read.source === "support" && read.items.every(item => item.mail && !item.support)
+    : read.items.every(item => !item.mail));
 export const chatActionSchema = z
   .object({
     key: z.string().regex(/^[a-f0-9]{64}$/),
@@ -100,7 +110,7 @@ export type ChatView = Omit<ChatItem, "text"> & {
   // This person handed it to the viewer.
   handedBy?: string;
 };
-export type ChatReadView = Pick<ChatRead, "source" | "observedAt" | "state" | "problem"> & {
+export type ChatReadView = Pick<ChatRead, "source" | "observedAt" | "state" | "problem" | "emailQueue"> & {
   host: string;
   lastHealthyAt?: number;
   problemSince?: number;
@@ -149,4 +159,4 @@ export const sharedLabel = (place: ChatPlace) =>
   place.shared ? `shared with ${place.org ?? "another organisation"}` : null;
 // Items that need the viewer, newest first.
 export const chatsToDo = (list: ChatList | undefined) =>
-  (list?.items ?? []).filter((item) => item.state === "action");
+  (list?.items ?? []).filter((item) => item.state === "action" && !item.mail);

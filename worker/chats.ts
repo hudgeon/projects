@@ -7,6 +7,7 @@ import { readJson } from "./auth";
 import { clip } from "../src/run-text";
 import {
   CHAT_PREVIEW_LIMIT,
+  URGENT_MAIL_ALERT_MS,
   chatActionSchema,
   chatReadSchema,
   chatState,
@@ -20,6 +21,7 @@ import {
 import { trace } from "./telemetry";
 import type { MachineCaller } from "./machines";
 import type { Portfolio } from "./index";
+import type { PushDevices } from "./push";
 import type { SupportSource } from "./support-investigation";
 
 const SKEW_MS = 10 * 60_000;
@@ -34,7 +36,11 @@ async function itemKey(source: string, owner: string, id: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 export class Chats {
-  constructor(private storage: DurableObjectStorage) {
+  constructor(
+    private storage: DurableObjectStorage,
+    private pushes: PushDevices,
+    private mailOnDuty: (host: string) => boolean,
+  ) {
     storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS chat_reads (source TEXT NOT NULL, owner TEXT NOT NULL, observed INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (source, owner))",
     );
@@ -48,9 +54,15 @@ export class Chats {
     const items = await Promise.all(
       read.items.map(async (item) => ({ ...item, key: await itemKey(read.source, owner, item.id) })),
     );
+    const now = Date.now();
+    const notices = read.emailQueue ? await Promise.all(
+      [...new Set(read.items.flatMap(item => item.mail?.urgent && item.at <= now && now - item.at <= URGENT_MAIL_ALERT_MS
+        ? [item.mail.messageKey] : []))].map(key => itemKey("email", owner, key)),
+    ) : [];
+    if (read.emailQueue && !this.mailOnDuty(host)) return { accepted: false };
     const previous = this.reads().find((r) => r.source === read.source && r.owner === owner);
     // A failed/partial support read cannot erase an unresolved request.
-    if (read.source === "support" && read.state !== "ok" && previous) {
+    if (read.source === "support" && read.state !== "ok" && previous && read.emailQueue === previous.emailQueue) {
       const current = new Set(items.map(i => i.id));
       items.push(...previous.items.filter(i => !current.has(i.id)).slice(0, 200 - items.length));
     }
@@ -68,6 +80,11 @@ export class Chats {
       )
       .toArray().length === 1;
     this.storage.sql.exec("DELETE FROM chat_marks WHERE updated<?", Date.now() - KEEP_MARKS_MS);
+    if (accepted)
+      for (const key of notices) this.pushes.notify(owner, {
+        id: `email:${key}`, run: null, title: "Urgent email",
+        body: "Open the Projects email queue to review and reply.",
+      });
     return { accepted };
   }
   private reads(): Stored[] {
@@ -108,7 +125,7 @@ export class Chats {
     return {
       reads: reads
         .filter((read) => same(read.owner, viewer))
-        .map(({ source, observedAt, state, problem, host, lastHealthyAt, problemSince }) => ({ source, observedAt, state, host, lastHealthyAt, problemSince, ...(problem ? { problem } : {}) })),
+        .map(({ source, observedAt, state, problem, host, lastHealthyAt, problemSince, emailQueue }) => ({ source, observedAt, state, host, lastHealthyAt, problemSince, emailQueue, ...(problem ? { problem } : {}) })),
       items: items.sort((a, b) => b.at - a.at),
     };
   }
@@ -142,7 +159,7 @@ export class Chats {
   // message arrives.
   act(key: string, viewer: string, action: ChatAction["action"], to?: string) {
     const found = this.find(key, viewer);
-    if (!found || (found.state === "handed" && !(action === "hand" && to && same(to, found.read.owner)))) return null;
+    if (!found || found.item.mail || (found.state === "handed" && !(action === "hand" && to && same(to, found.read.owner)))) return null;
     const { item, read, mark } = found;
     const cleared: ChatMark = { holder: null, handedBy: null, handedAt: null, doneAt: null };
     let next = mark ?? cleared;

@@ -214,7 +214,7 @@ export function MailRow({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="mail-subject">{thread.subject}</span>
+        <span className="mail-subject">{thread.urgent && <strong>Urgent · </strong>}{thread.subject}</span>
         <span className="mail-meta">
           {sender(thread.from)} · {ago(thread.updatedAt, now)}
           {thread.messages > 1 ? ` · ${thread.messages} messages` : ""}

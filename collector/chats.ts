@@ -15,6 +15,7 @@ import { configSchema } from "./config";
 import { siteHeaders } from "./upload";
 import { startTeams } from "./teams-chrome";
 import { startSupport } from "./support";
+import { startMailQueue } from "./mail-queue";
 import { startSupportPreview } from "./support-preview";
 import { chatItemSchema, type ChatItem, type ChatRead } from "../src/chat-model";
 import {
@@ -82,8 +83,8 @@ async function main() {
   if (!file) throw new Error("Usage: chats.mjs machine.json");
   const config = configSchema.parse(JSON.parse(await readFile(file, "utf8")));
   const site = await siteHeaders(config);
-  const stopSupport = startSupport(config, site, path.dirname(file));
-  const stopPreview = config.support ? startSupportPreview(site, path.dirname(file)) : () => {};
+  const stopSupport = config.support?.emailQueue ? startMailQueue(config, site) : startSupport(config, site, path.dirname(file));
+  const stopPreview = config.support && !config.support.emailQueue ? startSupportPreview(site, path.dirname(file)) : () => {};
   // Teams runs its own browser-backed loop per person, beside Slack, with a
   // Chrome for each of their profiles (one per Teams organisation).
   const teamsPeople = new Map<string, { account: string; profileDirs: string[] }>();
@@ -93,6 +94,18 @@ async function main() {
     teamsPeople.set(t.account.toLowerCase(), person);
   }
   const stopTeams = [...teamsPeople.values()].map((person) => startTeams({ ...person, site, stateDir: path.dirname(file) }));
+  const stopReaders = () => {
+    stopSupport();
+    stopPreview();
+    return stopTeams.map(stop => stop());
+  };
+  if (!config.slack.length) {
+    log("chat_watcher_started", { people: 0 });
+    process.on("SIGTERM", () => {
+      void Promise.allSettled(stopReaders()).finally(() => process.exit(0));
+    });
+    return;
+  }
   const stateFile = path.join(path.dirname(file), "chats-slack.json");
   const saved = savedSchema.safeParse(JSON.parse(await readFile(stateFile, "utf8").catch(() => "{}")));
   const kept = saved.success ? saved.data : { people: {}, names: {} };
@@ -339,9 +352,7 @@ async function main() {
       })();
   }, TICK_MS);
   process.on("SIGTERM", () => {
-    stopSupport();
-    stopPreview();
-    void Promise.allSettled([save(), ...stopTeams.map((stop) => stop())]).finally(() => process.exit(0));
+    void Promise.allSettled([save(), ...stopReaders()]).finally(() => process.exit(0));
   });
   if (connectable) await listen(appToken);
 }

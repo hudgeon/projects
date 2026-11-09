@@ -1,9 +1,9 @@
 # Shared email support
 
-Projects can monitor one shared Gmail mailbox as a support source in Today and
-the Inbox. It belongs to a named Projects person; it does not create a support
-login or expose another person's private inbox. An intentional Hand over uses
-the existing per-item authorization. Gmail remains the conversation record.
+The [email queue](email-queue.md) is a read-only option for a shared mailbox
+and its owner's inbox. Standalone Support can also appear in Today and Inbox.
+It belongs to its named owner. Hand over uses per-item authorization. Gmail
+holds the conversation record.
 
 ## Connect monitoring
 

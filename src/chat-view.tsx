@@ -119,7 +119,7 @@ export function readProblem(read: ChatReadView, now: number) {
 // A successful upload is not a successful source read. Keep gaps visible in Today.
 export function ChatHealth({ now }: { now: number }) {
   const query = useChats();
-  const gaps = (query.data?.reads ?? []).filter((r) => readProblem(r, now));
+  const gaps = (query.data?.reads ?? []).filter((r) => !r.emailQueue && readProblem(r, now));
   if (!gaps.length && !query.error) return null;
   return (
     <section className="chat-health" aria-label="Message coverage" role="status">
@@ -346,7 +346,7 @@ type InboxSource = "email" | ChatSource;
 // reads them.
 export function SourceFilter({ source, list }: { source?: InboxSource; list?: ChatList }) {
   const sources = (["support", "teams", "slack"] as const).filter(
-    (s) => list?.reads.some((r) => r.source === s) || list?.items.some((i) => i.source === s),
+    (s) => list?.reads.some((r) => r.source === s && !r.emailQueue) || list?.items.some((i) => i.source === s && !i.mail),
   );
   if (!sources.length) return null;
   const waiting = (s: ChatSource) =>
@@ -383,8 +383,8 @@ export function ChatSections({ source, now }: { source?: ChatSource; now: number
       </p>
     );
   if (!list.data) return null;
-  const reads = list.data.reads.filter((r) => !source || r.source === source);
-  const items = list.data.items.filter((i) => !source || i.source === source);
+  const reads = list.data.reads.filter((r) => !r.emailQueue && (!source || r.source === source));
+  const items = list.data.items.filter((i) => !i.mail && (!source || i.source === source));
   if (!reads.length && !items.length)
     return source ? (
       <p className="subtle">

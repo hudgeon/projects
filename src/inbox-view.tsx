@@ -4,21 +4,55 @@ import {
   currentInbox,
   currentInboxes,
   currentInboxPlaceholders,
+  gmailUrl,
   inboxQueue,
   inboxRows,
+  sameAccount,
   snapshotInboxes,
   type Inbox,
   type InboxAction,
 } from "./inbox-model";
 import { errorText, useEmailConversations } from "./run-view";
-import { MailRow, type Item } from "./inbox-row";
+import { MailRow, sender, type Item } from "./inbox-row";
 import { useMe, useOwnerLabel } from "./people-view";
 import type { RunSummary } from "./run-model";
 import type { ArchiveEntry } from "./archive-model";
 import type { ChatSource } from "./chat-model";
 import { ChatSections, SourceFilter, useChats } from "./chat-view";
-import type { ChatList } from "./chat-model";
+import type { ChatList, ChatView } from "./chat-model";
 import { withoutSupportCopies } from "./support-copies";
+
+const mailRead = (list?: ChatList) => list?.reads.find(read => read.emailQueue);
+const mailHealthy = (list: ChatList | undefined, now: number) => {
+  const read = mailRead(list);
+  return !read || (read.state === "ok" && now - read.observedAt < 90_000);
+};
+
+function emailQueue(inbox: Inbox, items: Item[], messages?: ChatList) {
+  const mail = messages?.items.filter(item => item.mail && sameAccount(item.owner, inbox.account)) ?? [];
+  const byMessage = new Map(mail.map(item => [item.mail!.messageKey, item]));
+  const rows = items.map(row => {
+    const queued = byMessage.get(row.thread.latestMessageKey ?? "");
+    if (queued) byMessage.delete(queued.mail!.messageKey);
+    return queued?.mail?.urgent && row.state !== "clearing"
+      ? { ...row, state: "todo" as const, thread: { ...row.thread, urgent: true } }
+      : row;
+  }).sort((a, b) => Number(!!b.thread.urgent) - Number(!!a.thread.urgent));
+  return { rows, extra: [...byMessage.values()] };
+}
+
+function QueuedEmail({ item, account, now }: { item: ChatView; account: string; now: number }) {
+  return (
+    <li className="mail">
+      <a className="mail-open" href={gmailUrl(item.mail!.account, item.mail!.thread)} target="_blank" rel="noreferrer">
+        <span className="mail-subject">{item.mail?.urgent && <strong>Urgent · </strong>}{item.place.name}</span>
+        <span className="mail-meta">
+          {sameAccount(item.mail!.account, account) ? "Your inbox" : "Support"} · {sender(item.from)} · {ago(item.at, now)}
+        </span>
+      </a>
+    </li>
+  );
+}
 
 // Emails to handle in one inbox, and whether that number covers the whole
 // inbox. A stale, truncated or failed read is never presented as an inbox with
@@ -45,17 +79,12 @@ export function inboxCount(
 ) {
   const inbox = account ? currentInbox(snapshots, account) : undefined;
   if (!inbox || !runs) return null;
+  const items = inbox.state === "unavailable" ? [] :
+    inboxQueue(withoutSupportCopies(inbox, support, now), currentWork(snapshots)?.issues ?? [], runs, actions);
+  const queue = emailQueue(inbox, items, support);
   return {
-    todo:
-      inbox.state === "unavailable"
-        ? 0
-        : inboxQueue(
-            withoutSupportCopies(inbox, support, now),
-            currentWork(snapshots)?.issues ?? [],
-            runs,
-            actions,
-          ).filter((item) => item.state === "todo").length,
-    complete: coverage(inbox, snapshots, now),
+    todo: queue.rows.filter(item => item.state === "todo").length + queue.extra.length,
+    complete: coverage(inbox, snapshots, now) && mailHealthy(support, now),
   };
 }
 // The Inbox: the person's email and, once a machine reads them, their Slack
@@ -66,6 +95,7 @@ export function InboxView({
   ...email
 }: Parameters<typeof EmailInbox>[0] & { source?: "email" | ChatSource }) {
   const chats = useChats();
+  if (source === "support" && mailRead(chats.data)) source = "email";
   return (
     <div className="inbox">
       {!email.emailHidden && <SourceFilter source={source} list={chats.data} />}
@@ -201,7 +231,8 @@ function EmailInbox({
         </p>
       </section>
     );
-  const items = inboxQueue(withoutSupportCopies(inbox, support, now), work?.issues ?? [], runs, actions);
+  const { rows: items, extra } = emailQueue(inbox,
+    inboxQueue(withoutSupportCopies(inbox, support, now), work?.issues ?? [], runs, actions), support);
   const selectedSource =
     selectedEmail && !items.some((i) => i.thread.id === selectedEmail)
       ? inboxRows(inbox, work?.issues ?? []).find(
@@ -209,8 +240,10 @@ function EmailInbox({
         )
       : undefined;
   const list = (state: Item["state"]) =>
-    items.some((item) => item.state === state) && (
+    (items.some((item) => item.state === state) || (state === "todo" && extra.length > 0)) && (
       <ul className="mail-list">
+        {state === "todo" && extra.filter(item => item.mail?.urgent).map(item =>
+          <QueuedEmail key={item.key} item={item} account={inbox.account} now={now} />)}
         {items
           .filter((item) => item.state === state)
           .map((item) => (
@@ -232,11 +265,16 @@ function EmailInbox({
               now={now}
             />
           ))}
+        {state === "todo" && extra.filter(item => !item.mail?.urgent).map(item =>
+          <QueuedEmail key={item.key} item={item} account={inbox.account} now={now} />)}
       </ul>
     );
   const count = (state: Item["state"]) =>
-    items.filter((item) => item.state === state).length;
+    items.filter((item) => item.state === state).length + (state === "todo" ? extra.length : 0);
   const complete = coverage(inbox, snapshots, now);
+  const urgentCount = items.filter(item => item.thread.urgent && item.state === "todo").length +
+    extra.filter(item => item.mail?.urgent).length;
+  const latestCheck = mailRead(support);
   const reader = readerOf(inbox);
   return (
     <section className="inbox" aria-label="Inbox">
@@ -244,9 +282,11 @@ function EmailInbox({
       <div className="section-head">
         <h2>
           To handle <span className="count">{count("todo")}</span>
+          {latestCheck && mailHealthy(support, now) && <span className="subtle"> · {urgentCount} urgent</span>}
         </h2>
         <span className="subtle">
           {inbox.account} · checked {ago(inbox.observedAt, now)} on {reader}
+          {latestCheck && ` · urgency checked ${ago(latestCheck.observedAt, now).toLowerCase()}`}
         </span>
       </div>
       {selectedSource && (
@@ -288,8 +328,11 @@ function EmailInbox({
               : "This list may be out of date: no machine has checked recently."}
         </p>
       )}
+      {!mailHealthy(support, now) && (
+        <p className="notice" role="status">The latest urgent email check is incomplete or out of date.</p>
+      )}
       {list("todo")}
-      {!count("todo") && complete && (
+      {!count("todo") && complete && mailHealthy(support, now) && (
         <p className="subtle">Nothing waiting. New replies come back here.</p>
       )}
       {!!count("clearing") && (

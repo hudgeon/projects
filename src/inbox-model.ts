@@ -23,11 +23,13 @@ export const inboxThreadSchema = z
     from: z.string().max(300),
     latestMessageId: id,
     latestMessageKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    repliedMessageKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     updatedAt: z.number().int().nonnegative(),
     reference: z.boolean().optional(),
     inInbox: z.boolean().optional(),
     lastSentByMe: z.boolean(),
     unread: z.boolean(),
+    urgent: z.boolean().optional(),
     messages: z.number().int().positive(),
     // The latest message as plain text, quotes removed, for threads in the
     // inbox. Served one thread at a time, never in the overview or telemetry.
