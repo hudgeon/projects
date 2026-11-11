@@ -4,7 +4,7 @@ import type { ExecutionEvent } from "../src/telemetry";
 import { childResultSchema, type Child, type ChildResult } from "../src/run-model";
 import { Failure, NativeStopError, nativeProcessStopped } from "./native";
 import type { ProjectDirectory } from "./workspaces";
-import { childContext } from "./context";
+import { childContext, childReport } from "./child-report";
 import { SPENT, UNAVAILABLE, HANDBACK_LIMIT } from "./turn-limits";
 import type { Execution } from "./execution";
 import { outputSchema } from "./decisions";
@@ -25,6 +25,10 @@ export function handBack(
     );
   s.nextPrompt = prompt;
 }
+// What the coordinator hears of a helper that returned: its report, as its
+// summary and pointers, and a line for each other helper.
+const returned = (x: Execution, child: Child) =>
+  `${JSON.stringify(childReport(child, x.file))}\nOther children: ${childContext(x.j.progress.children.filter((c) => c.id !== child.id))}`;
 export async function acceptChild(x: Execution, child: Child, value: ChildResult): Promise<void> {
   const { s, j, persist, evidence, lastSaved, copiedAt, refusedBy, overran, freshIn } = x;
   child.result = value;
@@ -61,7 +65,7 @@ export async function acceptChild(x: Execution, child: Child, value: ChildResult
   j.pid = null;
   delete j.checkpoint;
   await persist();
-  s.nextPrompt = `A child has returned. Review the evidence before deciding what remains. Native success is not delivery proof.\n${JSON.stringify(child)}\nOther children: ${childContext(j.progress.children.filter((c) => c.id !== child.id))}`;
+  s.nextPrompt = `A child has returned. Review the evidence before deciding what remains. Native success is not delivery proof.\n${returned(x, child)}`;
 }
 // A child whose turn ended without a confirmed result is inspected
 // read-only in its own session, after the usual ownership checks; nothing
@@ -183,7 +187,7 @@ export async function recoverChild(
     reason,
     { actor: child.agent, childId: child.id },
     plain,
-    `${appName(child.agent)}'s turn ended before it reported: ${plain} ${inspected ? "Projects then inspected its session read-only; the report below is that inspection, not new work." : "Its session could not be inspected, so only the observed worktree is known."} Never repeat a change the evidence shows already landed. To continue in that worktree, give its ID as the workspace${child.resumable === false ? "; a fresh session starts there" : ""}. A failure you can retry or route around, for example with the other app, is not blocked.\n${JSON.stringify(child)}\nOther children: ${childContext(j.progress.children.filter((c) => c.id !== child.id))}`,
+    `${appName(child.agent)}'s turn ended before it reported: ${plain} ${inspected ? "Projects then inspected its session read-only; the report below is that inspection, not new work." : "Its session could not be inspected, so only the observed worktree is known."} Never repeat a change the evidence shows already landed. To continue in that worktree, give its ID as the workspace${child.resumable === false ? "; a fresh session starts there" : ""}. A failure you can retry or route around, for example with the other app, is not blocked.\n${returned(x, child)}`,
   );
 }
 // A saved helper result is accepted without another turn, and an interrupted

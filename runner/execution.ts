@@ -15,6 +15,7 @@ import type { Journal, openJournal } from "./journal";
 import type { openCoordinator } from "./coordinator";
 import type { runTurn } from "./turns";
 import type { handBack, acceptChild, inspect, recoverChild } from "./children";
+import type { SessionMemory } from "./session-memory";
 
 export type EngineOptions = {
   run: Run;
@@ -77,7 +78,7 @@ export type RunState = {
   // The coordinator's app, or the one that took over coordinating.
   masterAgent: Agent;
   // What the coordinator's session was given: its brief and the messages it read.
-  coordinator: { sessionId: string; seen: string[]; brief: string; inputChars: number; through: number } | null;
+  coordinator: { sessionId: string; seen: string[]; brief: string; inputChars: number; through: number; activity?: Record<string, string> } | null;
   contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
   // What the coordinator hears at its next turn.
   nextPrompt: string;
@@ -108,6 +109,7 @@ export type Execution = ReturnType<typeof openJournal> &
     refusedBy: Map<string, string[]>;
     overran: Set<string>;
     freshIn: Set<string>;
+    memory: SessionMemory;
     screenshots: (selected: RunMessage[]) => Promise<ScreenshotInput[]>;
     refreshMessages: () => Promise<void>;
     agents: Agent[];

@@ -23,6 +23,9 @@ export const claudePermissions = (o: Pick<NativeOptions, "readOnly" | "fullAcces
 // removed before it. It also holds back the built-ins Claude Code defers
 // (TaskStop, Monitor). A turn with only this conversation's browser has
 // nothing to look up and keeps its list.
+// No plan tool is listed: Claude Code's TodoWrite is gone, and its task tools
+// add about 2,700 tokens to every request, or sit unseen behind the search.
+// The page shows a Claude turn's progress from its PROJECTS_PROGRESS notes.
 // A read turn given the web fetches the named hosts: WebFetch is enabled, and
 // only domain rules allow it, never a bare one. Claude Code also fetches the
 // documentation domains it preapproves itself without asking, and refuses
@@ -30,7 +33,7 @@ export const claudePermissions = (o: Pick<NativeOptions, "readOnly" | "fullAcces
 // out without denying the named hosts too.
 export function claudeTools(o: Pick<NativeOptions, "readOnly" | "fullAccess" | "web" | "connectors">) {
   const enabled = fullAccess(o) ? "default" : [
-    o.readOnly ? "Read,Glob,Grep,TodoWrite" : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor",
+    o.readOnly ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write,Bash,TaskStop,Monitor",
     ...(o.connectors?.claude ? ["ToolSearch"] : []),
   ].join(",");
   const web = o.readOnly && o.web?.length ? o.web : [];

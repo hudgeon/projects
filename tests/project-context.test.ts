@@ -522,7 +522,7 @@ test("Jev ranks the shortlist; code supplies the best units at or above the cuto
   }
 });
 
-test("shadow mode records Jev's ranking but supplies the retrieval baseline", async () => {
+test("shadow mode records Jev's ranking and supplies nothing", async () => {
   const { cwd, options } = await fixture();
   const mock = selector();
   try {
@@ -532,8 +532,9 @@ test("shadow mode records Jev's ranking but supplies the retrieval baseline", as
     });
     assert.equal(view.receipt.strategy, "shadow");
     assert.ok(view.record);
-    assert.equal(view.receipt.selectedChars, view.receipt.baselineChars);
-    assert.match(view.prompt, /pipe delimiter/);
+    assert.ok(view.receipt.baselineChars > 0 && view.receipt.considered.length > 0);
+    assert.deepEqual([view.receipt.supplied, view.receipt.selectedChars, view.sent], [[], 0, {}]);
+    assert.equal(view.prompt, "", "the turn's prompt is as it is with selection off");
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

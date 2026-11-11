@@ -16,6 +16,7 @@ import { completionProblem, decide } from "./decisions";
 import { runTurn } from "./turns";
 import { handBack, acceptChild, inspect, recoverChild, resumeInterrupted } from "./children";
 import { dispatch } from "./dispatch";
+import { sessionMemory } from "./session-memory";
 export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
 export { activityBrief } from "./activity-brief";
 export { MASTER_INPUT_CHAR_LIMIT, MASTER_CONTEXT_LIMIT, HANDBACK_LIMIT, stoppedText } from "./turn-limits";
@@ -76,6 +77,8 @@ export async function executeRun(o: EngineOptions) {
     overran = new Set<string>(),
     // Children that continued an existing worktree in a fresh session.
     freshIn = new Set<string>();
+  // What each native session holds from being sent it once.
+  const memory = sessionMemory(o.stateDir, o.run.id);
   // Once a turn ends, the conversation's copies on GitHub that nothing needs
   // are removed. Unreachable GitHub leaves them for the runner's hourly sweep.
   const settle = () =>
@@ -169,11 +172,12 @@ export async function executeRun(o: EngineOptions) {
     resetCoordinator,
     workContext,
     briefHash,
+    activityHeld,
     projectBrief,
     instructionsVersion,
     brief,
     rotate,
-  } = await openCoordinator(o, j, s, movedHere, agents, selector);
+  } = await openCoordinator(o, j, s, file, movedHere, agents, selector, memory);
   const begun = performance.now();
   const paused = async () => {
     if (!o.drain?.aborted) return false;
@@ -188,8 +192,8 @@ export async function executeRun(o: EngineOptions) {
   const x: Execution = {
     s, o, selector, checks, file, j, event, failureReason, persist, publish, interrupted, turn,
     prepare, evidence, here, ranHere, undelivered, delivery, lastSaved, copiedAt, refusedBy,
-    overran, freshIn, screenshots, refreshMessages, agents, appName, workLine, coordinatorFile,
-    contextFile, resumed, resetCoordinator, workContext, briefHash, projectBrief,
+    overran, freshIn, memory, screenshots, refreshMessages, agents, appName, workLine, coordinatorFile,
+    contextFile, resumed, resetCoordinator, workContext, briefHash, activityHeld, projectBrief,
     instructionsVersion, brief, rotate, begun, paused,
     runTurn: (...args) => runTurn(x, ...args),
     handBack: (...args) => handBack(x, ...args),

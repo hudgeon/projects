@@ -49,10 +49,14 @@ order, batches), `runner/project-sources.ts` which files may be read and how,
 and `runner/project-units.ts` natural units and their ranking.
 
 For handovers, code retains exact original/recent user instructions, their preceding proposal
-exchanges when they fit, the latest position and every child's execution and
-evidence index. Jev judges only optional older agent replies and completed
-child reports, keeping selected text verbatim. The latest child and unresolved
-children keep their full reports. A probability never grants permission or
+exchanges when they fit, the latest position and one line for every child
+(who, where, its state and branch, the pull request or commit observed and its
+report's first sentence). Jev judges only optional older agent replies and
+completed child reports. A kept reply stays verbatim. A kept report is its
+summary and pointers (checks, links and what the runner observed): whole
+unless it passes about 2,000 tokens, then shortened with a pointer to the
+journal, which keeps every word. The latest child and unresolved children
+keep their reports. A probability never grants permission or
 proves delivery. Omitted instructions/proposals still require reading the
 exact source before acting; the selector never deletes a source or alters
 native session history.
@@ -102,9 +106,18 @@ its position effect understood as a preference for retrieval rank, and a
 replay re-tests the shape with `--batch N` and `--order` as the gold set
 grows, especially with blind labels and code-heavy turns. A review judged in
 batches fails as a whole if any batch fails. Repository instructions are
-retained separately, outside the request, and are never removal candidates. Code supplies the units Jev rates
-at or above 0.5, best first, within the 6,000-character budget; shadow mode and
-failures supply the retrieval order within the same budget. The review records
+retained separately, outside the request, and are never removal candidates.
+An instruction file the turn's own app loads (the `AGENTS.md` of its working
+folder and of the folders above it, up to 32 KiB) is named, not sent: a
+helper's in its workspace, a coordinator's where it runs. The agent is told to
+read any named file it does not hold, should an app stop loading it (both
+did in November 2026: Claude Code 2.1.304, Codex 0.162.1). Any other is sent
+once to a native session, and again only when it changes or the session
+compacts its history. Code supplies the units Jev rates
+at or above 0.5, best first, within the 6,000-character budget; failures
+supply the retrieval order within the same budget. Shadow mode receipts its
+review and Jev's ranking and supplies nothing: the turn's prompt is as it is
+with selection off. The review records
 full-file hashes, character offsets, retrieval scores and missing/partial
 coverage; it is a bounded relevance selection, not a code review or proof of
 completion. Agents read applicable repository instructions. For routine work
@@ -138,7 +151,8 @@ Repository instructions, source gaps and edits elsewhere in the project reach
 the prompt fresh without a new judgment. A changed input causes a new gateway
 review. An unchanged view
 already supplied to the same native session is referenced without reinserting
-its text; fresh native sessions receive the view. Project receipts and cache
+its text; fresh native sessions, and one that compacted its history, receive
+the view. What each session holds is kept beside the conversation's journal. Project receipts and cache
 records live under the runner state directory's `project-context/` (see
 Quality loop below). They never enter portfolio snapshots or telemetry. Feedback
 or changed sources arriving during review discard the stale selection/action;
@@ -192,11 +206,12 @@ earlier replay). It saves the replay, unit text included, in the private
 `jev-evaluation/` directory beside the runner state (the newest 20 are kept)
 and prints:
 
-- units and characters supplied per turn;
+- units and characters supplied per turn, and the characters of project
+  context a turn's prompt is given (coordinator and helper turns apart);
 - precision and recall at cutoffs 0.30 to 0.70 against the machine's labels
   in `jev-evaluation/labels.json` (2 on the task's subject, 1 adjacent, 0
   off-topic; strict counts 2, lenient 1 or 2), over labelled units only, with
-  the retrieval order that shadow mode and failures supply, Jev's AUC, the
+  the retrieval order that failures supply, Jev's AUC, the
   units still unlabelled and how many labelled relevant units the shortlist
   still holds;
 - usage proxies for reviews with recorded usage, for the replayed and the
@@ -204,6 +219,15 @@ and prints:
   changed (and overlapping the lines read), and the share of eligible project
   files the turn used that the selection supplied or shortlisted;
 - Jev latency, input tokens and estimated cost.
+
+`weight` measures everything a native turn is sent, not the review alone. It
+replays this machine's stored conversations (their messages, helpers and
+reports as recorded) through the engine with stand-in native turns, on the
+checkout's code, and prints the prompt characters per native turn, for new and
+resumed coordinator and helper sessions (`--limit N`, the newest 30 by
+default, or `--all`). It starts no agent or worktree and calls neither GitHub
+nor Jev: every candidate is rated worth keeping, and no work issue is linked.
+A change to what the runner sends each turn carries its before and after.
 
 `score [file]` reprints a saved replay's report (`--json` gives counts to
 combine machines); `usage` reports the selections turns actually received

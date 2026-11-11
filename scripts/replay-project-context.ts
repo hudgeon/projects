@@ -34,10 +34,10 @@ const value = (name: string) => values(name).at(-1);
 const order = z.enum(["retrieval", "interleaved", "reversed", "shuffled"]).optional().parse(value("--order"));
 const batch = z.coerce.number().int().positive().optional().parse(value("--batch"));
 const words = args.filter((arg, i) => !arg.startsWith("--") && !args[i - 1]?.match(/^--(?:review|same|from|limit|width|kind|order|batch)$/));
-const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label", "checks", "position"].includes(words[0]) ? words : ["replay", ...words];
+const [command = "replay", ...operands] = ["replay", "score", "usage", "unlabelled", "label", "checks", "position", "weight"].includes(words[0]) ? words : ["replay", ...words];
 
 const machine = configSchema
-  .extend({ stateDir: z.string().optional(), context: contextConfigSchema.default({ mode: "off" }) })
+  .extend({ stateDir: z.string().optional(), masterCwd: z.string().optional(), context: contextConfigSchema.default({ mode: "off" }) })
   .parse(JSON.parse(await readFile(path.join(homedir(), ".local/share/project-overview/machine.json"), "utf8")));
 const stateDir = machine.stateDir ?? path.join(machine.home, ".local/share/project-overview/runner");
 const dir = evaluationDir(stateDir);
@@ -135,6 +135,24 @@ if (command === "checks") {
       await readFile(path.join(history, `${check.id}.json`), "utf8").then((text) => savePrivate(path.join(gold, `${check.id}.json`), JSON.parse(text)), () => {});
     console.log(`${check.id}: ${names.filter((n) => entry[n] === undefined).length} of ${names.length} judgments still unlabelled.`);
   } else throw Error("Use checks [score [replay file] | replay | unlabelled | label <id> <report index or sign>=<0|1> ...].");
+} else if (command === "weight") {
+  // What each native turn is sent, from stored conversations replayed
+  // through the engine with stand-in turns. Calls nothing outside this machine.
+  const { formatWeight, storedConversations, weigh, weight } = await import("./prompt-weight");
+  const stored = (await storedConversations(stateDir)).slice(0, flag("--all") ? undefined : Number(value("--limit") ?? 30));
+  if (!stored.length) throw Error("No stored conversations to replay on this machine.");
+  const setup = { projects: await registry(machine), masterCwd: machine.masterCwd ?? machine.root, host: machine.host, workRepo: machine.workRepo, agents: machine.agents, mode: machine.context.mode };
+  const log = { info: console.info, warn: console.warn, error: console.error };
+  const replayed = [];
+  // The engine logs each step; a replay's steps are not the runner's.
+  console.info = console.warn = console.error = () => {};
+  try {
+    for (const conversation of stored) replayed.push(await weigh(conversation, setup));
+  } finally {
+    Object.assign(console, log);
+  }
+  const report = weight(replayed.filter((turns) => turns !== null), replayed.filter((turns) => turns === null).length);
+  console.log(flag("--json") ? JSON.stringify(report, null, 2) : formatWeight(report, `Prompt weight on ${machine.host} (code ${await code()}, context selection ${machine.context.mode}, Jev stood in)`));
 } else if (command === "score") {
   for (const name of operands.length ? operands : [undefined]) {
     const { file, replay } = await saved(name);
@@ -236,6 +254,7 @@ if (command === "checks") {
     const result = repository
       ? await replayReview(review, {
           repository,
+          masterCwd: machine.masterCwd ?? machine.root,
           selector: { mode: "select", gateway: machine.context.gateway, key: jevKey },
           readIssue,
           order,

@@ -110,8 +110,9 @@ test("Jev project failure receipts and logs correlate while baseline evidence st
   o.turn = async opts => {
     natives++;
     assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/);
-    assert.match(opts.prompt, /Draft only/);
-    assert.doesNotMatch(opts.prompt, /ENOTFOUND|private host/);
+    // This coordinator runs in the project, so its app loads AGENTS.md itself.
+    assert.match(opts.prompt, /your app has loaded itself, not repeated here: AGENTS\.md/);
+    assert.doesNotMatch(opts.prompt, /Draft only|ENOTFOUND|private host/);
     await opts.onSession(randomUUID()); return complete;
   };
   try {
@@ -139,7 +140,7 @@ test("project review precedes the first native turn and a resumed unchanged view
   o.turn = async opts => {
     assert.equal(apiCalls, 1, "project Jev call happened before any native execution");
     natives++;
-    if (natives === 1) {assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/); assert.match(opts.prompt, /Draft only/);}
+    if (natives === 1) {assert.match(opts.prompt, /invoice fixture uses the pipe delimiter/); assert.doesNotMatch(opts.prompt, /Draft only/);}
     else {assert.match(opts.prompt, /Project context is unchanged/); assert.doesNotMatch(opts.prompt, /invoice fixture uses the pipe delimiter/);}
     opts.onFile?.({path: path.join(dir, "README.md"), lines: [1, 3]});
     opts.onFile?.({path: path.join(path.dirname(dir), "elsewhere.md")});

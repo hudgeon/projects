@@ -63,7 +63,7 @@ export type NativeOptions = {
   // A command's own text comes too, for the runner and Jev only.
   onActivity?: (event: NativeActivity, command?: string) => void;
   onProgress?: (note: ProgressNoteInput) => void;
-  // The working agent's plan, as it changes.
+  // The working agent's plan, as it changes; Codex alone reports one.
   onPlan?: (steps: LivePlanStep[]) => void;
   // Once the turn runs: delivers the user's feedback into it; rejects once
   // it has finished or takes no more input.
@@ -655,7 +655,6 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     "--json-schema",
     JSON.stringify(o.schema),
     ...claudePermissions(o),
-    // TodoWrite keeps only the session's plan; it changes nothing.
     "--tools",
     claude.enabled,
     ...(unrestricted ? [] : [
@@ -753,6 +752,8 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
       (message) => {
         if (message.type === "system" && message.subtype === "init")
           o.onActivity?.({ kind: "turn", state: "started" });
+        if (message.type === "system" && message.subtype === "compact_boundary")
+          o.onActivity?.({ kind: "compaction", state: "finished" });
         if (message.type === "assistant") {
           const sent = object(message.message);
           const used = object(sent.usage);
@@ -777,18 +778,6 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
                 const note = parseProgressNote(block.text);
                 if (note) o.onProgress?.(note);
               }
-              if (
-                message.type === "assistant" &&
-                block.type === "tool_use" &&
-                block.name === "TodoWrite"
-              )
-                o.onPlan?.(
-                  planSteps(
-                    object(block.input).todos,
-                    (item) => item.content,
-                    (item) => item.status,
-                  ),
-                );
               if (
                 message.type === "assistant" &&
                 block.type === "tool_use" &&

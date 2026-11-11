@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { clip } from "../src/run-text";
 import { pullSchema, pushPending, sessionSchema, sourceSchema, worktreeSchema } from "../src/model";
@@ -89,4 +90,32 @@ export function activityBrief(
           "gaps" in p,
       ),
   }));
+}
+
+// What a coordinator's session has seen of the brief: each machine's entry for
+// a project, by a hash that leaves out when it was observed or last updated.
+// An observation merely taken again is not news.
+export type ActivitySeen = Record<string, string>;
+type Entry = { host: string; projects: { id: string }[] };
+const listed = (brief: unknown): brief is Entry[] =>
+  Array.isArray(brief) && brief.every((o) => typeof o?.host === "string" && Array.isArray(o.projects) && o.projects.every((p: unknown) => typeof (p as Entry["projects"][0])?.id === "string"));
+const mark = (value: unknown) =>
+  createHash("sha256")
+    .update(JSON.stringify(value, (key, v) => (key === "observedAt" || key === "updatedAt" ? undefined : v)) ?? "")
+    .digest("hex")
+    .slice(0, 16);
+export const activitySeen = (brief: unknown): ActivitySeen =>
+  listed(brief) ? Object.fromEntries(brief.flatMap((o) => o.projects.map((p) => [`${o.host}/${p.id}`, mark(p)]))) : { all: mark(brief) };
+// The entries that differ from what the session saw, timestamps and all, and
+// those no longer listed. A brief in another shape is news as a whole.
+export function activityNews(brief: unknown, seen: ActivitySeen) {
+  const now = activitySeen(brief);
+  const gone = Object.keys(seen).filter((key) => !(key in now));
+  if (!listed(brief)) return { changed: seen.all === now.all ? [] : [brief], gone };
+  return {
+    changed: brief
+      .map((o) => ({ ...o, projects: o.projects.filter((p) => seen[`${o.host}/${p.id}`] !== now[`${o.host}/${p.id}`]) }))
+      .filter((o) => o.projects.length),
+    gone,
+  };
 }

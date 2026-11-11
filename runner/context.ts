@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Child, RunMessage } from "../src/run-model";
+import { childContext } from "./child-report";
+export { childContext } from "./child-report";
 import {
   contextErrorCodeSchema,
   contextFailureSchema,
@@ -59,28 +61,6 @@ export function contextConversation(messages: RunMessage[]) {
     latestReportedPosition:
       messages.findLast((message) => message.role === "master") ?? null,
   };
-}
-
-export function childContext(children: Child[], full = 0) {
-  if (!children.length) return "none";
-  return JSON.stringify({
-    // Every execution, ownership and evidence reference survives selection.
-    index: childIndex(children),
-    latest: full ? children.slice(-full) : [],
-  });
-}
-function childIndex(children: Child[]) {
-  return children.map((c) => ({
-    id: c.id,
-    projectId: c.projectId,
-    agent: c.agent,
-    mode: c.mode,
-    state: c.state,
-    branch: c.branch,
-    ...(c.host ? { host: c.host } : {}),
-    outcome: c.result?.summary.slice(0, 200) ?? null,
-    evidence: c.evidence,
-  }));
 }
 
 type Candidate =
@@ -546,10 +526,7 @@ export async function selectContext(o: {
   const selectedChildren = o.children.filter(
     (c) => protectedChildren.has(c.id) || keepIds.has(c.id),
   );
-  const proposedChildren = JSON.stringify({
-    index: childIndex(o.children),
-    retained: selectedChildren,
-  });
+  const proposedChildren = childContext(o.children, selectedChildren);
   const selected = {
     ...base,
     record,

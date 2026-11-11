@@ -25,7 +25,7 @@ test("machine full access reaches native launch and both Codex RPC permission bo
         assert.equal(args[args.indexOf("--permission-mode")+1],readOnly?"dontAsk":"bypassPermissions");
         // Unattended in either mode: a prompt nobody can answer is denied, not retried.
         assert.equal(args[args.indexOf("--permission-prompts")+1],"none");
-        assert.equal(args[args.indexOf("--tools")+1],readOnly?"Read,Glob,Grep,TodoWrite":"default");
+        assert.equal(args[args.indexOf("--tools")+1],readOnly?"Read,Glob,Grep":"default");
         assert.equal(args.includes("--strict-mcp-config"),readOnly);
         assert.equal(args.includes("--allowedTools"),readOnly);
       } else {
@@ -45,7 +45,7 @@ test("machine full access reaches native launch and both Codex RPC permission bo
 test("a Claude helper given the user's connectors looks their tools up on demand; denied tools stay denied and a turn with only the browser launches as before", async () => {
   const dir = await fixture();
   const rules = claudeRules({connectors:["claude_ai_Mail","claude_ai_Files"],local:["db","other"]},{localServers:["db"],deniedTools:["mcp__db__write"]})!;
-  const granted = {claude:rules,codex:null}, read = "Read,Glob,Grep,TodoWrite", change = "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor";
+  const granted = {claude:rules,codex:null}, read = "Read,Glob,Grep", change = "Read,Glob,Grep,Edit,Write,Bash,TaskStop,Monitor";
   try {
     for (const [kind, options, tools] of [
       ["the coordinator or a recovery inspection", {readOnly:true}, read],

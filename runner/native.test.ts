@@ -9,20 +9,23 @@ import { childResultSchema, type NativeActivity, type ProgressNoteInput, type Li
 import { result, fixture } from "./run-fixtures";
 import { fakeBinary } from "./native-fixtures";
 
-test("feedback reaches a running Codex or Claude turn, and each reports its own plan", async () => {
+test("feedback reaches a running Codex or Claude turn; Codex reports its plan, and Claude a compaction of its session", async () => {
   const dir = await fixture();
   try {
     for (const agent of ["codex", "claude"] as const) {
       const binary = await fakeBinary(dir, agent, "steer");
-      const plans: LivePlanStep[][] = [];
+      const plans: LivePlanStep[][] = [], kinds: string[] = [];
       const value = await nativeTurn({
         agent, cwd: dir, prompt: "Change it", schema: {type: "object"}, readOnly: false,
         signal: AbortSignal.timeout(5000), binaries: {[agent]: binary}, onSession: async () => {},
         onPlan: (steps) => plans.push(steps),
+        onActivity: (event) => kinds.push(event.kind),
         onSteer: (steer) => { setTimeout(() => void steer({text: "Use the blue button"}), 50); },
       });
       assert.deepEqual(value, {summary: "Connected Use the blue button"}, agent);
-      assert.deepEqual(plans.at(-1), [{step: "Read the code", status: "done"}, {step: "Make the change", status: "active"}, {step: "Run checks", status: "pending"}], agent);
+      // Claude Code has no plan tool the runner lists; its notes show progress.
+      assert.deepEqual(plans.at(-1), agent === "codex" ? [{step: "Read the code", status: "done"}, {step: "Make the change", status: "active"}, {step: "Run checks", status: "pending"}] : undefined, agent);
+      assert.equal(kinds.includes("compaction"), agent === "claude", "a session that compacted is told its standing instructions again");
     }
   } finally { await rm(dir, {recursive: true, force: true}); }
 });

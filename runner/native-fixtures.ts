@@ -84,7 +84,7 @@ if(${JSON.stringify(agent)}==='codex') {
     if(mode==='files')for(let i=0;i<2;i++)send({type:'assistant',message:{id:'msg-3',content:[{type:'tool_use',id:'read-1',name:'Read',input:{file_path:process.cwd()+'/notes.md',offset:2,limit:3}},{type:'tool_use',id:'edit-1',name:'Edit',input:{file_path:process.cwd()+'/src/b.ts',old_string:'private-old',new_string:'private-new'}}]}});
     // Reports, then runs on with a background command and a later turn of its own.
     if(mode==='linger'){finish('');const bg=spawnBackground(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writePid('background.pid',String(bg.pid));setTimeout(()=>send({type:'result',subtype:'success',is_error:false,structured_output:{summary:'Later'},num_turns:1,usage:{}}),20);setInterval(()=>{},1000);return;}
-    if(mode==='steer'){send({type:'assistant',message:{content:[{type:'tool_use',id:'todo-1',name:'TodoWrite',input:{todos:[{content:'Read the code',status:'completed',activeForm:'Reading'},{content:'Make the change',status:'in_progress',activeForm:'Changing'},{content:'Run checks',status:'pending',activeForm:'Checking'}]}}]}});return;}
+    if(mode==='steer'){send({type:'system',subtype:'compact_boundary',compact_metadata:{trigger:'auto'}});return;}
     finish('');
   });
 }

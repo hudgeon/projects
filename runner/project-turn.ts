@@ -7,6 +7,7 @@ import type { Selector } from "./context";
 import type { FileTouch } from "./native-events";
 import { reviewProjectContext } from "./project-context";
 import { hash } from "./project-sources";
+import { sessionMemory, type SessionMemory } from "./session-memory";
 
 // Each review's private receipt is kept, with what it read, so later code
 // can replay it; the oldest go first. The turn's file reads and changes
@@ -107,7 +108,8 @@ export type ProjectTurn = [
 ];
 // One native turn's project context, reviewed, then cached and receipted
 // privately. A view the same native session already received is named, not
-// resent.
+// resent, and so is an instruction file it was sent before. In shadow mode
+// the review is receipted and the prompt gets nothing.
 export async function contextBrief(
   o: {
     stateDir: string;
@@ -117,6 +119,11 @@ export async function contextBrief(
     selector?: Selector;
     signal: AbortSignal;
     instructions: string[];
+    // Where the turn's native app runs, when not in the reviewed folder.
+    native?: string;
+    // What the conversation's native sessions hold; read from its file when
+    // the caller keeps none.
+    memory?: SessionMemory;
     save: (file: string, value: unknown) => Promise<void>;
   },
   ...[project, cwd, task, actor, agent, session, query]: ProjectTurn
@@ -135,11 +142,16 @@ export async function contextBrief(
   } catch {
     /* No reusable review. */
   }
+  // What this native session was given before: a view and instruction files.
+  const memory = o.memory ?? sessionMemory(o.stateDir, o.run.id);
+  const known = await memory.held(session);
   const review = await reviewProjectContext({
     project,
     cwd,
     task,
     query,
+    native: o.native ?? cwd,
+    given: known.instructions,
     instructions: o.instructions,
     workIssue:
       o.workRepo && o.run.workIssue
@@ -154,23 +166,8 @@ export async function contextBrief(
     dir = reviewsDir(o.stateDir),
     id = `${at}-${o.run.id.slice(0, 8)}-${actor.slice(0, 8)}`,
     receipt = path.join(dir, `${id}.json`);
-  const version = hash(JSON.stringify([key, review.prompt]));
-  const sessionFile = (id: string) =>
-    path.join(
-      o.stateDir,
-      "project-context",
-      "sessions",
-      hash(`${agent}:${id}`) + ".json",
-    );
-  let reusedInSession = false;
-  if (session)
-    try {
-      reusedInSession =
-        JSON.parse(await readFile(sessionFile(session), "utf8")).version ===
-        version;
-    } catch {
-      /* New native context. */
-    }
+  const version = hash(JSON.stringify([key, review.view]));
+  const reusedInSession = !!review.prompt && known.view === version;
   const saved = {
     id,
     at,
@@ -205,10 +202,16 @@ export async function contextBrief(
     ),
   );
   return {
-    prompt: `${reusedInSession ? "Project context is unchanged from the view already supplied in this native session." : review.prompt}\nPrivate project context receipt: ${receipt}\n`,
+    prompt: review.prompt
+      ? `${reusedInSession ? "Project context is unchanged from the view already supplied in this native session." : review.prompt}\nPrivate project context receipt: ${receipt}\n`
+      : "",
     onFile: used.add,
     remember: async (id?: string | null) => {
-      if (id) await o.save(sessionFile(id), { version });
+      if (review.prompt)
+        await memory.keep(id, {
+          view: version,
+          instructions: { ...(id === session ? known.instructions : {}), ...(reusedInSession ? {} : review.sent) },
+        });
       // Evaluation data only: a failed write never holds up the turn.
       await o.save(receipt, { ...saved, usage: used.summary() }).catch(() => {});
     },

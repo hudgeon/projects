@@ -39,6 +39,7 @@ test("a replay reviews the recorded commit in a shared clone and leaves the proj
     const result = await replayReview(review, { repository: cwd, selector: jev.value, signal: AbortSignal.timeout(30_000) });
     assert.equal(jev.calls, 1);
     assert.equal(result.reason, "selected");
+    assert.equal(result.turn, undefined);
     const invoices = result.considered.find((u) => u.path === "src/invoices.ts")!;
     assert.match(invoices.text!, /"\|"/, "the recorded commit's text, not the checkout's");
     assert.deepEqual(invoices.lines, [1, 1]);
@@ -48,6 +49,12 @@ test("a replay reviews the recorded commit in a shared clone and leaves the proj
     assert.deepEqual(result.recorded!.units[0].lines, [1, 1]);
     assert.deepEqual(result.usage, usage);
     assert.ok(result.inputTokens! > 0 && result.requestBytes! > 0 && result.judgeMs! >= 0);
+    assert.ok(result.promptChars! > invoices.text!.length, "what the review adds to its turn's prompt is counted");
+    // A helper's app loads the project's instruction file itself, and so does a coordinator that runs inside the project.
+    const replayed = (extra: Partial<Review>, masterCwd?: string) => replayReview({ ...review, ...extra }, { repository: cwd, masterCwd, selector: jev.value, signal: AbortSignal.timeout(30_000) }).then((r) => r.promptChars!);
+    const [helper, inside, outside] = [await replayed({ turn: "helper" }), await replayed({ turn: "coordinator" }, cwd), await replayed({ turn: "coordinator" }, path.dirname(cwd))];
+    assert.equal(outside, result.promptChars);
+    assert.ok(helper === inside && helper < outside, "its text is not sent to them");
     assert.deepEqual(
       {
         head: await git(cwd, ["rev-parse", "HEAD"]),

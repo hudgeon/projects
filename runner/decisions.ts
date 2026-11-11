@@ -56,7 +56,7 @@ export function completionProblem(
 export async function decide(x: Execution, step: number, last: boolean) {
   const {
     s, o, selector, file, j, event, failureReason, persist, publish, runTurn, screenshots,
-    refreshMessages, agents, appName, coordinatorFile, contextFile, resumed, briefHash,
+    refreshMessages, agents, appName, coordinatorFile, contextFile, resumed, briefHash, activityHeld,
     projectBrief, instructionsVersion, brief, rotate, begun, handBack, paused,
   } = x;
   const saved = j.checkpoint?.kind === "master" ? j.checkpoint : null;
@@ -200,6 +200,7 @@ export async function decide(x: Execution, step: number, last: boolean) {
           seen: [...new Set(heard)].slice(-400),
           through: shown.length,
           brief: briefHash,
+          ...(activityHeld ? { activity: activityHeld } : {}),
           inputChars: (s.coordinator?.inputChars ?? 0) + prompt.length +
             (o.latestMessages?.() ?? s.messages).filter((m) => heard.includes(m.id)).reduce((n, m) => n + m.text.length, 0),
         };

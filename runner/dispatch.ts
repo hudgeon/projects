@@ -1,7 +1,7 @@
 // Carrying out a dispatch: the checks before anything runs, the helper's
 // workspace and project review, its turn and its result.
 import { randomUUID } from "node:crypto";
-import { childResultSchema, type Child, type MasterDecision, type ChildResult } from "../src/run-model";
+import { childResultSchema, type Child, type MasterDecision, type ChildResult, type RunMessage } from "../src/run-model";
 import { Failure, NativeStopError } from "./native";
 import { git, UnsavedWorkspace } from "./workspaces";
 import { clip } from "../src/run-text";
@@ -13,6 +13,17 @@ import type { Journal } from "./journal";
 import { outputSchema } from "./decisions";
 import { UPKEEP_SOURCE_HOSTS } from "../src/upkeep-model";
 
+// What every helper is told about its assignment, whatever the task.
+const assignmentRules = `Work only on this assigned task. Preserve other sessions. Use this worktree for changes. Carry this assigned outcome through its authorized checks, required review, merge, deployment, visual verification and required machine sync before returning; a draft-only request ends at the verified saved draft. Keep working through routine fixable failures and delivery stages in this same session. Report actual gate evidence and remaining steps; a green open PR or a native turn ending is not release completion. Stop for missing authority or a failed gate you cannot fix within scope. Return the required structured result with actual check evidence and GitHub links; no secrets or raw tool output.`;
+// The screenshots a helper is given: those its task names by id, or the
+// newest message's when it names none. Never the whole conversation's.
+export function helperScreenshots(messages: RunMessage[], task: string): RunMessage[] {
+  const pictured = messages.filter((message) => message.screenshots?.length);
+  const named = pictured
+    .map((message) => ({ ...message, screenshots: message.screenshots!.filter((image) => task.includes(image.id)) }))
+    .filter((message) => message.screenshots.length);
+  return named.length ? named : pictured.slice(-1);
+}
 export async function dispatch(
   x: Execution,
   decision: MasterDecision,
@@ -50,7 +61,8 @@ export async function dispatch(
       "child_limit",
       "This conversation has used all 24 of its helper sessions. Start a new conversation to continue the work.",
     );
-  const images = await screenshots(s.messages);
+  const pictured = helperScreenshots(s.messages, task.prompt);
+  const images = await screenshots(pictured);
   const browser = await o.browser?.();
   const id = randomUUID();
   const preparing = performance.now();
@@ -159,7 +171,12 @@ export async function dispatch(
           sessionId: child.sessionId ?? undefined,
           screenshots: images,
           browser,
-          prompt: `${workLine}${workContext ? `${workContext}\n\n` : ""}${projectContext.prompt}\n${handoff}${restored ? `This worktree was recreated on this machine from another machine's copy on GitHub${savedAt ? `, which holds its work as of ${new Date(savedAt).toISOString()}` : ""}; its uncommitted changes are present. Work after that may be missing and the earlier session's memory is not available: review git status, the branch and its pull request before continuing, and never repeat a change that already landed.\n\n` : ""}${task.prompt}\n\n${requesterInstructions(o.person, o.inboxes)}${s.messages.some((message) => message.screenshots?.length) ? "The attached screenshots are user-provided evidence, ordered by these messages: " + JSON.stringify(s.messages.filter((message) => message.screenshots?.length)) + "\n\n" : ""}Work only on this assigned task. Preserve other sessions. Use this worktree for changes. Carry this assigned outcome through its authorized checks, required review, merge, deployment, visual verification and required machine sync before returning; a draft-only request ends at the verified saved draft. Keep working through routine fixable failures and delivery stages in this same session. Report actual gate evidence and remaining steps; a green open PR or a native turn ending is not release completion. Stop for missing authority or a failed gate you cannot fix within scope. Return the required structured result with actual check evidence and GitHub links; no secrets or raw tool output.\n\n${helperInstructions(task.agent, o.fullAccess, o.person)}`,
+          prompt: `${workLine}${projectContext.prompt}\n${handoff}${restored ? `This worktree was recreated on this machine from another machine's copy on GitHub${savedAt ? `, which holds its work as of ${new Date(savedAt).toISOString()}` : ""}; its uncommitted changes are present. Work after that may be missing and the earlier session's memory is not available: review git status, the branch and its pull request before continuing, and never repeat a change that already landed.\n\n` : ""}${[
+            task.prompt,
+            requesterInstructions(o.person, o.inboxes).trim(),
+            pictured.length ? `The attached screenshots are user-provided evidence, ordered by these messages: ${JSON.stringify(pictured.map((message) => ({ at: message.at, text: clip(message.text, 600), screenshots: message.screenshots!.map((image) => image.id) })))}` : "",
+          ].filter(Boolean).join("\n\n")}`,
+          rules: `${assignmentRules}\n\n${helperInstructions(task.agent, o.fullAccess, o.person)}${workContext ? `\n\n${workContext}` : ""}`,
           schema: outputSchema(childResultSchema),
           readOnly: task.mode === "read",
           // An upkeep read child researches the harnesses on their official

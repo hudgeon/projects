@@ -29,6 +29,9 @@ export type Result = {
   totalMs?: number | null;
   requestBytes?: number | null;
   inputTokens: number | null;
+  // Characters the review adds to its turn's prompt, and whose turn it was.
+  promptChars?: number;
+  turn?: "coordinator" | "helper";
   considered: Unit[];
   // The original turn's selection and the files that turn used.
   recorded?: { units: (Ref & { lines?: [number, number] })[]; supplied: number[] };
@@ -213,6 +216,14 @@ export function score(results: Result[], labels: Labels) {
       unitsPerTurn: mean(results.map((r) => r.considered.filter((u) => u.kept).length)),
       charsPerTurn: mean(results.map((r) => chars(r.considered.filter((u) => u.kept)))),
     },
+    // The whole project context a fresh native session is given, repository
+    // instructions, work record and source gaps included.
+    prompt: Object.fromEntries(
+      ([undefined, "coordinator", "helper"] as const).map((turn) => {
+        const sizes = results.flatMap((r) => (r.promptChars !== undefined && (!turn || r.turn === turn) ? [r.promptChars] : []));
+        return [turn ?? "all", { turns: sizes.length, charsPerTurn: mean(sizes) }];
+      }),
+    ) as Record<"all" | "coordinator" | "helper", { turns: number; charsPerTurn: number | null }>,
     labels: {
       turns: labelled.length,
       shortlistUnits,
@@ -277,6 +288,7 @@ export function format(report: Report, title: string) {
   const lines = [
     title,
     `Reviews ${report.reviews}: ${report.judged} judged${Object.entries(report.notJudged).map(([reason, n]) => `, ${n} ${reason}`).join("")}. Supplied per turn: ${num(report.supplied.unitsPerTurn, 1)} units, ${num(report.supplied.charsPerTurn)} chars.`,
+    `Project context in the prompt, per turn given it: ${num(report.prompt.all.charsPerTurn)} chars over ${report.prompt.all.turns} turns (coordinator ${num(report.prompt.coordinator.charsPerTurn)} over ${report.prompt.coordinator.turns}, helper ${num(report.prompt.helper.charsPerTurn)} over ${report.prompt.helper.turns}).`,
     `Labels: ${report.labels.turns} turns; ${report.labels.unlabelledUnits} of ${report.labels.shortlistUnits} shortlisted units unlabelled; ${report.labels.relevantInShortlist} of ${report.labels.relevant} known relevant units in the shortlist; Jev AUC strict ${num(report.labels.auc.strict, 3)}, lenient ${num(report.labels.auc.lenient, 3)}.`,
     "cutoff | kept/turn | empty | strict P | lenient P | strict R | lenient R | chars/turn | relevant chars/turn | kept unlabelled",
   ];

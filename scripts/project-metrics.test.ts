@@ -55,6 +55,10 @@ test("precision and recall count labelled units only, and report what still need
   assert.equal(report.labels.relevantInShortlist, 3, "a labelled unit the shortlist lost is a retrieval miss");
   assert.equal(report.labels.auc.lenient, 4 / 6);
   assert.equal(report.supplied.unitsPerTurn, 4 / 3);
+  assert.deepEqual(report.prompt.all, { turns: 0, charsPerTurn: null }, "a replay from before prompts were counted");
+  const sized = score([result("a", first, { promptChars: 9_000, turn: "coordinator" }), result("b", second, { promptChars: 5_000, turn: "helper" }), result("c", second, { promptChars: 4_000 })], labels);
+  assert.deepEqual([sized.prompt.all, sized.prompt.coordinator, sized.prompt.helper], [{ turns: 3, charsPerTurn: 6_000 }, { turns: 1, charsPerTurn: 9_000 }, { turns: 1, charsPerTurn: 5_000 }]);
+  assert.match(format(sized, "Fixture"), /Project context in the prompt, per turn given it: 6,000 chars over 3 turns \(coordinator 9,000 over 1, helper 5,000 over 1\)/);
   assert.equal(report.jev.judgeMs.median, 400);
   assert.equal(report.jev.inputTokens.total, 20_000);
   assert.ok(Math.abs(report.jev.costUsd - 20_000 * 0.000000042) < 1e-12);

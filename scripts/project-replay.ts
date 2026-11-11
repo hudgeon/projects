@@ -38,6 +38,7 @@ const workIssue = z
 const receiptSchema = z.object({
   id: z.string(),
   at: z.number(),
+  actor: z.string().optional(),
   projectId: z.string(),
   head: z.string().nullable(),
   input: z.object({
@@ -77,7 +78,10 @@ export type Review = {
   workIssue?: { repo: string; number: number } | null;
   recorded?: { units: z.infer<typeof refSchema>[]; supplied: number[] };
   usage?: Usage;
+  // Whose turn it served, when recorded: the coordinator's or a helper's.
+  turn?: "coordinator" | "helper";
 };
+const turnOf = (actor?: string) => (actor === undefined ? undefined : actor === "master" ? ("coordinator" as const) : ("helper" as const));
 // The recovery task the runner states; the reconstructed seed held the
 // helper's original task in its place.
 const RECOVERY =
@@ -95,6 +99,7 @@ export function seedReview(value: unknown): Review {
     query: turn.actor === "master" || recovery ? "" : undefined,
     instructions: turn.instructions,
     workIssue: turn.workIssue,
+    turn: turnOf(turn.actor),
   };
 }
 export function storedReview(value: unknown, source: "history" | "gold"): Review {
@@ -108,6 +113,7 @@ export function storedReview(value: unknown, source: "history" | "gold"): Review
     ...r.input,
     recorded: { units: r.considered, supplied: r.supplied },
     usage: r.usage,
+    turn: turnOf(r.actor),
   };
 }
 async function receipts(dir: string, source: "history" | "gold") {
@@ -150,6 +156,9 @@ export async function replayReview(
   o: {
     // The project's checkout, cloned and never changed.
     repository: string;
+    // Where coordinators run on this machine: inside the project, their app
+    // loads its instruction files as a helper's does.
+    masterCwd?: string;
     selector: Selector;
     // The work issue as it stood at the review: comments after it are left out.
     readIssue?: (repo: string, number: number, before: number) => Promise<Issue>;
@@ -186,6 +195,7 @@ export async function replayReview(
       query: review.query,
       instructions: review.instructions,
       workIssue: review.workIssue ?? undefined,
+      native: review.turn === "helper" ? clone : review.turn && o.masterCwd && !path.relative(o.repository, o.masterCwd).startsWith("..") ? path.join(clone, path.relative(o.repository, o.masterCwd)) : undefined,
       readIssue: o.readIssue
         ? async (repo, number) => {
             const issue = await o.readIssue!(repo, number, review.at);
@@ -256,6 +266,9 @@ export async function replayReview(
       totalMs,
       requestBytes,
       inputTokens: record?.inputTokens ?? null,
+      // What the review adds to its turn's prompt.
+      promptChars: view.prompt.length,
+      ...(review.turn ? { turn: review.turn } : {}),
       considered,
       ...(recorded ? { recorded } : {}),
       ...(review.usage ? { usage: review.usage } : {}),

@@ -150,8 +150,8 @@ change nothing. Implementation goes straight to one change child, which
 investigates as part of the work. A follow-up reuses its worktree; its session
 continues only while it is small, and a review of a change always gets a fresh
 one, which starts from the earlier report. Child results resume the same
-master, which is sent only what it has not seen; once its own session grows
-large, a fresh master takes over with the full brief. Native agents use their
+master, sent only what is new: a report's summary and pointers. Grown
+large, it hands over to a fresh master with a full brief. Native agents use their
 existing sign-ins; there is no hosted agent runtime or inbound tunnel. The
 claim names whose conversation it is: agents address them by name, helpers'
 commits are authored as them (pushed with the machine's login), and PRs and
@@ -204,8 +204,8 @@ or verification. Repository instructions own setup, checks and delivery.
   input) and the master still reviews it at its next decision. **Stop work**
   cancels; cancellation recalls no effect already performed.
 - **Progress**: agents emit bounded `PROJECTS_PROGRESS` notes; the conversation
-  shows a **Now** panel (the step in progress, what follows, what is done), the
-  working agent's own plan, and for a change child the branch's changed files
+  shows a **Now** panel (the step in progress, what follows, what is done), a
+  Codex turn's own plan, and for a change child the branch's changed files
   with line counts. Five-minute updates are saved by the conversation's alarm,
   survive browser closure and never repeat old work as new.
 - **Results** start with one plain sentence (the conversation's status line),
@@ -225,8 +225,8 @@ or verification. Repository instructions own setup, checks and delivery.
   repositories a machine reports open, and a request no machine answers within
   a minute says so.
 - **Screenshots** can be pasted or added to messages (on an iPhone, with the
-  Paste button); the browser re-encodes and bounds them and both master and
-  children receive them.
+  Paste button); the browser re-encodes and bounds them; a child gets
+  those its task names or the newest.
 - **Typing**: Enter sends and Shift+Enter starts a new line; on a phone,
   Return starts a new line and Send sends.
 - **Quick work** (email replies, unsubscribes) uses lighter prompts and shares

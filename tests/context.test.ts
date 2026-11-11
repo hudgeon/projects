@@ -367,10 +367,10 @@ test("semantic selection cannot remove instructions, approval proposals, current
   assert.deepEqual(view.conversation, contextConversation(f.messages));
   assert.deepEqual(view.approvalContext, [f.messages[1]]);
   const children = JSON.parse(view.children);
-  assert.equal(children.index.length, 8);
   assert.deepEqual(
-    children.index.map((c: Child) => c.evidence),
-    f.children.map((c) => c.evidence),
+    children.index,
+    f.children.map((c) => `${c.id} · example/project · codex change · ${c.state} · owned · A historical report`),
+    "every execution keeps its line",
   );
   assert.deepEqual(
     children.retained.map((c: Child) => c.id),
@@ -390,11 +390,10 @@ test("older useful and uncertain evidence stays verbatim; only optional clear ne
     },
   });
   const children = JSON.parse(view.children);
-  assert.deepEqual(children.retained, [
-    f.children[0],
-    f.children[1],
-    f.children[7],
-  ]);
+  assert.deepEqual(
+    children.retained.map((c: Child) => [c.id, c.result, c.evidence]),
+    [f.children[0], f.children[1], f.children[7]].map((c) => [c.id, c.result, c.evidence]),
+  );
   assert.equal(view.selected, 2);
   assert.equal(view.omitted, 5);
 });
@@ -551,7 +550,7 @@ test("conversation evidence can be selected before any helper has run", async ()
   });
   assert.equal(view.strategy, "select");
   assert.equal(view.supportingEvidence.length, 1);
-  assert.deepEqual(JSON.parse(view.children), { index: [], retained: [] });
+  assert.equal(view.children, "none");
 });
 
 test("selector credentials never enter helper or collector subprocess environments", () => {

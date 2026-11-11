@@ -8,12 +8,15 @@ import { liveChanges, saveWorkspace } from "./workspaces";
 import { browserInstructions, mailboxFor, mailboxUnavailableInstructions, progressInstructions, stuckInstructions, responseInstructions } from "./instructions";
 import { telemetry } from "../src/telemetry";
 import { TURN_LIMITS, watchLimits } from "./turn-limits";
+import { createHash } from "node:crypto";
+import { STANDING_APPLY } from "./session-memory";
 import { watchTurn } from "./turn-watch";
 import type { Execution } from "./execution";
 
 export async function runTurn(
   x: Execution,
-  options: NativeOptions,
+  // rules: what the turn's session is told once, besides how to reply.
+  { rules, ...options }: NativeOptions & { rules?: string },
   child?: Child,
   checkpoint?: (value: unknown) => void,
   // Feedback for this turn: messages already in its input are excluded;
@@ -22,7 +25,7 @@ export async function runTurn(
 ): Promise<unknown> {
   const {
     o, checks, j, event, failureReason, persist, publish, turn, ranHere, delivery, lastSaved,
-    overran, screenshots,
+    overran, screenshots, memory,
   } = x;
   let timing: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs"> = {};
   const control = new AbortController();
@@ -227,6 +230,12 @@ export async function runTurn(
   const mailbox = connected?.delegated && !mailboxToken ? null : connected;
   if (connected && !mailbox)
     telemetry("runner", "mailbox_unavailable", { runId: o.run.id, generation: o.run.generation }, "warn");
+  // A session keeps its standing instructions; only one that lacks them, or
+  // whose instructions changed, is sent them.
+  const standing = `${rules ? `${rules}\n\n` : ""}${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`;
+  const standingKey = createHash("sha256").update(standing).digest("hex").slice(0, 24);
+  const told = (await memory.held(options.sessionId)).standing === standingKey;
+  let session = options.sessionId;
   try {
     await persist();
     const value = await turn({
@@ -236,14 +245,19 @@ export async function runTurn(
       person: o.person,
       mailbox,
       mailboxToken,
-      prompt: `${options.prompt}\n\n${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}${connected && !mailbox ? mailboxUnavailableInstructions(o.person) : ""}`,
+      prompt: `${options.prompt}\n\n${told ? STANDING_APPLY : standing}${connected && !mailbox ? mailboxUnavailableInstructions(o.person) : ""}`,
       signal: AbortSignal.any([options.signal, control.signal]),
+      onSession: async (id) => {
+        session = id;
+        await options.onSession(id);
+      },
       onProcess: async (p) => {
         pid = p;
         await options.onProcess?.(p);
       },
       onActivity: (event, command) => {
         stall.activity(event, command);
+        if (event.kind === "compaction" && session) void memory.forget(session);
         j.progress.activity = [
           ...(j.progress.activity ?? []),
           {
@@ -296,6 +310,7 @@ export async function runTurn(
     // A restart can replay this receipt without repeating the native turn.
     checkpoint?.(value);
     finished = true;
+    await memory.keep(session, { standing: standingKey });
     event("native_finished", {
       ...turnFields,
       ...timing,
