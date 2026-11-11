@@ -17,12 +17,13 @@ import { runTurn } from "./turns";
 import { handBack, acceptChild, inspect, recoverChild, resumeInterrupted } from "./children";
 import { dispatch } from "./dispatch";
 import { sessionMemory } from "./session-memory";
-export { contextConversation, HANDOVER_CHAR_LIMIT } from "./context";
+export { contextConversation, rebuildContext, HANDOVER_CHAR_LIMIT } from "./context";
 export { activityBrief } from "./activity-brief";
 export { MASTER_INPUT_CHAR_LIMIT, MASTER_CONTEXT_LIMIT, HANDBACK_LIMIT, stoppedText } from "./turn-limits";
 export { savePrivate } from "./journal";
 export { outputSchema, completionProblem } from "./decisions";
-export { workInstructions, responseInstructions } from "./instructions";
+export { responseInstructions } from "./instructions";
+export { workInstructions } from "./work-instructions";
 export { masterInstructions, quickInstructions, movedInstructions } from "./master-instructions";
 export type { EngineOptions } from "./execution";
 
@@ -176,6 +177,7 @@ export async function executeRun(o: EngineOptions) {
     projectBrief,
     instructionsVersion,
     brief,
+    rotation,
     rotate,
   } = await openCoordinator(o, j, s, file, movedHere, agents, selector, memory);
   const begun = performance.now();
@@ -194,7 +196,7 @@ export async function executeRun(o: EngineOptions) {
     prepare, evidence, here, ranHere, undelivered, delivery, lastSaved, copiedAt, refusedBy,
     overran, freshIn, memory, screenshots, refreshMessages, agents, appName, workLine, coordinatorFile,
     contextFile, resumed, resetCoordinator, workContext, briefHash, activityHeld, projectBrief,
-    instructionsVersion, brief, rotate, begun, paused,
+    instructionsVersion, brief, rotation, rotate, begun, paused,
     runTurn: (...args) => runTurn(x, ...args),
     handBack: (...args) => handBack(x, ...args),
     acceptChild: (...args) => acceptChild(x, ...args),

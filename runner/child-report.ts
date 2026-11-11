@@ -53,6 +53,13 @@ export function childLine(child: Child) {
     .join(" · ");
 }
 
+// Helpers whose pull request GitHub reported merged: a boundary a coordinator
+// session hands over at once it has not seen it.
+export const mergedChildren = (children: Child[]) =>
+  children
+    .filter((child) => child.evidence.some((line) => /^Observed pull request: https:\/\/\S+ · merged\b/.test(line)))
+    .map((child) => child.id);
+
 // Every helper's line, and reports for the newest few or for those named.
 export function childContext(children: Child[], reports: number | Child[] = 0, journal?: string) {
   if (!children.length) return "none";

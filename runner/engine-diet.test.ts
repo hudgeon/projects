@@ -155,7 +155,8 @@ test("a returned helper comes as its summary and pointers; every other helper is
     await executeRun(o);
     const [brief, , returned] = calls.map((c) => c.prompt);
     // The session holds its history: its brief lists the children, one line each.
-    const lines = JSON.parse(brief.split("Previous children: ")[1].split("\n")[0]) as { index: string[]; latest: unknown[] };
+    const children = (prompt: string) => JSON.parse(prompt.split(/Previous children \(one line each; every report is in [^)]+\): /)[1].split("\n")[0]) as { index: string[]; latest: { id: string }[] };
+    const lines = children(brief);
     assert.deepEqual(lines.latest, [], "a resumed coordinator is not sent reports it already heard");
     assert.equal(lines.index.length, 5);
     assert.equal(lines.index[0], `${earlier[0].id} · acme/test · claude change · completed · projects/b0 · https://github.com/acme/test/pull/7 · open · checks passing · Shipped part 0.`);
@@ -176,13 +177,17 @@ test("a returned helper comes as its summary and pointers; every other helper is
     assert.equal(others.index.length, 5);
     assert.ok(others.index.every((line) => line.length < 260 && !line.includes("\n")));
     assert.ok(returned.length < 16_000, "a child's return, with five earlier children, stays small");
-    // A coordinator starting without that history is sent the newest reports too.
+    // A coordinator starting without that history gets the same lines and
+    // where the reports are, not the reports: its first request stays small.
     calls.length = 0; masters = 1;
     await savePrivate(path.join(dir, "runs", `${o.run.id}.coordinator.json`), { sessionId: "another-session", seen: [], brief: "", inputChars: 0, through: 0 });
     await executeRun({ ...o, run: { ...o.run, generation: 3, progress: last!, messages: [...o.run.messages, { id: randomUUID(), role: "user", text: "And now?", at: Date.now() }] } });
-    const fresh = JSON.parse(calls[0].prompt.split("Previous children: ")[1].split("\n")[0]) as { index: string[]; latest: { id: string }[] };
-    assert.deepEqual(fresh.latest.map((c) => c.id), last!.children.slice(-6).map((c) => c.id));
+    const fresh = children(calls[0].prompt);
+    assert.deepEqual(fresh.latest, []);
     assert.equal(fresh.index.length, 6);
+    assert.match(calls[0].prompt, new RegExp(`every report is in ${path.join(dir, "runs", `${o.run.id}.json`).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.doesNotMatch(calls[0].prompt, /OLD-TAIL|CHECK-0/);
+    assert.ok(calls[0].prompt.length < 30_000, `a fresh coordinator's first request with six long reports behind it: ${calls[0].prompt.length} characters`);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

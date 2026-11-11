@@ -16,7 +16,7 @@
 // one per Teams organisation (docs/teams.md); --remove-teams drops a person or
 // one profile, and --no-teams stops it. Every run ends by listing them.
 //
-// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--teams person@example.com=~/Library/Projects-Teams] [--remove-teams person@example.com[=dir]] [--no-teams] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
+// node scripts/install-machine.mjs --machine studio --endpoint https://projects.example.com --root ~/code [--agents claude,codex] [--work-repo owner/repo] [--config-repo owner/repo] [--master-cwd ~/code/config] [--inbox you@example.com] [--add-inbox person@example.com[=~/.config/gws-person]] [--remove-inbox person@example.com] [--slack person@example.com,...] [--no-slack] [--teams person@example.com=~/Library/Projects-Teams] [--remove-teams person@example.com[=dir]] [--no-teams] [--collector-label label] [--runner-label label] [--hooks] [--new-tokens] [--no-services]
 import {
   chmodSync,
   copyFileSync,
@@ -91,6 +91,7 @@ set("root", expand(flag("root")));
 set("agents", flag("agents")?.split(",").map((a) => a.trim()));
 set("workRepo", flag("work-repo"));
 set("configRepo", flag("config-repo"));
+set("masterCwd", expand(flag("master-cwd")));
 set("inboxAccount", flag("inbox"));
 // Inbox, Slack and Teams connection flags, in their own module to keep this
 // file small. It mutates config and returns the inbox list for the summary.

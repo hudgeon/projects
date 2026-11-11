@@ -139,8 +139,8 @@ acceptance still require their own evidence. Historical usage coverage may be
 partial. These measures do not clip cumulative session counts to a day.
 
 A coordinator's session is sent its brief and the active work once. A
-follow-up sends the brief again only when its instructions or the registered
-projects changed, and only the active-work entries that changed; an
+follow-up sends the brief again only when its instructions or its project
+changed, and only the active-work entries that changed; an
 observation merely taken again is not a change. Reply, progress and browser
 instructions, and a helper's standing rules, reach a native session once, and
 again after it compacts or they change. Routine

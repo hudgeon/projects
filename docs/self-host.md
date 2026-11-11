@@ -116,9 +116,8 @@ readable only by you, installs the bundles with the checkout's commit recorded
 in `release.json` next to them, and starts the collector and runner as
 background services. Run it again after each release, from a checkout of the
 released commit (`npm ci` first when dependencies changed); the config and
-tokens are kept, a running runner drains and restarts on the new bundle, and
-one that is not running is started. It ends by printing what is installed and
-the runner's state. If the runner is not running, read
+tokens are kept, a running runner drains and restarts on the new bundle, a
+stopped one is started. It prints what is installed and the runner's state. If the runner is not running, read
 `~/.local/share/project-overview/runner-error.log`: a `runner_config_invalid`
 line names each `machine.json` key the runner rejected (never its value), and
 every start logs the `release` it runs. Options:
@@ -127,29 +126,32 @@ every start logs the `release` it runs. Options:
   `claude,codex`. Conversations never start an app that is not listed.
 - `--work-repo owner/repo` (optional): a repository whose issues labelled
   `work` are your work items. Without it, work items and Mark done are off.
-  An open one labelled `upkeep` as well is the standing record of the weekly
-  [upkeep](upkeep.md) cycle; under its `## Upkeep` heading, the
-  `Reviewed versions:` line is where each cycle's harness research starts and
-  the table of changes is what the next cycle compares.
+  An open one labelled `upkeep` as well is the weekly [upkeep](upkeep.md)
+  cycle's standing record: its `## Upkeep` section holds the `Reviewed
+  versions:` line and the table of changes the next cycle compares.
 - `--config-repo owner/repo` (optional): the shared repository of your global
-  agent rules, skills, hooks and repository templates. The upkeep cycle
-  dispatches its changes there when that repository is also registered as a
-  project under `--root`; without it, those changes are out of its reach.
+  agent rules, skills, hooks and repository templates. Upkeep changes go
+  there when it is also a project under `--root`; without it, they are out
+  of reach.
+- `--master-cwd ~/code/config` (optional): where coordinators run, normally
+  the `--config-repo` checkout: the shared rules and repository map, not one
+  repository's own instructions, which helpers still read. Without it they
+  run in `--root`; changing it hands each running conversation to a fresh
+  coordinator there.
 - `--inbox you@example.com` (optional): your own Gmail account, read with the
   machine's default `gws` sign-in. Email replies also expect a `compose-email`
   skill in the work repository. Your conversations work in it; another
-  person's work in their own inbox once it is connected (below), and until
-  then are told no mailbox is connected for them.
+  person's work in their own inbox once connected (below), and until then
+  are told no mailbox is connected for them.
 - `--add-inbox person@example.com` or
   `--add-inbox person@example.com=~/.config/gws-person`,
   `--remove-inbox person@example.com` (optional): connect another person's
   Gmail account, read by delegation or with the `gws` config directory they
-  signed in to on this machine (below), or disconnect it. A directory must
-  exist and be yours alone to read; nothing else in `machine.json` changes,
-  and every run ends by listing the connected inboxes.
+  signed in to on this machine (below), or disconnect it. The directory must
+  exist and be yours alone to read; every run ends by listing the inboxes.
 - `--collector-label`, `--runner-label` (optional): launchd labels for the two
-  services, when they should differ from the defaults. They are kept in
-  `machine.json`, so later runs restart the same services.
+  services when the defaults will not do; kept in `machine.json` so later
+  runs restart the same services.
 - `--hooks`: also link Claude and Codex sessions to work items.
 - `--new-tokens`: replace the stored tokens after **Replace tokens** on the
   site.
@@ -157,9 +159,9 @@ every start logs the `release` it runs. Options:
 To keep the two tokens in Doppler instead of files, store them as
 `COLLECTOR_TOKEN` and `RUNNER_TOKEN` in the machine's Doppler config (step 3)
 before installing. The installer then checks both names are there and writes no
-token files. The collector runs with only its own token and the GitHub App's
-secrets, and the runner reads its token once at start. A token file that
-already exists, or that `machine.json` names, still takes precedence. Replace
+token files; the collector gets only its own token and the GitHub App's
+secrets, and the runner reads its token once at start. An existing token
+file, or one `machine.json` names, still takes precedence. Replace
 tokens in Doppler after **Replace tokens**, then restart the runner.
 
 ### Connect a person's inbox
@@ -170,18 +172,17 @@ checks the Gmail profile it reaches against the listed address and shows a
 mismatch as that inbox being unavailable, never as another person's mail; each
 inbox's text goes only to its owner, everyone sees each person's count and the
 email links on work items, and that person's conversations run `gws` as their
-account, so the email lane and the work repository's draft helper work in
-their mailbox. Until an inbox is connected, that person's sessions get no
-`gws` sign-in at all. Your own account stays `--inbox`, read with the
-machine's default sign-in.
+account, so email work happens in their mailbox. Until then that person's
+sessions get no `gws` sign-in. Your own account stays `--inbox`, read with
+the machine's default sign-in.
 
 **By delegation (for a team).** A Google Workspace service account with
 domain-wide delegation stands in for each person, so connecting someone is
-adding their address: nobody signs in anywhere. Its key can read and change
+adding their address; nobody signs in. Its key can read and change
 every mailbox in your Workspace domain for the scopes you grant, so it lives
 only in the machine's Doppler config (step 3) and is read into memory for an
-hour's token at a time, never into `machine.json`, a snapshot, a log or a
-prompt. [Gmail delegation](inbox-delegation.md) has the one-time Google
+hour's token at a time, never into `machine.json`, snapshots, logs or
+prompts. [Gmail delegation](inbox-delegation.md) has the one-time Google
 Cloud, Admin console and Doppler steps, with the points that need your
 approval. Then connect each person by address; the installer lists it under
 `inboxAccounts` with no directory and restarts the runner (the collector

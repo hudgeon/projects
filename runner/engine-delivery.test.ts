@@ -28,7 +28,9 @@ test("work-record completion gate returns to the coordinator without replaying a
     assert.equal(calls.filter(c => c.agent === "claude").length, 1);
     assert.equal(masters, 4);
     assert.match(calls[0].prompt, /Bigger work is recorded.*acme\/work/);
-    assert.match(calls.find(c => c.agent === "claude")!.prompt, /User corrections take precedence/);
+    const helper = calls.find(c => c.agent === "claude")!.prompt;
+    assert.match(helper, /Bigger work is recorded.*acme\/work/);
+    assert.doesNotMatch(helper, /User corrections take precedence/, "a read helper is told where work is recorded, not how to write it");
     assert.match(calls.at(-1)!.prompt, /Account for the current work/);
     const journal = JSON.parse(await readFile(path.join(dir, "runs", `${o.run.id}.json`), "utf8"));
     assert.equal(journal.progress.state, "completed");

@@ -10,71 +10,46 @@ import { reviewsDir } from "./project-turn";
 import type { Progress, Child } from "../src/run-model";
 import { result, progress, fixture, complete, dispatch, engineOptions } from "./run-fixtures";
 
-test("fresh coordinators consume selected evidence once; changed feedback discards stale selections", async () => {
-  for (const changeFeedback of [false, true]) {
-    const dir = await fixture(), o = engineOptions(dir);
-    let calls = 0, turns = 0, last: Progress | undefined;
-    let messages = structuredClone(o.run.messages);
-    const children: Child[] = Array.from({length: 3}, (_, i) => ({
-      id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "read", cwd: dir,
-      branch: "owned", sessionId: randomUUID(), state: "completed", evidence: ["Synthetic observed version"],
-      result: {...result, summary: `Report ${i}: ${"historical detail ".repeat(30)} END-${i}`},
-    }));
-    o.latestMessages = () => messages;
-    o.contextSelector = {mode: "select", key: async () => "test-key", fetch: async (_url, init) => {
-      calls++;
-      const request = JSON.parse(init!.body as string);
-      if (changeFeedback) messages.push({id: randomUUID(), role: "user", text: "NEW CORRECTION: keep the draft pending", at: Date.now()});
-      return Response.json({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(request.questions).map(k => [k, {type: "noul", noul: 0}])), usage: {input_tokens: 100, output_tokens: 20}});
-    }};
-    o.report = async p => { last = structuredClone(p); };
-    o.turn = async opts => {
-      turns++;
-      assert.equal(opts.readOnly, true);
-      await opts.onSession(opts.sessionId ?? "context-master");
-      assert.match(opts.prompt, /complete source index/);
-      if (changeFeedback) assert.match(opts.prompt, /NEW CORRECTION/);
-      else assert.doesNotMatch(opts.prompt, /END-0/);
-      return complete;
-    };
-    try {
-      await savePrivate(path.join(dir, "runs", o.run.id + ".json"), {generation: 1, phase: "ready", pid: null, progress: {...progress(), masterSessionId: null, children}});
-      await executeRun(o);
-      const view = JSON.parse(await readFile(path.join(dir, "runs", o.run.id + ".context.json.view.json"), "utf8"));
-      assert.equal(view.reason, changeFeedback ? "evidence_changed" : "selected");
-      assert.equal(calls, 1);
-      assert.equal(last!.children.length, 3, "selection cannot replay or remove executions");
-      if (changeFeedback) assert.ok(last!.reviewedMessageIds!.includes(messages.at(-1)!.id));
-      assert.ok(((await stat(path.join(dir, "runs", o.run.id + ".context.json.index.json"))).mode & 0o077) === 0);
-      const followup = {id: randomUUID(), role: "user" as const, text: "Continue within scope", at: Date.now()};
-      o.latestMessages = () => [...messages, followup];
-      o.turn = async opts => { turns++; assert.equal(opts.sessionId, "context-master"); return complete; };
-      await executeRun({...o, run: {...o.run, generation: 2, progress: last!, messages: [...messages, followup]}});
-      assert.equal(calls, 1, "ordinary continuation does not call Jev");
-      assert.equal(turns, 2);
-    } finally { await rm(dir, {recursive: true, force: true}); }
-  }
-});
-
-test("conversation selection failures persist the same safe diagnostic that the runner logs", async (t) => {
-  const dir = await fixture(), o = engineOptions(dir), lines: string[] = [];
-  t.mock.method(console, "warn", (line: string) => lines.push(line));
-  const children: Child[] = Array.from({length: 3}, () => ({id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "read", cwd: dir, branch: "owned", sessionId: randomUUID(), state: "completed", evidence: [], result}));
-  o.contextSelector = {mode: "select", key: async () => "private-key", fetch: async () => {throw new DOMException("private timeout", "TimeoutError");}};
-  o.turn = async opts => {await opts.onSession(randomUUID()); return complete;};
+test("a fresh coordinator is rebuilt without a model call and leaves a private index; a follow-up resumes its session", async () => {
+  const dir = await fixture(), o = engineOptions(dir);
+  let calls = 0, turns = 0, last: Progress | undefined;
+  const messages = structuredClone(o.run.messages);
+  const children: Child[] = Array.from({length: 3}, (_, i) => ({
+    id: randomUUID(), projectId: o.projects[0].id, agent: "claude", mode: "read", cwd: dir,
+    branch: "owned", sessionId: randomUUID(), state: "completed", evidence: ["Synthetic observed version"],
+    result: {...result, summary: `Report ${i}: ${"historical detail ".repeat(30)} END-${i}`},
+  }));
+  o.latestMessages = () => messages;
+  o.contextSelector = {mode: "select", key: async () => "test-key", fetch: async () => {
+    calls++;
+    return Response.json({model: JEV_MODEL, answers: {}, usage: {input_tokens: 0, output_tokens: 0}});
+  }};
+  o.report = async p => { last = structuredClone(p); };
+  o.turn = async opts => {
+    turns++;
+    assert.equal(opts.readOnly, true);
+    await opts.onSession(opts.sessionId ?? "context-master");
+    assert.match(opts.prompt, /\.index\.json \(version [a-f0-9]{64}\) lists its messages and the helpers/);
+    assert.match(opts.prompt, /Report 0:/, "every helper is one line");
+    assert.doesNotMatch(opts.prompt, /END-0/, "no report is replayed");
+    return complete;
+  };
   try {
     await savePrivate(path.join(dir, "runs", o.run.id + ".json"), {generation: 1, phase: "ready", pid: null, progress: {...progress(), masterSessionId: null, children}});
     await executeRun(o);
-    const file = path.join(dir, "runs", o.run.id + ".context.json.view.json");
-    const receipt = JSON.parse(await readFile(file, "utf8"));
-    const failure = lines.map(line => JSON.parse(line)).find(x => x.contextTrigger === "coordinator-rotation");
-    assert.equal(receipt.strategy, "baseline");
-    assert.equal(receipt.failure.kind, "timeout");
-    assert.equal(failure.runId, o.run.id);
-    assert.deepEqual(failure.contextFailure, receipt.failure);
-    assert.equal((await stat(file)).mode & 0o077, 0);
-    assert.doesNotMatch(JSON.stringify(failure), /private timeout|private-key/);
-  } finally {await rm(dir, {recursive: true, force: true});}
+    const index = JSON.parse(await readFile(path.join(dir, "runs", o.run.id + ".context.json.index.json"), "utf8"));
+    assert.equal(calls, 0, "a handover is rebuilt by fixed rules, not judged");
+    assert.deepEqual(index.children.map((c: Child) => c.id), children.map(c => c.id));
+    assert.equal(index.journal, path.join(dir, "runs", o.run.id + ".json"));
+    assert.equal(last!.children.length, 3, "a handover cannot replay or remove executions");
+    assert.ok(((await stat(path.join(dir, "runs", o.run.id + ".context.json.index.json"))).mode & 0o077) === 0);
+    const followup = {id: randomUUID(), role: "user" as const, text: "Continue within scope", at: Date.now()};
+    o.latestMessages = () => [...messages, followup];
+    o.turn = async opts => { turns++; assert.equal(opts.sessionId, "context-master"); return complete; };
+    await executeRun({...o, run: {...o.run, generation: 2, progress: last!, messages: [...messages, followup]}});
+    assert.equal(calls, 0);
+    assert.equal(turns, 2);
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
 // A run's coordinator reviews, oldest first.

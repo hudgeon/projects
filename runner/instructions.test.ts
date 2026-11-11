@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { browserInstructions, connectorInstructions, helperInstructions, mailboxFor, progressInstructions, requesterInstructions, responseInstructions, workInstructions } from "./instructions";
+import { browserInstructions, connectorInstructions, helperInstructions, mailboxFor, progressInstructions, requesterInstructions, responseInstructions } from "./instructions";
+import { workInstructions } from "./work-instructions";
 import { masterInstructions } from "./master-instructions";
 
 const owner = { email: "owner@example.com", name: "Owner" };

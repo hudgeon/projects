@@ -6,10 +6,14 @@ import {
   contextConversation,
   contextConfigSchema,
   contextVersion,
+  EVIDENCE_CHAR_LIMIT,
+  HANDOVER_CHAR_LIMIT,
   JEV_MODEL,
   JEV_INPUT_COST_PER_TOKEN,
+  judgeContext,
   keptKey,
-  selectContext,
+  rebuildContext,
+  type Selector,
 } from "../runner/context";
 import type { Child, RunMessage } from "../src/run-model";
 import { subprocessEnv } from "../collector/collect";
@@ -63,52 +67,109 @@ const responder =
     };
     return Response.json(change ? change(body) : body);
   };
+// One bounded request of seven questions over the shared transport.
+const COUNT = 7;
+const judge = (selector: Selector, extra: { cached?: unknown; signal?: AbortSignal; state?: unknown } = {}) =>
+  judgeContext({
+    version: "v1",
+    state: extra.state ?? { task: "Fixture task", instructions: fixture().messages.filter((m) => m.role === "user").map((m) => m.text) },
+    questions: Object.fromEntries(
+      Array.from({ length: COUNT }, (_, i) => [`keep_${i}`, { type: "noul", instructions: `Keep candidate ${i}?` }]),
+    ),
+    count: COUNT,
+    signal: extra.signal ?? new AbortController().signal,
+    selector,
+    cached: extra.cached,
+    trigger: "project-turn",
+  });
 
-test("gateway selection reports priced usage without logging or caching conversation payloads", async () => {
+test("a handover is rebuilt by fixed rules: the request, the newest user messages, the proposals they answered and one line per helper", () => {
+  const f = fixture();
+  const view = rebuildContext(f.messages, f.children);
+  assert.deepEqual(view.conversation, contextConversation(f.messages));
+  assert.deepEqual(view.conversation.userInstructions, [f.messages[0], f.messages[2]]);
+  assert.deepEqual(view.conversation.latestReportedPosition, f.messages[3]);
+  // The approval's proposal travels with it, verbatim; a reply that no user
+  // message answered is not replayed.
+  assert.deepEqual(view.approvalContext, [f.messages[1]]);
+  assert.equal(view.omittedProposals, 0);
+  assert.equal(view.version, contextVersion(f.messages, f.children));
+  const children = JSON.parse(view.children) as { index: string[]; latest: unknown[] };
+  assert.equal(children.index.length, 8);
+  assert.deepEqual(children.latest, [], "no report is replayed; the journal keeps them");
+  assert.equal(view.children, childContext(f.children));
+  assert.equal(view.sources.length, f.messages.length);
+  assert.deepEqual(view.childSources.map((c) => c.id), f.children.map((c) => c.id));
+  assert.doesNotMatch(JSON.stringify(view), /A claimed check/, "a report's checks come only from the journal");
+});
+
+test("a long history keeps the first request and the newest messages within the handover budget, and counts what it omits", () => {
+  const messages: RunMessage[] = [message("user", "The original request.")];
+  for (let i = 0; i < 40; i++) {
+    messages.push(message("master", `PROPOSAL-${i} ${"evidence ".repeat(1_500)}`));
+    messages.push(message("user", `APPROVAL-${i} ${"detail ".repeat(100)}`));
+  }
+  const view = rebuildContext(messages, []);
+  const kept = view.conversation.userInstructions;
+  assert.equal(kept[0].text, "The original request.");
+  assert.equal(kept.at(-1)!.text, messages.at(-1)!.text, "the newest message is always kept");
+  assert.ok(kept.slice(1).reduce((n, m) => n + m.text.length, 0) <= HANDOVER_CHAR_LIMIT);
+  assert.ok(view.conversation.omittedUserInstructions > 0);
+  assert.equal(kept.length + view.conversation.omittedUserInstructions, 41);
+  // Every kept approval's proposal is verbatim, newest first within the
+  // evidence budget; the rest are counted, never shortened.
+  const proposals = view.approvalContext;
+  assert.ok(proposals.length > 0);
+  assert.ok(proposals.every((p) => p.text.length > 10_000));
+  assert.ok(proposals.reduce((n, m) => n + m.text.length, 0) <= EVIDENCE_CHAR_LIMIT);
+  assert.equal(proposals.at(-1)!.text.split(" ")[0], "PROPOSAL-39");
+  assert.equal(proposals.length + view.omittedProposals, kept.length - 1);
+  assert.equal(view.children, "none");
+});
+
+test("gateway requests report priced usage without logging or caching payloads", async () => {
   const gateway = { accountId: "a".repeat(32), gatewayId: "example-gateway" };
   const parsed = contextConfigSchema.parse({ mode: "select", gateway });
   let calls = 0;
-  const view = await selectContext({
-    ...fixture(),
-    selector: {
-      mode: parsed.mode,
-      gateway: parsed.gateway,
-      key: async () => "test-key",
-      fetch: async (url, init) => {
-        calls++;
-        assert.equal(
-          url,
-          `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`,
-        );
-        assert.equal(init?.redirect, "error");
-        const headers = new Headers(init?.headers);
-        assert.equal(headers.get("authorization"), "Bearer test-key");
-        assert.equal(headers.get("cf-aig-collect-log"), "true");
-        assert.equal(headers.get("cf-aig-collect-log-payload"), "false");
-        assert.equal(headers.get("cf-aig-skip-cache"), "true");
-        assert.equal(headers.get("cf-aig-max-attempts"), "1");
-        assert.equal(headers.get("cf-aig-no-wholesale"), "true");
-        assert.deepEqual(JSON.parse(headers.get("cf-aig-custom-cost")!), {
-          per_token_in: JEV_INPUT_COST_PER_TOKEN,
-          per_token_out: 0,
-        });
-        assert.equal(JEV_INPUT_COST_PER_TOKEN, 0.000000042);
-        const metadata = JSON.parse(headers.get("cf-aig-metadata")!);
-        assert.match(metadata.selectionId, /^[a-f0-9-]{36}$/);
-        assert.deepEqual(metadata, {
-          process: "context-selection",
-          trigger: "coordinator-rotation",
-          worker: "projects-runner",
-          model: JEV_MODEL,
-          selectionId: metadata.selectionId,
-        });
-        return responder(Array(7).fill(0.5))(url, init);
-      },
+  const result = await judge({
+    mode: parsed.mode,
+    gateway: parsed.gateway,
+    key: async () => "test-key",
+    fetch: async (url, init) => {
+      calls++;
+      assert.equal(
+        url,
+        `https://gateway.ai.cloudflare.com/v1/${gateway.accountId}/${gateway.gatewayId}/custom-typesafe/v1/systemone`,
+      );
+      assert.equal(init?.redirect, "error");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer test-key");
+      assert.equal(headers.get("cf-aig-collect-log"), "true");
+      assert.equal(headers.get("cf-aig-collect-log-payload"), "false");
+      assert.equal(headers.get("cf-aig-skip-cache"), "true");
+      assert.equal(headers.get("cf-aig-max-attempts"), "1");
+      assert.equal(headers.get("cf-aig-no-wholesale"), "true");
+      assert.deepEqual(JSON.parse(headers.get("cf-aig-custom-cost")!), {
+        per_token_in: JEV_INPUT_COST_PER_TOKEN,
+        per_token_out: 0,
+      });
+      assert.equal(JEV_INPUT_COST_PER_TOKEN, 0.000000042);
+      const metadata = JSON.parse(headers.get("cf-aig-metadata")!);
+      assert.match(metadata.selectionId, /^[a-f0-9-]{36}$/);
+      assert.deepEqual(metadata, {
+        process: "context-selection",
+        trigger: "project-turn",
+        worker: "projects-runner",
+        model: JEV_MODEL,
+        selectionId: metadata.selectionId,
+      });
+      return responder(Array(COUNT).fill(0.5))(url, init);
     },
   });
-  assert.equal(view.strategy, "select");
-  assert.equal(view.record?.transport, "gateway");
-  assert.equal(view.record?.inputTokens, 100);
+  assert.equal(result.reason, null);
+  assert.equal(result.record?.transport, "gateway");
+  assert.equal(result.record?.inputTokens, 100);
+  assert.equal(result.cached, false);
   assert.equal(calls, 1);
 });
 
@@ -157,35 +218,32 @@ test("failure diagnostics distinguish bounded nested transport causes without re
   ]) {
     let calls = 0,
       selectionId: string | undefined;
-    const view = await selectContext({
-      ...fixture(),
-      selector: {
-        mode: "select",
-        gateway: { accountId: "a".repeat(32), gatewayId: "example" },
-        key: async () => "private-key",
-        fetch: async (_url, init) => {
-          calls++;
-          selectionId = JSON.parse(
-            new Headers(init?.headers).get("cf-aig-metadata")!,
-          ).selectionId;
-          throw error;
-        },
+    const result = await judge({
+      mode: "select",
+      gateway: { accountId: "a".repeat(32), gatewayId: "example" },
+      key: async () => "private-key",
+      fetch: async (_url, init) => {
+        calls++;
+        selectionId = JSON.parse(
+          new Headers(init?.headers).get("cf-aig-metadata")!,
+        ).selectionId;
+        throw error;
       },
     });
-    assert.equal(view.strategy, "baseline");
-    assert.equal(view.reason, "service_failed");
-    assert.equal(view.failure?.selectionId, selectionId);
-    assert.equal(view.failure?.kind, kind);
-    assert.equal(view.failure?.errorCode, code);
-    assert.equal(view.failure?.stage, "request");
-    assert.equal(view.failure?.transport, "gateway");
-    assert.equal(view.failure?.timeoutMs, 8000);
-    assert.ok(view.failure!.requestBytes > 0);
-    assert.equal(view.failure?.candidateCount, 7);
-    assert.ok(view.failure!.durationMs >= view.failure!.stageDurationMs);
+    assert.equal(result.record, undefined);
+    assert.equal(result.reason, "service_failed");
+    assert.equal(result.failure?.selectionId, selectionId);
+    assert.equal(result.failure?.kind, kind);
+    assert.equal(result.failure?.errorCode, code);
+    assert.equal(result.failure?.stage, "request");
+    assert.equal(result.failure?.transport, "gateway");
+    assert.equal(result.failure?.timeoutMs, 8000);
+    assert.ok(result.failure!.requestBytes > 0);
+    assert.equal(result.failure?.candidateCount, COUNT);
+    assert.ok(result.failure!.durationMs >= result.failure!.stageDurationMs);
     assert.equal(calls, 1);
     assert.doesNotMatch(
-      JSON.stringify(view.failure),
+      JSON.stringify(result.failure),
       /private|cause|stack|message|https?:/,
     );
   }
@@ -257,43 +315,37 @@ test("HTTP and response diagnostics retain only validated correlation IDs and di
     },
   ];
   for (const [i, c] of cases.entries()) {
-    const view = await selectContext({
-      ...fixture(),
-      selector: {
-        mode: "select",
-        key: async () => "private-key",
-        fetch: c.fetch,
-      },
+    const result = await judge({
+      mode: "select",
+      key: async () => "private-key",
+      fetch: c.fetch,
     });
-    assert.equal(view.failure?.kind, c.kind);
-    assert.equal(view.failure?.stage, c.stage);
-    assert.equal(view.failure?.status, c.status);
-    assert.equal(view.failure?.gatewayLogId, i === 0 ? id : undefined);
+    assert.equal(result.failure?.kind, c.kind);
+    assert.equal(result.failure?.stage, c.stage);
+    assert.equal(result.failure?.status, c.status);
+    assert.equal(result.failure?.gatewayLogId, i === 0 ? id : undefined);
     assert.equal(
-      view.failure?.providerRequestId,
+      result.failure?.providerRequestId,
       i === 0 ? providerId : undefined,
     );
     assert.equal(
-      view.failure?.cfRay,
+      result.failure?.cfRay,
       i === 0 ? "abcdef0123456789-SYD" : undefined,
     );
     assert.doesNotMatch(
-      JSON.stringify(view.failure),
+      JSON.stringify(result.failure),
       /private|body stream|schema input/,
     );
   }
   let calls = 0;
-  const missingKey = await selectContext({
-    ...fixture(),
-    selector: {
-      mode: "select",
-      key: async () => {
-        throw Error("private credential failure");
-      },
-      fetch: async () => {
-        calls++;
-        throw Error("must not fetch");
-      },
+  const missingKey = await judge({
+    mode: "select",
+    key: async () => {
+      throw Error("private credential failure");
+    },
+    fetch: async () => {
+      calls++;
+      throw Error("must not fetch");
     },
   });
   assert.equal(missingKey.failure?.stage, "key");
@@ -301,26 +353,82 @@ test("HTTP and response diagnostics retain only validated correlation IDs and di
   assert.equal(calls, 0);
 });
 
-test("a failed gateway retains baseline context without an unreported direct retry", async () => {
-  const f = fixture();
+test("a failed gateway is reported without an unreported direct retry; off never fetches a key", async () => {
   const calls: string[] = [];
-  const view = await selectContext({
-    ...f,
-    selector: {
-      mode: "select",
-      gateway: { accountId: "b".repeat(32), gatewayId: "example-gateway" },
-      key: async () => "test-key",
-      fetch: async (url) => {
-        calls.push(String(url));
-        return new Response(null, { status: 503 });
-      },
+  const result = await judge({
+    mode: "select",
+    gateway: { accountId: "b".repeat(32), gatewayId: "example-gateway" },
+    key: async () => "test-key",
+    fetch: async (url) => {
+      calls.push(String(url));
+      return new Response(null, { status: 503 });
     },
   });
-  assert.equal(view.strategy, "baseline");
-  assert.equal(view.reason, "http_error");
-  assert.equal(view.children, childContext(f.children, 6));
+  assert.equal(result.record, undefined);
+  assert.equal(result.reason, "http_error");
   assert.equal(calls.length, 1);
   assert.ok(calls[0].startsWith("https://gateway.ai.cloudflare.com/"));
+  const off = await judge({
+    mode: "off",
+    key: async () => {
+      throw Error("must not read key");
+    },
+  });
+  assert.equal(off.reason, "disabled");
+  assert.equal(off.failure, undefined);
+});
+
+test("exact versions cache judgments; a cached record for other questions is not reused", async () => {
+  let calls = 0;
+  const selector: Selector = {
+    mode: "select",
+    key: async () => "test-key",
+    fetch: (async (...args) => {
+      calls++;
+      return responder(Array(COUNT).fill(0.5))(...args);
+    }) as typeof fetch,
+  };
+  const first = await judge(selector);
+  const second = await judge(selector, { cached: first.record });
+  assert.equal(calls, 1);
+  assert.equal(second.cached, true);
+  assert.deepEqual(second.record, first.record);
+  const other = await judge(selector, { cached: { ...first.record, version: "v2" } });
+  assert.equal(calls, 2);
+  assert.equal(other.cached, false);
+  const fewer = await judge(selector, { cached: { ...first.record, probabilities: { keep_0: 0.5 } } });
+  assert.equal(calls, 3);
+  assert.equal(fewer.cached, false);
+});
+
+test("an oversized request is never silently shortened; cancellation stops the judgment", async () => {
+  const large = await judge(
+    {
+      mode: "select",
+      key: async () => {
+        throw Error("must not read key");
+      },
+    },
+    { state: { text: "A".repeat(40_000) } },
+  );
+  assert.equal(large.reason, "request_too_large");
+  assert.equal(large.failure?.stage, "prepare");
+  assert.equal(large.failure?.kind, "request_too_large");
+  const controller = new AbortController();
+  await assert.rejects(
+    judge(
+      {
+        mode: "select",
+        key: async () => "test-key",
+        fetch: async () => {
+          controller.abort();
+          throw Error("cancelled");
+        },
+      },
+      { signal: controller.signal },
+    ),
+    /abort/i,
+  );
 });
 
 test("gateway configuration accepts identifiers rather than arbitrary upstream URLs", () => {
@@ -350,207 +458,6 @@ test("gateway configuration accepts identifiers rather than arbitrary upstream U
       contextConfigSchema.safeParse({ mode: "select", gateway }).success,
       false,
     );
-});
-
-test("semantic selection cannot remove instructions, approval proposals, current or uncertain execution", async () => {
-  const f = fixture();
-  f.children[2].state = "unknown";
-  const view = await selectContext({
-    ...f,
-    selector: {
-      mode: "select",
-      key: async () => "test-key",
-      fetch: responder([0, 0, 0, 0, 0, 0]),
-    },
-  });
-  assert.equal(view.strategy, "select");
-  assert.deepEqual(view.conversation, contextConversation(f.messages));
-  assert.deepEqual(view.approvalContext, [f.messages[1]]);
-  const children = JSON.parse(view.children);
-  assert.deepEqual(
-    children.index,
-    f.children.map((c) => `${c.id} · example/project · codex change · ${c.state} · owned · A historical report`),
-    "every execution keeps its line",
-  );
-  assert.deepEqual(
-    children.retained.map((c: Child) => c.id),
-    [f.children[2].id, f.children[7].id],
-  );
-  assert.equal(view.childSources.length, 8);
-});
-
-test("older useful and uncertain evidence stays verbatim; only optional clear negatives are omitted", async () => {
-  const f = fixture();
-  const view = await selectContext({
-    ...f,
-    selector: {
-      mode: "select",
-      key: async () => "test-key",
-      fetch: responder([0.99, 0.5, 0.05, 0, 0, 0, 0]),
-    },
-  });
-  const children = JSON.parse(view.children);
-  assert.deepEqual(
-    children.retained.map((c: Child) => [c.id, c.result, c.evidence]),
-    [f.children[0], f.children[1], f.children[7]].map((c) => [c.id, c.result, c.evidence]),
-  );
-  assert.equal(view.selected, 2);
-  assert.equal(view.omitted, 5);
-});
-
-test("off and shadow modes preserve deterministic evidence; off never fetches a key", async () => {
-  const f = fixture();
-  const off = await selectContext({
-    ...f,
-    selector: {
-      mode: "off",
-      key: async () => {
-        throw Error("must not read key");
-      },
-    },
-  });
-  const shadow = await selectContext({
-    ...f,
-    selector: {
-      mode: "shadow",
-      key: async () => "test-key",
-      fetch: responder(Array(7).fill(0)),
-    },
-  });
-  assert.equal(off.children, childContext(f.children, 6));
-  assert.equal(shadow.children, off.children);
-  assert.equal(shadow.strategy, "shadow");
-});
-
-test("incomplete, malformed, wrong-model, HTTP and service failures preserve baseline sources", async () => {
-  const f = fixture();
-  const fetches: (typeof fetch)[] = [
-    responder([0]),
-    responder(Array(7).fill(0), (b) => ({ ...b, model: "jev-latest" })),
-    responder(Array(7).fill(0), (b) => ({
-      ...b,
-      answers: { keep_0: { type: "noul", noul: 2 } },
-    })),
-    async () => new Response("private upstream error", { status: 429 }),
-    async () => {
-      throw Error("private upstream error");
-    },
-  ];
-  for (const fetch of fetches) {
-    const view = await selectContext({
-      ...f,
-      selector: { mode: "select", key: async () => "test-key", fetch },
-    });
-    assert.equal(view.strategy, "baseline");
-    assert.equal(view.children, childContext(f.children, 6));
-    assert.equal(view.sources.length, f.messages.length);
-    assert.doesNotMatch(JSON.stringify(view), /test-key|private upstream/);
-  }
-});
-
-test("exact evidence versions cache judgments and invalidate on corrections or changed execution evidence", async () => {
-  const f = fixture();
-  let calls = 0;
-  const selector = {
-    mode: "select" as const,
-    key: async () => "test-key",
-    fetch: (async (...args) => {
-      calls++;
-      return responder(Array(7).fill(0.5))(...args);
-    }) as typeof fetch,
-  };
-  const first = await selectContext({ ...f, selector });
-  const second = await selectContext({ ...f, selector, cached: first.record });
-  assert.equal(calls, 1);
-  assert.equal(second.cached, true);
-  f.messages.push(
-    message("user", "Correction: keep the draft pending review."),
-  );
-  await selectContext({ ...f, selector, cached: first.record });
-  assert.equal(calls, 2);
-  f.children[0].evidence = ["Version b is observed"];
-  assert.notEqual(contextVersion(f.messages, f.children), first.version);
-  await selectContext({ ...f, selector, cached: first.record });
-  assert.equal(calls, 3);
-});
-
-test("oversized context is never silently shortened for Jev; cancellation prevents selection", async () => {
-  const f = fixture();
-  f.messages[0].text = "A".repeat(40_000);
-  const large = await selectContext({
-    ...f,
-    selector: {
-      mode: "select",
-      key: async () => {
-        throw Error("must not read key");
-      },
-    },
-  });
-  assert.equal(large.reason, "request_too_large");
-  assert.equal(large.failure?.stage, "prepare");
-  assert.equal(large.failure?.kind, "request_too_large");
-  assert.equal(large.sources.length, f.messages.length);
-  const controller = new AbortController();
-  await assert.rejects(
-    selectContext({
-      ...fixture(),
-      signal: controller.signal,
-      selector: {
-        mode: "select",
-        key: async () => "test-key",
-        fetch: async () => {
-          controller.abort();
-          throw Error("cancelled");
-        },
-      },
-    }),
-    /abort/i,
-  );
-});
-
-test("source text is data, question instructions identify candidates without relying on question IDs", async () => {
-  const f = fixture();
-  const view = await selectContext({
-    ...f,
-    selector: {
-      mode: "select",
-      key: async () => "test-key",
-      fetch: async (url, init) => {
-        assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-        assert.equal(init?.redirect, "error");
-        const body = JSON.parse(init!.body as string);
-        assert.match(body.questions.keep_0.instructions, /candidates\[0\]/);
-        assert.deepEqual(
-          body.state.instructions.map((m: RunMessage) => m.text),
-          [f.messages[0].text, "Yes"],
-        );
-        assert.doesNotMatch(JSON.stringify(body), /test-key|\/tmp\/owned/);
-        return responder(Array(7).fill(0.5))(url, init);
-      },
-    },
-  });
-  assert.equal(view.strategy, "select");
-});
-
-test("conversation evidence can be selected before any helper has run", async () => {
-  const messages = [
-    message("user", "Inspect the saved draft"),
-    message("master", "An earlier observation"),
-    message("master", "Latest position"),
-  ];
-  const view = await selectContext({
-    messages,
-    children: [],
-    signal: new AbortController().signal,
-    selector: {
-      mode: "select",
-      key: async () => "test-key",
-      fetch: responder([0.5]),
-    },
-  });
-  assert.equal(view.strategy, "select");
-  assert.equal(view.supportingEvidence.length, 1);
-  assert.equal(view.children, "none");
 });
 
 test("selector credentials never enter helper or collector subprocess environments", () => {

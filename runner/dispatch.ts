@@ -7,6 +7,7 @@ import { git, UnsavedWorkspace } from "./workspaces";
 import { clip } from "../src/run-text";
 import { connectorAccess } from "./connectors";
 import { helperInstructions, requesterInstructions } from "./instructions";
+import { workInstructions, workReadInstructions } from "./work-instructions";
 import { HELPER_FAILURES } from "./turn-limits";
 import type { Execution } from "./execution";
 import type { Journal } from "./journal";
@@ -176,7 +177,9 @@ export async function dispatch(
             requesterInstructions(o.person, o.inboxes).trim(),
             pictured.length ? `The attached screenshots are user-provided evidence, ordered by these messages: ${JSON.stringify(pictured.map((message) => ({ at: message.at, text: clip(message.text, 600), screenshots: message.screenshots!.map((image) => image.id) })))}` : "",
           ].filter(Boolean).join("\n\n")}`,
-          rules: `${assignmentRules}\n\n${helperInstructions(task.agent, o.fullAccess, o.person)}${workContext ? `\n\n${workContext}` : ""}`,
+          // The record rules go where records may be written; a read helper
+          // hears where the work is recorded.
+          rules: `${assignmentRules}\n\n${helperInstructions(task.agent, o.fullAccess, o.person)}${workContext ? `\n\n${(task.mode === "change" ? workInstructions : workReadInstructions)(o.workRepo, o.run.workIssue, o.person)}` : ""}`,
           schema: outputSchema(childResultSchema),
           readOnly: task.mode === "read",
           // An upkeep read child researches the harnesses on their official

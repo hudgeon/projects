@@ -287,7 +287,7 @@ const logFieldsSchema = telemetryFieldsSchema.extend({
   supportPreviewPhase: z.enum(["poll", "native", "finish"]).optional(),
   admission: z.enum(["open", "paused"]).optional(),
   memoryPressure: z.enum(["normal", "warning", "critical", "unknown", "unsupported"]).optional(),
-  contextTrigger: z.enum(["coordinator-rotation", "project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
+  contextTrigger: z.enum(["project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
   contextFailure: contextFailureSchema.optional(),
   // The key path a runner's config failed on, never a value: identifier
   // segments joined by dots, "*" for a segment the owner chose, or a

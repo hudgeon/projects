@@ -115,6 +115,7 @@ collector and runner, written by `scripts/install-machine.mjs`:
 | `collectorTokenFile`, `tokenFile` | Owner-only files holding the two tokens, for a machine without `doppler`. With `doppler` and neither file, the tokens come from that config. |
 | `workRepo` | Optional: the repository whose issues labelled `work` are work items. |
 | `configRepo` | Optional: the shared configuration repository (global agent rules, skills, hooks) that [upkeep](docs/upkeep.md) changes go to, when it is also a registered project. |
+| `masterCwd` | Optional: where coordinators run (default `root`); the `configRepo` checkout puts them in the home ([self-host](docs/self-host.md)). |
 | `inboxAccount`, `inboxAccounts` | Optional: the owner's Gmail account (the machine's default `gws` sign-in) and other people's: `{account}` read by delegation (the Workspace service account key in `doppler`), or `{account, configDir}` with their own `gws` sign-in. |
 | `helpers` | Optional: `localServers` (local MCP servers Claude helpers may use) and `deniedTools` (tools to hide from them). |
 | `doppler` | Optional: a Doppler `project`/`config` holding `COLLECTOR_TOKEN`, `RUNNER_TOKEN` and, optionally, a read-only GitHub App and `GMAIL_DELEGATION_KEY`, read with the read-only service token in `doppler-token` (mode 600). The collector gets only its own token and the App's secrets; the runner reads its token once at start and keeps it out of every environment. |
@@ -150,8 +151,10 @@ change nothing. Implementation goes straight to one change child, which
 investigates as part of the work. A follow-up reuses its worktree; its session
 continues only while it is small, and a review of a change always gets a fresh
 one, which starts from the earlier report. Child results resume the same
-master, sent only what is new: a report's summary and pointers. Grown
-large, it hands over to a fresh master with a full brief. Native agents use their
+master, sent only what is new: a report's summary and pointers. It hands over
+to a fresh master past about 150,000 tokens, or past half that at the next
+boundary: a helper's pull request merged or the linked work issue's position
+changed. A changed folder starts it afresh. Native agents use their
 existing sign-ins; there is no hosted agent runtime or inbound tunnel. The
 claim names whose conversation it is: agents address them by name, helpers'
 commits are authored as them (pushed with the machine's login), and PRs and
@@ -165,22 +168,19 @@ running work is never interrupted. It can also set `task.freshSession: true`
 to give a helper a fresh session in the same owned worktree. Small direct
 revisions can continue their existing session.
 
-A fresh master receives your original instructions and corrections,
-the latest reported position and the existing child evidence, never a replay
-of every earlier agent answer. Reports remain claims to verify; user authority
-is preserved separately. The exact exchange stays in a private local context
-file: a short approval is checked against the original request, not guessed
-from a handoff. Helper briefs carry the
-current objective, applicable constraints and approvals, source evidence, open
+A fresh master is rebuilt, never replayed: your first request and newest
+messages, each agent proposal one of them answered (verbatim, never fresh
+authority), the latest reported position, one line per helper, and the linked
+work issue's Current position with the plan the project review names. Reports
+remain claims to verify; user authority is preserved separately. The exact
+exchange stays in a private local context file, indexed: a short approval is
+checked against the original request, not guessed from a handoff. Helper
+briefs carry the objective, constraints and approvals, evidence, open
 questions and acceptance checks. It follows
-[Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time),
-keeping saved work, approvals and recovery journals.
+[Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time).
 
-Optional Jev context selection (off by default) runs in the conversation's
-executor: it trims older detail from fresh coordinator handovers and ranks
-project evidence before each coordinator, helper and recovery turn.
-[docs/context-selection.md](docs/context-selection.md) covers its modes, key,
-gateway, diagnostics, retrieval, caching and validation.
+Optional Jev project review (off by default) ranks project evidence before
+each turn: [docs/context-selection.md](docs/context-selection.md).
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.
@@ -233,11 +233,9 @@ or verification. Repository instructions own setup, checks and delivery.
   capacity with other sessions.
 - **Bounds**: ten active standard, thirty quick and two upkeep conversations, 30 and
   60 starts an hour, 120 follow-ups per person per hour, 24 children per conversation, 12 master
-  decisions a turn. At a safe native turn boundary the coordinator rotates when
-  reported context exceeds 250,000 tokens or recorded prompt input reaches
-  128,000 characters (including when native usage is unavailable). The chat,
-  machine claim, children and worktrees remain the same, and rotation resets
-  session context, not cumulative usage.
+  decisions a turn. The coordinator rotates as above, or when recorded prompt
+  input reaches 128,000 characters (no native usage), at a safe native
+  turn boundary; the chat, claim, children and worktrees stay.
 
 Permissions: a Codex change child uses a named permission profile for its
 worktree and Git directories, with network access and no interactive

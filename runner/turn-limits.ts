@@ -111,8 +111,15 @@ export const UNAVAILABLE: ReadonlySet<string> = new Set([
 ]);
 export const MASTER_INPUT_CHAR_LIMIT = 128_000;
 // A coordinator session whose latest request passed this many tokens hands
-// over to a fresh one with the full brief.
-export const MASTER_CONTEXT_LIMIT = 250_000;
+// over to a fresh one, rebuilt from the linked work record, the plan, the
+// children index and the newest user messages.
+export const MASTER_CONTEXT_LIMIT = 150_000;
+// Past this share of either limit, a session hands over at the next boundary
+// the engine can see instead: a helper's pull request merged or the linked
+// work issue's position changed. A smaller session carries on past them: a
+// fresh brief costs more than resuming it. A changed folder always starts
+// the coordinator fresh there.
+export const MASTER_BOUNDARY_SHARE = 0.5;
 // Failures the runner gives back to the master in one turn before it stops
 // and tells the owner.
 export const HANDBACK_LIMIT = 3;

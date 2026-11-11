@@ -110,7 +110,7 @@ test("a resumed coordinator gets only what is new to it; a follow-up skips the u
     await executeRun(o);
     const [first, second] = calls.filter((c) => c.agent === "codex").map((c) => c.prompt);
     assert.match(first, /You are the user's Projects master/);
-    assert.match(first, /Current user conversation \(including any queued feedback\)/);
+    assert.match(first, /Current user conversation \(the first request and the newest user messages/);
     assert.match(second, /Nothing new in the conversation since your last decision\./);
     assert.doesNotMatch(second, /Current user conversation|You are the user's Projects master/);
     assert.doesNotMatch(second, /Active work \(check the timestamps/, "the same immutable snapshot is not resent");

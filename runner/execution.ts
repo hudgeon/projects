@@ -7,7 +7,7 @@ import type { InboxLogin } from "../collector/config";
 import type { NativeOptions, nativeProcessStopped } from "./native";
 import type { ProjectDirectory, liveChanges, prepareWorkspace, pruneSaved, saveWorkspace, workspaceEvidence } from "./workspaces";
 import type { ConnectorAccess } from "./connectors";
-import type { Selector, selectContext } from "./context";
+import type { Selector, rebuildContext } from "./context";
 import type { TURN_LIMITS } from "./turn-limits";
 import type { runChecks } from "./run-checks";
 import type { WATCH_LIMITS } from "./turn-watch";
@@ -78,8 +78,13 @@ export type RunState = {
   // The coordinator's app, or the one that took over coordinating.
   masterAgent: Agent;
   // What the coordinator's session was given: its brief and the messages it read.
-  coordinator: { sessionId: string; seen: string[]; brief: string; inputChars: number; through: number; activity?: Record<string, string> } | null;
-  contextPlan: Awaited<ReturnType<typeof selectContext>> | undefined;
+  coordinator: {
+    sessionId: string; seen: string[]; brief: string; inputChars: number; through: number; activity?: Record<string, string>;
+    // Where the session ran, the helpers it has seen merged and the work
+    // record it last saw: a change in any is a boundary it hands over at.
+    cwd?: string; merged?: string[]; work?: string;
+  } | null;
+  contextPlan: ReturnType<typeof rebuildContext> | undefined;
   // What the coordinator hears at its next turn.
   nextPrompt: string;
   dispatched: number;

@@ -1,9 +1,9 @@
 # Context selection
 
-Optional Jev context selection runs locally in the conversation's executor.
-Conversation-history selection runs when a fresh coordinator is about to start;
-project-context review is checked before each coordinator, helper and recovery
-turn. Set `context.mode` in the
+Optional Jev project review runs locally in the conversation's executor; it is
+checked before each coordinator, helper and recovery turn. A fresh
+coordinator's handover is rebuilt by code alone (below) and asks Jev nothing.
+Set `context.mode` in the
 machine config to `select`, `shadow` (evaluate without changing the prompt),
 or `off` (the default). The executor reads `JEV_API_KEY` from that machine's
 Doppler config through its existing read-only service token the first time it
@@ -19,17 +19,17 @@ For AI Gateway cost reporting, set `context.gateway` to an object with the
 deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.
 In that account, configure the custom provider with slug `typesafe` and base
 URL `https://api.typesafe.ai`. Requests use its native `/v1/systemone` path,
-tagged as process `context-selection`, trigger `coordinator-rotation` for
-conversation handovers, `project-turn` for project reviews or `project-replay`
-for their evaluation replays, and worker `projects-runner`. The pinned model's input-token rate is supplied as custom
+tagged as process `context-selection`, trigger `project-turn` for project
+reviews or `project-replay` for their evaluation replays, and worker
+`projects-runner`. The pinned model's input-token rate is supplied as custom
 pricing; output tokens are free. Payload logging, gateway caching and retries
 are disabled for these requests; usage/cost metadata remains available. The
 existing provider key stays in executor memory. If the gateway fails, context
 falls back to the deterministic view without retrying the provider directly.
 With no gateway configured, requests use the direct TypeSafe endpoint.
 
-Failed Jev selections retain a bounded `failure` diagnostic in the private
-project receipt or conversation `.view.json` and emit `jev_selection_failed`
+Failed Jev reviews retain a bounded `failure` diagnostic in the private
+project receipt and emit `jev_selection_failed`
 in the runner's structured logs. It distinguishes key access, request, response
 body and validation stages, with total/stage timings, the eight-second request
 deadline, request size, candidate count, HTTP status, and allowlisted network
@@ -42,24 +42,24 @@ prompts, source text, key values, URLs, raw exceptions or response bodies;
 unknown codes and malformed IDs are discarded. User cancellation still
 propagates without a misleading failure log or a fallback native turn.
 
-`runner/context.ts` owns the deterministic conversation view and shared Jev
+`runner/context.ts` owns the rebuilt handover and the shared Jev
 transport. `runner/project-context.ts` owns project review and its wiring into
 turns, `runner/project-judge.ts` the review's request shape (question, send
 order, batches), `runner/project-sources.ts` which files may be read and how,
 and `runner/project-units.ts` natural units and their ranking.
 
-For handovers, code retains exact original/recent user instructions, their preceding proposal
-exchanges when they fit, the latest position and one line for every child
-(who, where, its state and branch, the pull request or commit observed and its
-report's first sentence). Jev judges only optional older agent replies and
-completed child reports. A kept reply stays verbatim. A kept report is its
-summary and pointers (checks, links and what the runner observed): whole
-unless it passes about 2,000 tokens, then shortened with a pointer to the
-journal, which keeps every word. The latest child and unresolved children
-keep their reports. A probability never grants permission or
-proves delivery. Omitted instructions/proposals still require reading the
-exact source before acting; the selector never deletes a source or alters
-native session history.
+A handover is rebuilt by code alone: the exact first and newest user
+instructions within 8,000 characters, each agent reply one of them answered
+(verbatim, newest first within 24,000 characters), the latest reported
+position and one line for every child (who, where, its state and branch, the
+pull request or commit observed and its report's first sentence). The linked
+work issue's Current position and the plan it points to reach the fresh
+coordinator through the project review below. Earlier agent replies and
+helper reports are not replayed: the conversation's private context file and
+its index name every message and the journal that keeps every report. A kept
+proposal never grants permission or proves delivery. Omitted
+instructions/proposals still require reading the exact source before acting;
+the rebuild never deletes a source or alters native session history.
 
 A selected project's first turn has project evidence even with no conversation
 history. Before a coordinator turn the runner reviews the selected project (or
@@ -160,26 +160,16 @@ a prepared workspace survives an update without replaying work. Service or
 source failures retain deterministic evidence and retrieval pointers.
 Cancellation during review starts no native turn.
 
-Each handover keeps a private full source index and selection receipt beside
-the conversation's context file. They record a source-version hash, exact model,
-raw probabilities, usage, latency and transport; changed evidence invalidates cached
-judgments. The model is pinned to `jev-1.14.0`; optional handover detail is
-omitted only at relevance probability at most 0.05, validated on the synthetic
-evaluation. Requests are checked against the model's documented limits (64k
-tokens per request, 32k for the state with any one question), counting UTF-8
-bytes as an upper bound on tokens. An oversized request is never silently
-abridged. Missing credentials, invalid
-or incomplete answers, timeouts and service failures use the deterministic
-handover and preserve retrieval. Cancellation still stops the turn.
-
-To repeat the synthetic evaluation, inject the approved evaluation key as
-`API_KEY` or `TYPESAFE_API_KEY` and run
-`npm run context:evaluate -- --live`. Add `--machine` to use the machine's
-existing key and configured gateway. The command writes
-`.wip/jev-context-evaluation.json` with retained-evidence coverage, character counts, actual API input/output
-tokens and latency, and estimated cost at the documented model rate. These
-measurements do not establish production savings or native-agent accuracy;
-those need ordinary-use measurement. No customer history is used by this script.
+Each handover keeps a private index beside the conversation's context file:
+a source-version hash, its messages and helpers, and the journal that keeps
+every report. Project receipts record the exact model, raw probabilities,
+usage, latency and transport; changed evidence invalidates cached judgments.
+The model is pinned to `jev-1.14.0`. Requests are checked against the model's
+documented limits (64k tokens per request, 32k for the state with any one
+question), counting UTF-8 bytes as an upper bound on tokens. An oversized
+request is never silently abridged. Missing credentials, invalid or
+incomplete answers, timeouts and service failures keep the deterministic
+evidence and retrieval pointers. Cancellation still stops the turn.
 
 ## Quality loop
 

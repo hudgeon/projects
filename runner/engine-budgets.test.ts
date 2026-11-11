@@ -133,10 +133,14 @@ test("a conversation totals its coordinator's and each helper's tokens, and tele
 test("long conversation handovers bound prompt history and retain exact authority on disk", () => {
   const messages: RunMessage[] = Array.from({length: 80}, (_, i) => ({id: randomUUID(), role: "user", text: `${i}: ${"instruction ".repeat(700)}`, at: i}));
   const handoff = contextConversation(messages);
-  assert.equal(handoff.userInstructions[0], messages[0]);
-  assert.equal(handoff.userInstructions.at(-1), messages.at(-1));
-  assert.ok(handoff.omittedUserInstructions > 0);
-  assert.ok(handoff.userInstructions.reduce((n, m) => n + m.text.length, 0) <= HANDOVER_CHAR_LIMIT);
+  // The first request and the newest message are always kept, whatever
+  // their size; the budget bounds what comes between them.
+  assert.deepEqual(handoff.userInstructions, [messages[0], messages.at(-1)]);
+  assert.equal(handoff.omittedUserInstructions, 78);
+  const short = messages.map((m, i) => ({...m, text: `${i}: ${"word ".repeat(100)}`}));
+  const kept = contextConversation(short).userInstructions;
+  assert.ok(kept.length > 2 && kept.length < short.length);
+  assert.ok(kept.slice(1).reduce((n, m) => n + m.text.length, 0) <= HANDOVER_CHAR_LIMIT);
 });
 
 test("prompt budget rotates across follow-ups without usage reports or replaying children", async () => {
@@ -162,7 +166,8 @@ test("prompt budget rotates across follow-ups without usage reports or replaying
     const next = calls.filter(c => c.agent === "codex").at(-1)!;
     assert.equal(next.sessionId, undefined);
     assert.match(next.prompt, /Continue within the existing draft-only approval/);
-    assert.match(next.prompt, /Observed fixture HEAD/);
+    assert.match(next.prompt, new RegExp(`${before.children[0].id} · acme/test · claude read · completed`), "the helper is one line in the rebuilt brief");
+    assert.match(next.prompt, /a helper's pull request was merged|grew large/);
     assert.equal(calls.filter(c => c.agent === "claude").length, 1);
     assert.ok(reports.some(p => p.summary === "Continuing with earlier context."));
     assert.equal(reports.at(-1)!.children[0].sessionId, before.children[0].sessionId);
