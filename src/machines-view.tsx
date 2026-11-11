@@ -10,6 +10,7 @@ import {
   type Snapshot,
 } from "./model";
 import { api } from "./overview-query";
+import { Weight } from "./weight-view";
 import { frictionLine, frictionTotals, utcDate, type FrictionSnapshot } from "./friction-model";
 const labels: Record<HostHealth["verdict"], string> = {
   clean: "Clean",
@@ -312,6 +313,9 @@ export function Machines({
                     ? `Friction, 7 days: ${frictionLine(sevenDays(friction, now).counts, sevenDays(friction, now).sessions)}`
                     : `Friction: ${friction.message}`}
                 </p>
+              )}
+              {friction && (
+                <Weight friction={friction} stale={!health || health.stale} now={now} />
               )}
               <MachineControls
                 machine={machine}

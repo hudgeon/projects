@@ -11,11 +11,13 @@ import {
 } from "../src/friction-model";
 import { claudeRecord, emptyClaudeState, type ClaudeState } from "./friction-claude";
 import { codexRecord, emptyCodexState, type CodexState } from "./friction-codex";
+import { noteRoles, sessionWeight, weightFile, weightTotals } from "./friction-weight";
 import {
   frictionDirectory,
   pruneReceipts,
   RECEIPT_DAYS,
   readReceipts,
+  savePrivate,
   scanTranscripts,
   type Parser,
   type Receipt,
@@ -34,6 +36,7 @@ export const claudeParser: Parser<ClaudeState> = {
     client: s.client,
     firstAt: s.firstAt ?? null,
     lastAt: s.lastAt ?? null,
+    weight: sessionWeight(s),
   }),
 };
 export const codexParser: Parser<CodexState> = {
@@ -46,6 +49,7 @@ export const codexParser: Parser<CodexState> = {
     client: s.client,
     firstAt: s.firstAt ?? null,
     lastAt: s.lastAt ?? null,
+    weight: sessionWeight(s),
   }),
 };
 // Claude keeps one transcript per session as <project folder>/<session>.jsonl;
@@ -171,10 +175,14 @@ export async function collectFriction(
     /* Codex has not recorded a release check. */
   }
   const claude = kept.filter((r) => r.app === "Claude").length;
+  await noteRoles(dir, home, kept).catch(() => {});
+  const weight = weightTotals(kept, now);
+  await savePrivate(weightFile(dir), { observedAt: now, ...weight }).catch(() => {});
   return {
     observedAt: now,
     versions: frictionVersions(kept, codexLatest),
     days: frictionDays(kept, now),
+    weight,
     state: "ok",
     message: `Receipts for ${kept.length} sessions (${claude} Claude, ${kept.length - claude} Codex); ${updated} updated this scan${waiting ? `, ${waiting} waiting for the next` : ""}${failed ? `, ${failed} unreadable` : ""}.`,
   };

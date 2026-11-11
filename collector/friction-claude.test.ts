@@ -86,3 +86,19 @@ test("records that are not objects, or have no message, change nothing", () => {
   const { counts } = run([null, 3, "x", { type: "assistant" }, { type: "user", message: {} }]);
   assert.deepEqual(counts, emptyCounts());
 });
+test("a session's start is its first model call's context and its peak the largest, subagents apart", () => {
+  const call = (usage: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    type: "assistant",
+    message: { content: [], usage },
+    ...extra,
+  });
+  const { state } = run([
+    call({ input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }),
+    call({ input_tokens: 2, cache_creation_input_tokens: 43_000, cache_read_input_tokens: 45_000, output_tokens: 600 }),
+    call({ input_tokens: 5, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 150_000 }),
+    call({ input_tokens: 400_000 }, { isSidechain: true }),
+    call({ input_tokens: 10, cache_read_input_tokens: 30_000 }),
+  ]);
+  assert.deepEqual([state.start, state.peak], [88_002, 151_005]);
+  assert.equal(run([use("a", "Read")]).state.start, undefined, "no usage, no weight");
+});

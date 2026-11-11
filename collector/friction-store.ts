@@ -26,6 +26,15 @@ export const receiptSchema = z
     version: z.string().max(40).optional(),
     client: z.string().max(40).optional(),
     counts: frictionCountsSchema,
+    // Start and peak tokens; null when the session made no model call. A
+    // receipt written before these were read has none and is counted again.
+    weight: z
+      .object({ start: z.number().int().positive(), peak: z.number().int().positive() })
+      .strict()
+      .nullable()
+      .optional(),
+    // What the runner's journals said the session was, kept once seen.
+    role: z.enum(["coordinator", "helper"]).optional(),
     // The parser's own carry-over between scans.
     state: z.unknown(),
   })
@@ -36,7 +45,9 @@ export type Parser<S> = {
   empty: () => S;
   record: (record: unknown, counts: FrictionCounts, state: S) => void;
   // What the state knows about the session as a whole.
-  facts: (state: S) => Pick<Receipt, "cwd" | "version" | "client" | "firstAt" | "lastAt">;
+  facts: (state: S) => Pick<Receipt, "cwd" | "version" | "client" | "firstAt" | "lastAt"> & {
+    weight: NonNullable<Receipt["weight"]> | null;
+  };
 };
 export type Transcript = { id: string; file: string };
 export async function savePrivate(file: string, value: unknown) {
@@ -114,7 +125,7 @@ export async function updateReceipt<S>(
   budget: number,
 ) {
   let receipt: Receipt =
-    existing && existing.file === transcript.file
+    existing && existing.file === transcript.file && existing.weight !== undefined
       ? existing
       : {
           app: parser.app,
@@ -126,8 +137,10 @@ export async function updateReceipt<S>(
           lastAt: null,
           counts: emptyCounts(),
           state: parser.empty(),
+          ...(existing?.role ? { role: existing.role } : {}),
         };
-  const read = await readLines(transcript.file, receipt.bytes, budget);
+  const start = receipt.bytes;
+  const read = await readLines(transcript.file, start, budget);
   if (read.reset) {
     receipt = { ...receipt, bytes: 0, counts: emptyCounts(), state: parser.empty(), firstAt: null, lastAt: null };
     return updateReceipt(dir, parser, transcript, receipt, now, budget);
@@ -148,7 +161,7 @@ export async function updateReceipt<S>(
   await savePrivate(receiptFile(dir, parser.app, receipt.id), receipt);
   return {
     receipt,
-    bytes: read.next - (existing?.file === transcript.file ? existing.bytes : 0),
+    bytes: read.next - start,
     // Cut short by the budget; a partial last line is not waiting.
     more: read.cut,
   };
@@ -172,7 +185,13 @@ export async function scanTranscripts<S>(
       const s = await stat(transcript.file);
       const existing = receipts.get(`${parser.app}:${transcript.id}`);
       if (!existing && s.mtimeMs < cutoff) continue;
-      if (existing && existing.file === transcript.file && existing.bytes === s.size) continue;
+      if (
+        existing &&
+        existing.file === transcript.file &&
+        existing.bytes === s.size &&
+        existing.weight !== undefined
+      )
+        continue;
       changed.push({ transcript, mtime: s.mtimeMs });
     } catch {
       failed += 1;
@@ -208,12 +227,14 @@ export async function scanTranscripts<S>(
   }
   return { updated, waiting, failed };
 }
-// Receipts of sessions idle past the retention are removed.
+// Receipts of sessions idle past the retention are removed, once they have
+// been kept that long: a transcript touched long after its last activity is
+// read again otherwise, and removed again, every scan.
 export async function pruneReceipts(dir: string, receipts: Receipt[], now: number) {
   const cutoff = now - RECEIPT_DAYS * 86400_000;
   const kept: Receipt[] = [];
   for (const receipt of receipts) {
-    if ((receipt.lastAt ?? receipt.observedAt) < cutoff)
+    if (Math.max(receipt.lastAt ?? 0, receipt.observedAt) < cutoff)
       await rm(receiptFile(dir, receipt.app, receipt.id), { force: true });
     else kept.push(receipt);
   }

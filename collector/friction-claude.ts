@@ -12,7 +12,19 @@ export type ClaudeState = {
   cwd?: string;
   firstAt?: number;
   lastAt?: number;
+  // Tokens the first model call carried, and the most any call carried.
+  start?: number;
+  peak?: number;
 };
+// A model call's context: what it read, cached or not. Other values are no call.
+export function noteWeight(state: { start?: number; peak?: number }, tokens: unknown[]) {
+  let context = 0;
+  for (const value of tokens)
+    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) context += value;
+  if (!context) return;
+  state.start ??= context;
+  state.peak = Math.max(state.peak ?? 0, context);
+}
 export const emptyClaudeState = (): ClaudeState => ({ tools: {}, commands: {} });
 const TOOLS_KEPT = 200,
   COMMANDS_KEPT = 500;
@@ -82,6 +94,15 @@ export function claudeRecord(
     ? message.content.map((block) => object(block))
     : [];
   if (row.type === "assistant") {
+    // A subagent's calls are its own context, not the session's.
+    if (row.isSidechain !== true) {
+      const usage = object(message.usage);
+      noteWeight(state, [
+        usage.input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens,
+      ]);
+    }
     for (const block of blocks) {
       if (block.type !== "tool_use") continue;
       counts.toolCalls += 1;

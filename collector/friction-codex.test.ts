@@ -31,6 +31,10 @@ test("Codex items, turns and the session's own facts are projected", () => {
     event({ type: "turn_aborted" }),
     event({ type: "error" }),
     event({ type: "token_count" }),
+    event({ type: "token_count", info: null }),
+    event({ type: "token_count", info: { last_token_usage: { input_tokens: 21_000, cached_input_tokens: 9_000 }, total_token_usage: { input_tokens: 21_000 } } }),
+    event({ type: "token_count", info: { last_token_usage: { input_tokens: 64_000, cached_input_tokens: 60_000 }, total_token_usage: { input_tokens: 85_000 } } }),
+    event({ type: "token_count", info: { last_token_usage: { input_tokens: 30_000 }, total_token_usage: { input_tokens: 115_000 } } }),
     ...[1, 2, 3].map(() => command("ls", "completed", 0)),
   ];
   for (const record of records) codexRecord(record, counts, state);
@@ -47,6 +51,7 @@ test("Codex items, turns and the session's own facts are projected", () => {
   assert.equal(state.client, "codex_exec");
   assert.equal(state.cwd, "/work/repo");
   assert.equal(state.id, "thread-1");
+  assert.deepEqual([state.start, state.peak], [21_000, 64_000], "each call's own input, not the running total");
   assert.equal(state.firstAt, Date.parse("2026-10-20T01:59:00.000Z"));
   assert.equal(state.lastAt, Date.parse("2026-10-20T02:00:00.000Z"));
 });

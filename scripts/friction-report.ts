@@ -7,10 +7,12 @@ import path from "node:path";
 import { frictionDays } from "../collector/friction";
 import { projectsLinks, runnerStateDirectory } from "../collector/friction-runner";
 import { frictionDirectory, readReceipts } from "../collector/friction-store";
+import { weightTotals } from "../collector/friction-weight";
 import {
   FRICTION_CATEGORIES,
   FRICTION_SIGNS,
   frictionLine,
+  weightLine,
   frictionTotals,
   utcDate,
 } from "../src/friction-model";
@@ -58,6 +60,7 @@ for (const app of ["Claude", "Codex"] as const) {
   );
   if (total.sessions) console.log(`${app}: ${frictionLine(total.counts, total.sessions)}`);
 }
+for (const row of weightTotals(receipts, now).week) console.log(`Weight, 7 days: ${weightLine(row)}`);
 const score = (r: (typeof receipts)[number]) =>
   FRICTION_SIGNS.reduce((sum, key) => sum + r.counts[key], 0);
 const worst = receipts

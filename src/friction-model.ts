@@ -62,6 +62,43 @@ export const frictionDaySchema = z
   .strict();
 export type FrictionDay = z.infer<typeof frictionDaySchema>;
 export const FRICTION_DAYS = 14;
+// Session weight: the tokens a session's first model call carried (its start)
+// and the most any call carried (its peak), as medians over the sessions of
+// one app and one source, the way a session was launched. "all" is every
+// measured session of the app.
+export const WEIGHT_SOURCES = {
+  desktop: "desktop app",
+  cli: "command line",
+  coordinator: "Projects coordinators",
+  helper: "Projects helpers",
+  projects: "Projects, role not recorded",
+  all: "all sessions",
+} as const;
+export type WeightSource = keyof typeof WEIGHT_SOURCES;
+export const WEIGHT_KEYS = Object.keys(WEIGHT_SOURCES) as WeightSource[];
+const weightRow = {
+  app: frictionAppSchema,
+  source: z.enum(WEIGHT_KEYS as [WeightSource, ...WeightSource[]]),
+  // Sessions with at least one model call, and their median start and peak.
+  sessions: count,
+  start: count,
+  peak: count,
+};
+export const weightRowSchema = z.object(weightRow).strict();
+export type WeightRow = z.infer<typeof weightRowSchema>;
+export const weightDaySchema = z
+  .object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), ...weightRow })
+  .strict();
+export type WeightDay = z.infer<typeof weightDaySchema>;
+const WEIGHT_ROWS = WEIGHT_KEYS.length * 2;
+// Each day's rows, and the same medians over the last seven UTC days.
+export const weightSchema = z
+  .object({
+    days: z.array(weightDaySchema).max(FRICTION_DAYS * WEIGHT_ROWS),
+    week: z.array(weightRowSchema).max(WEIGHT_ROWS),
+  })
+  .strict();
+export type Weight = z.infer<typeof weightSchema>;
 export const frictionSnapshotSchema = z
   .object({
     observedAt: count,
@@ -75,6 +112,7 @@ export const frictionSnapshotSchema = z
       })
       .strict(),
     days: z.array(frictionDaySchema).max(FRICTION_DAYS * 2),
+    weight: weightSchema.optional(),
     state: z.enum(["ok", "unavailable"]),
     message: z.string().max(500),
   })
@@ -109,3 +147,10 @@ export function frictionLine(counts: FrictionCounts, sessions: number) {
   const volume = `${sessions} session${sessions === 1 ? "" : "s"}, ${counts.prompts} prompts, ${counts.toolCalls} tool calls`;
   return parts.length ? `${volume}: ${parts.join(", ")}` : `${volume}: no friction seen`;
 }
+// Tokens in thousands, as the overview and the local report show them.
+export const kTokens = (tokens: number) =>
+  tokens < 1000 ? String(tokens) : `${Math.round(tokens / 1000).toLocaleString("en-US")}k`;
+export const weightLabel = (row: Pick<WeightRow, "app" | "source">) =>
+  `${row.app} ${WEIGHT_SOURCES[row.source]}`;
+export const weightLine = (row: WeightRow) =>
+  `${weightLabel(row)}: start ${kTokens(row.start)}, peak ${kTokens(row.peak)} (${row.sessions} session${row.sessions === 1 ? "" : "s"})`;

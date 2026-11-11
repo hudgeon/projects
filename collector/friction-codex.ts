@@ -1,5 +1,5 @@
 import type { FrictionCounts } from "../src/friction-model";
-import { noteCommand } from "./friction-claude";
+import { noteCommand, noteWeight } from "./friction-claude";
 // Codex rollout records (one JSON object a line) projected onto the friction
 // categories. Deterministic local rules; nothing here keeps text.
 export type CodexState = {
@@ -10,6 +10,8 @@ export type CodexState = {
   id?: string;
   firstAt?: number;
   lastAt?: number;
+  start?: number;
+  peak?: number;
 };
 export const emptyCodexState = (): CodexState => ({ commands: {} });
 const object = (value: unknown): Record<string, unknown> =>
@@ -47,7 +49,10 @@ export function codexRecord(
     return;
   }
   if (row.type !== "event_msg") return;
-  if (payload.type === "turn_aborted") counts.interrupted += 1;
+  // The last call's input, which counts what it read from cache.
+  if (payload.type === "token_count")
+    noteWeight(state, [object(object(payload.info).last_token_usage).input_tokens]);
+  else if (payload.type === "turn_aborted") counts.interrupted += 1;
   else if (payload.type === "error" || payload.type === "stream_error") counts.apiErrors += 1;
   else if (payload.type === "item_completed") {
     const item = object(payload.item);

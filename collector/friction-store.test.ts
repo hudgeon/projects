@@ -23,7 +23,7 @@ const parser: Parser<{ last: number | null }> = {
     counts.toolCalls += 1;
     state.last = (record as { n: number }).n;
   },
-  facts: () => ({ cwd: "/w", version: "1.0.0", client: "cli", firstAt: 1, lastAt: 2 }),
+  facts: () => ({ cwd: "/w", version: "1.0.0", client: "cli", firstAt: 1, lastAt: 2, weight: null }),
 };
 const line = (n: number) => JSON.stringify({ n }) + "\n";
 const setup = async () => {
@@ -101,12 +101,12 @@ test("a receipt path is never built from an id that could leave the directory", 
 test("receipts of sessions idle past the retention are removed; damaged files are skipped", async () => {
   const { dir } = await setup();
   const now = Date.now();
-  const receipt = (id: string, lastAt: number): Receipt => ({
+  const receipt = (id: string, lastAt: number, observedAt = lastAt): Receipt => ({
     app: "Codex",
     id,
     file: "/x",
     bytes: 0,
-    observedAt: now,
+    observedAt,
     firstAt: lastAt,
     lastAt,
     counts: emptyCounts() as FrictionCounts,
@@ -114,10 +114,13 @@ test("receipts of sessions idle past the retention are removed; damaged files ar
   });
   await savePrivate(receiptFile(dir, "Codex", "new"), receipt("new", now - 86400_000));
   await savePrivate(receiptFile(dir, "Codex", "old"), receipt("old", now - 95 * 86400_000));
+  // A transcript touched long after its last activity: read this scan, so kept,
+  // or it would be read and removed again on every scan.
+  await savePrivate(receiptFile(dir, "Codex", "touched"), receipt("touched", now - 95 * 86400_000, now));
   await writeFile(receiptFile(dir, "Codex", "bad"), "{not json");
   const read = await readReceipts(dir);
-  assert.deepEqual(read.map((r) => r.id).sort(), ["new", "old"]);
+  assert.deepEqual(read.map((r) => r.id).sort(), ["new", "old", "touched"]);
   const kept = await pruneReceipts(dir, read, now);
-  assert.deepEqual(kept.map((r) => r.id), ["new"]);
-  assert.deepEqual((await readdir(path.join(dir, "codex"))).sort(), ["bad.json", "new.json"]);
+  assert.deepEqual(kept.map((r) => r.id).sort(), ["new", "touched"]);
+  assert.deepEqual((await readdir(path.join(dir, "codex"))).sort(), ["bad.json", "new.json", "touched.json"]);
 });
