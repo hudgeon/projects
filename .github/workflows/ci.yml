@@ -1,15 +1,40 @@
+# The checks, wired by hand to receipting/agent-config's shared delivery workflows (its README, "Shared delivery
+# workflows"): the file size check needs main's history and a base commit, which the shared check does not give.
+# agent-config's scripts/standardize-repo.sh keeps the commit after `@`. A fork repoints or removes the `queued` job.
 name: CI
+
 on:
+  pull_request:
+  # The merge queue's run, on the commit main will be given.
+  merge_group:
   push:
     branches: [main, 'codex/**']
-  pull_request:
-permissions:
-  contents: read
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  checks:
-    name: Validate
+  # main's own run: did the queue's run pass on this very commit? Then nothing is tested twice.
+  queued:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+    uses: receipting/agent-config/.github/workflows/delivery-queue.yml@a04e2f9c61d18d64744200f0c460ea5247358a65
+    with:
+      step: tested
+      base-branch: main
+
+  # The check the branch requires, by this name.
+  ci:
+    needs: queued
+    if: ${{ !cancelled() && needs.queued.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -21,8 +46,8 @@ jobs:
           cache: npm
       - run: npm run file-sizes:check -- "$BASE"
         env:
-          # Main itself is checked against main before the push.
-          BASE: ${{ github.ref == 'refs/heads/main' && github.event.before || 'origin/main' }}
+          # A queued commit is checked against the main it follows, and main itself against main before the push.
+          BASE: ${{ github.event.merge_group.base_sha || (github.ref == 'refs/heads/main' && github.event.before) || 'origin/main' }}
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run typecheck

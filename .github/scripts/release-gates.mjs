@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { unstable_readConfig } from "wrangler";
 import { requiredSecretNames } from "./wrangler-config.mjs";
+import { ciPassed } from "./release-checks.mjs";
 const { GH_TOKEN, REPO, SHA, DOPPLER_IDENTITY_ID, SECURITY_REVIEW_BOT_ID } =
   process.env;
 if (!DOPPLER_IDENTITY_ID)
@@ -54,9 +55,6 @@ if (
     "Required security review has not passed from the configured bot",
   );
 const checks = await read(`commits/${pr.head.sha}/check-runs`);
-const validation = checks.check_runs.filter(
-  (c) => c.name === "Validate" && c.app?.id === 15368,
-);
-if (!validation.length || !validation.every((c) => c.conclusion === "success"))
+if (!ciPassed(checks.check_runs))
   throw Error("Required GitHub Actions CI has not passed");
 console.log("Reviewed PR, CI and release configuration verified");

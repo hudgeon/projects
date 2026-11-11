@@ -1,0 +1,27 @@
+# Written by agent-config's scripts/standardize-repo.sh from this repository's catalog entry (repos.json, "delivery").
+# Change the entry and apply the standard again; an edit here is overwritten.
+#
+# A pull request into main that is not a draft is armed to merge itself once its required checks are green, when it
+# opens, is marked ready or takes a push: the queue disarms one it removes, and the push that mends it arms it again.
+# The shared workflow checks nothing out, so none of the pull request's code runs with the App's key.
+name: Auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  arm:
+    # The shared workflow's other step reads the queue's runs, and a caller grants every job of a workflow it calls
+    # what that job asks for, run or not; the arming job itself takes nothing from this token.
+    permissions:
+      actions: read
+    uses: receipting/agent-config/.github/workflows/delivery-queue.yml@a04e2f9c61d18d64744200f0c460ea5247358a65
+    with:
+      step: arm
+      base-branch: main
+    secrets:
+      app-private-key: ${{ secrets.SECURITY_REVIEW_APP_PRIVATE_KEY }}

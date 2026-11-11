@@ -82,17 +82,17 @@ the collector never falls back to a broader sign-in for a configured App.
 
 ## 4. Deploy from GitHub
 
-1. Push your copy of the repository to GitHub.
+1. Push your copy to GitHub, without `.github/workflows/auto-merge.yml` and
+   `ci.yml`'s `queued` job (and `ci`'s `needs` and `if`): they call
+   `receipting/agent-config`, not yours.
 2. In Doppler, create a service account identity for GitHub OIDC with read
    access to `project-overview/prod` only, limited to your repository, its `main`
    branch and a `production` environment.
-3. In the repository, create the `production` environment and set the Actions
+3. In the repository, create the `production` environment and set the
    variable `DOPPLER_IDENTITY_ID` to that identity.
 4. Set the variables from step 1.
-5. Merge a pull request with CI passing, then run the **Deploy** workflow on
-   `main`. It checks the merged pull request, CI and, unless
-   `SECURITY_REVIEW_BOT_ID` is `none`, that bot's review before deploying, then
-   verifies the live version.
+5. Merge a pull request with CI passing, then run **Deploy** on `main`: it
+   checks its `ci` and review, then the live version.
 
 ## 5. Connect each machine
 
