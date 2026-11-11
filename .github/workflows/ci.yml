@@ -1,6 +1,5 @@
-# The checks, wired by hand to receipting/agent-config's shared delivery workflows (its README, "Shared delivery
-# workflows"): the file size check needs main's history and a base commit, which the shared check does not give.
-# agent-config's scripts/standardize-repo.sh keeps the commit after `@`. A fork repoints or removes the `queued` job.
+# The checks, self-contained so a fork or the public copy runs them unchanged. Arming and the merge queue are
+# .github/workflows/auto-merge.yml, which is not published.
 name: CI
 
 on:
@@ -17,20 +16,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # main's own run: did the queue's run pass on this very commit? Then nothing is tested twice.
-  queued:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      actions: read
-    uses: receipting/agent-config/.github/workflows/delivery-queue.yml@a04e2f9c61d18d64744200f0c460ea5247358a65
-    with:
-      step: tested
-      base-branch: main
-
   # The check the branch requires, by this name.
   ci:
-    needs: queued
-    if: ${{ !cancelled() && needs.queued.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

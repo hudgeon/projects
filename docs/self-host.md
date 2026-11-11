@@ -82,9 +82,7 @@ the collector never falls back to a broader sign-in for a configured App.
 
 ## 4. Deploy from GitHub
 
-1. Push your copy to GitHub, without `.github/workflows/auto-merge.yml` and
-   `ci.yml`'s `queued` job (and `ci`'s `needs` and `if`): they call
-   `receipting/agent-config`, not yours.
+1. Push your copy to GitHub.
 2. In Doppler, create a service account identity for GitHub OIDC with read
    access to `project-overview/prod` only, limited to your repository, its `main`
    branch and a `production` environment.

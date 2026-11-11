@@ -12,10 +12,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-// The organisation's own security review gate: synced from elsewhere and of no
-// use outside it.
+// The organisation's own security review gate and merge arming: synced from
+// elsewhere, calling its private workflows, and of no use outside it.
 const PRIVATE = [
   ".github/scripts/security-review.mjs",
+  ".github/workflows/auto-merge.yml",
   ".github/workflows/security-review.yml",
 ];
 
