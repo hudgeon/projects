@@ -2,7 +2,7 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFile, writeFile, rm} from "node:fs/promises";
 import path from "node:path";
-import {nativeTurn} from "./native";
+import {nativeTurn, type NativeOptions} from "./native";
 import {CODEX_TIER} from "./native-access";
 import {fixture, engineOptions, dispatch, result, complete} from "./run-fixtures";
 import {executeRun} from "./engine";
@@ -39,6 +39,41 @@ test("machine full access reaches native launch and both Codex RPC permission bo
         assert.equal(turn.permissions,undefined);
       }
     }
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test("a Claude helper given the user's connectors looks their tools up on demand; denied tools stay denied and a turn with only the browser launches as before", async () => {
+  const dir = await fixture();
+  const rules = claudeRules({connectors:["claude_ai_Mail","claude_ai_Files"],local:["db","other"]},{localServers:["db"],deniedTools:["mcp__db__write"]})!;
+  const granted = {claude:rules,codex:null}, read = "Read,Glob,Grep,TodoWrite", change = "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor";
+  try {
+    for (const [kind, options, tools] of [
+      ["the coordinator or a recovery inspection", {readOnly:true}, read],
+      ["a read helper", {readOnly:true, connectors:granted}, `${read},ToolSearch`],
+      ["a change helper", {readOnly:false, connectors:granted}, `${change},ToolSearch`],
+      ["a helper whose connectors could not be listed", {readOnly:false, connectors:{claude:null,codex:null}}, change],
+      // Claude Code's own default set has the search.
+      ["a change helper on a full-access machine", {readOnly:false, fullAccess:true, connectors:granted}, "default"],
+    ] as [string, Pick<NativeOptions,"readOnly"|"fullAccess"|"connectors">, string][]) {
+      const binary = await fakeBinary(dir,"claude","success"), capture = path.join(dir,"launch.json");
+      await writeFile(binary,(await readFile(binary,"utf8")).replace("import readline",`import {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(capture)},JSON.stringify(process.argv.slice(2)));\nimport readline`));
+      await nativeTurn({agent:"claude", cwd:dir, prompt:"Work", schema:{type:"object"}, ...options,
+        signal:AbortSignal.timeout(5000), binaries:{claude:binary}, onSession:async()=>{}});
+      const args: string[] = JSON.parse(await readFile(capture,"utf8")), at = (flag: string) => args[args.indexOf(flag)+1];
+      const connected = Boolean(options.connectors?.claude), searches = tools === "default" || tools.endsWith(",ToolSearch");
+      assert.equal(at("--tools"),tools,kind);
+      // The search goes with the user's own MCP servers and nothing else: with
+      // them and no search, every tool's definition is sent in every request.
+      assert.equal(args.includes("--strict-mcp-config"),!connected,kind);
+      assert.equal(searches,connected,kind);
+      // Don't-ask mode refuses whatever is not allowed, the search included.
+      if (options.fullAccess) assert.ok(!args.includes("--allowedTools"),kind);
+      else assert.deepEqual(at("--allowedTools").split(","),[...tools.split(","),...(connected?rules.allow:[])],kind);
+      // Denied tools are removed before the search can find them.
+      assert.equal(args.includes("--disallowedTools"),connected,kind);
+      if (connected) assert.deepEqual(at("--disallowedTools").split(","),rules.deny,kind);
+    }
+    for (const rule of ["mcp__other","mcp__db__write","mcp__claude_ai_Mail__send_email"]) assert.ok(rules.deny.includes(rule),rule);
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 

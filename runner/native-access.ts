@@ -16,15 +16,23 @@ export const claudePermissions = (o: Pick<NativeOptions, "readOnly" | "fullAcces
 ];
 
 // The built-in tools a Claude turn gets, and the rules that allow them. A
-// read turn given the web fetches the named hosts: WebFetch is enabled, and
+// helper given the user's connectors gets tool search with them: Claude Code
+// then names each MCP tool and loads its definition when the turn looks it
+// up, where a list without the search sends every definition in every
+// request. The search finds only what the turn may see: a denied tool is
+// removed before it. It also holds back the built-ins Claude Code defers
+// (TaskStop, Monitor). A turn with only this conversation's browser has
+// nothing to look up and keeps its list.
+// A read turn given the web fetches the named hosts: WebFetch is enabled, and
 // only domain rules allow it, never a bare one. Claude Code also fetches the
 // documentation domains it preapproves itself without asking, and refuses
 // every other host in its unattended mode; a deny rule cannot carve those
 // out without denying the named hosts too.
-export function claudeTools(o: Pick<NativeOptions, "readOnly" | "fullAccess" | "web">) {
-  const enabled = fullAccess(o) ? "default" : o.readOnly
-    ? "Read,Glob,Grep,TodoWrite"
-    : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor";
+export function claudeTools(o: Pick<NativeOptions, "readOnly" | "fullAccess" | "web" | "connectors">) {
+  const enabled = fullAccess(o) ? "default" : [
+    o.readOnly ? "Read,Glob,Grep,TodoWrite" : "Read,Glob,Grep,Edit,Write,Bash,TodoWrite,TaskStop,Monitor",
+    ...(o.connectors?.claude ? ["ToolSearch"] : []),
+  ].join(",");
   const web = o.readOnly && o.web?.length ? o.web : [];
   return {
     enabled: [enabled, ...(web.length ? ["WebFetch"] : [])].join(","),
