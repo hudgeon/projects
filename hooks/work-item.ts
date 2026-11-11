@@ -1,6 +1,7 @@
-import { readWorkRecord, verifiedRecord } from "../collector/work-record";
+import { readWorkRecord, verifiedRecord, writeWorkPosition } from "../collector/work-record";
 import {
   mkdir,
+  open,
   readFile,
   readdir,
   rename,
@@ -8,6 +9,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { constants } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -317,7 +319,7 @@ export async function handleHook(
     return {
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: linked(record, found(record.issue)?.title) + (record.issue ? " Before finishing meaningful linked work, reconcile its Current position, people, commitments and reviewed email IDs against actual evidence. Include Evidence checked: YYYY-MM-DDTHH:mm:ss.sssZ with the actual UTC evidence cutoff in Current position, not a fabricated fresh date. Write and read back the issue. The Stop hook independently verifies fresh record changes; unreadable or unchanged records remain unverified in Projects. Read-only questions stay read-only; their session evidence may await the daily reconciliation." : ""),
+        additionalContext: linked(record, found(record.issue)?.title) + (record.issue ? " Before finishing meaningful linked work, reconcile its Current position, people, commitments and reviewed email IDs against actual evidence. Include Evidence checked: YYYY-MM-DDTHH:mm:ss.sssZ with the actual UTC evidence cutoff in Current position, not a fabricated fresh date. Replace the single top Current position in place, with at most 2,000 characters below the heading. Use the installed work-item.mjs replace-position command described in the Projects work reconciliation guide and verify the readback. The Stop hook independently verifies fresh record changes; unreadable or unchanged records remain unverified in Projects. Read-only questions stay read-only; their session evidence may await the daily reconciliation." : ""),
       },
     };
   else context = "";
@@ -370,7 +372,33 @@ async function main() {
     } else throw Error("Work hook unavailable");
   }
 }
-if (process.argv[1]?.endsWith("work-item.mjs"))
+async function replacePosition() {
+  const [repo, issue, expected, file] = process.argv.slice(3);
+  if (process.argv.length !== 7 || !/^[a-f0-9]{64}$/.test(expected))
+    throw Error("Usage: work-item.mjs replace-position OWNER/REPO ISSUE BODY_SHA256 POSITION_FILE");
+  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+  let position: string;
+  try {
+    const info = await handle.stat();
+    const limit = 12_000;
+    if (!info.isFile() || info.size > limit)
+      throw Error("Supply a regular Current position file no larger than 12,000 bytes.");
+    const bytes = Buffer.alloc(limit + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead > limit) throw Error("The Current position file is too large.");
+    if (bytesRead !== info.size) throw Error("The Current position file changed while reading it.");
+    position = bytes.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+  console.log(await writeWorkPosition(repo, Number(issue), expected, position));
+}
+if (process.argv[1]?.endsWith("work-item.mjs") && process.argv[2] === "replace-position")
+  replacePosition().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Work position replacement failed.");
+    process.exitCode = 1;
+  });
+else if (process.argv[1]?.endsWith("work-item.mjs"))
   main().catch(() => {
     console.error(
       "Project work association unavailable; no association was changed. Check the local hook installation.",

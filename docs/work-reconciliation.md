@@ -14,6 +14,18 @@ The native Codex/Claude Stop hook performs a bounded independent read of the lin
 
 These checks verify a persisted record and its declared evidence cutoff, not the truth of an agent's interpretation or customer acceptance. Source links and substantive verification remain necessary.
 
+## Updating the live summary
+
+Keep one Current position section at the top. Its text below the heading is limited to 2,000 characters, the same budget a new Projects session receives. Replace it in place. Link to existing evidence and preserve superseded evidence in its original source or a dated comment when there is no existing source. Keep People, Commitments and Email threads in their own sections.
+
+The native change helper uses the installed work-item bundle to replace the summary. Read the issue and its evidence first, and calculate SHA-256 from the exact body read. Save the proposed summary text, without its heading, in a private temporary file.
+
+```sh
+node "$HOME/.local/share/project-overview/work-item.mjs" replace-position OWNER/REPO ISSUE BODY_SHA256 POSITION_FILE
+```
+
+The command re-reads the issue, checks that the body still matches, replaces the summary while preserving the other sections, and reads back the result. GitHub issue updates are whole-body writes. The preflight check and readback narrow the window for concurrent edits. An edit arriving between the check and write can still be overwritten. Inspect a readback mismatch before retrying. The runner and native Stop hook also check the stored section, including writes made through other tools. Existing long records remain readable and must be shortened when they are reconciled. The evidence cutoff still reflects the sources actually reviewed.
+
 ## Daily reconciliation
 
 A Worker trigger at half past each hour starts one `review` conversation per local day at 05:30 in the deployment's `TIME_ZONE`, or on a later hourly retry if no machine/inventory was available. A deterministic request ID prevents duplicate work after repeated delivery or uncertain creation. An earlier active review prevents overlap. It uses the existing native runner, owner attribution, recovery and shared memory/capacity admission; older runners do not claim the reserved lane.

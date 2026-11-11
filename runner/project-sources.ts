@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { z } from "zod";
-import { currentPositionSection } from "../src/work-model";
+import { currentPositionSection, WORK_POSITION_CHARS } from "../src/work-model";
 import { nativeEnv } from "./native";
 
 // Which project files may become evidence, and how they and the work issue
@@ -79,7 +79,7 @@ export type WorkBrief = {
   text?: string;
 };
 
-const WORK_BRIEF_CHARS = 2_000;
+const WORK_BRIEF_CHARS = WORK_POSITION_CHARS;
 const workFields = [
   "Status", "Evidence checked", "Next", "Position", "Priority", "Due",
   "Outcome / why now", "Evidence", "Coverage", "Source limits",

@@ -47,6 +47,10 @@ export const positionSchema = z
   })
   .strict();
 export type Position = z.infer<typeof positionSchema>;
+export const WORK_POSITION_CHARS = 2000;
+export function currentPositionHeadings(body: string) {
+  return [...body.matchAll(/^## Current position[ \t]*\r?$/gm)];
+}
 export function currentPositionSection(body: string) {
   return body.match(
     /^## Current position\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m,

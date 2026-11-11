@@ -2,6 +2,7 @@ import {
   readWorkRecord,
   recordHash,
   verifiedRecord,
+  workPositionProblem,
   type ReadWorkRecord,
 } from "../collector/work-record";
 import type { MasterDecision } from "../src/run-model";
@@ -56,6 +57,8 @@ export async function workRecordGate(
     try {
       for (const id of ids) {
         const actual = await read(repo, id);
+        const problem = workPositionProblem(actual.body);
+        if (problem) return `Work issue #${id}: ${problem}`;
         if (
           !verifiedRecord(
             actual.body,
