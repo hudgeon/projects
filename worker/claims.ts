@@ -4,6 +4,7 @@
 import { allowed, signsIn } from "./auth";
 import { attributes, trace } from "./telemetry";
 import type { BrowserSignIn, Lane, RunnerHost } from "../src/run-model";
+import { UPKEEP_AUTH_HEADER, upkeepAuthSchema } from "../src/upkeep-model";
 import type { Portfolio } from "./index";
 
 type ClaimStore = Pick<
@@ -16,9 +17,11 @@ export async function claimed(
   owner: string,
   input: { activeRunIds: string[]; lanes?: Lane[]; documents?: boolean },
   host: RunnerHost,
+  headers?: Headers,
 ) {
   const run = await trace("dispatch", {}, async () => {
-    const claimed = await store.claimRun(owner, input.activeRunIds, input.lanes, host);
+    const auth = upkeepAuthSchema.safeParse(headers?.get(UPKEEP_AUTH_HEADER)).data;
+    const claimed = await store.claimRun(owner, input.activeRunIds, input.lanes, host, auth);
     if (claimed) attributes({ runId: claimed.id, generation: claimed.generation });
     return claimed;
   });

@@ -146,7 +146,7 @@ export class Portfolio extends DurableObject<Env> {
   archiveRun(id: string, archived: boolean) { return this.runs.archive(id, archived); }
   moveRun(id: string) { return this.runs.move(id); }
   runners() { return this.runs.runners(); }
-  claimRun(owner: string, activeRunIds: string[], lanes: Lane[] | undefined, host: RunnerHost) { return this.runs.claim(owner, activeRunIds, lanes, host); }
+  claimRun(...args: Parameters<Runs["claim"]>) { return this.runs.claim(...args); }
   // HTML editions come only from repositories a machine reports: a project or
   // the work repository.
   requestDocument(source: HtmlSource, retry: boolean) {
@@ -427,7 +427,7 @@ export async function handle(
         return Response.json(image ? { screenshot: { id: image.metadata.id, mime: image.metadata.mime, data: Buffer.from(image.bytes).toString("base64") } } : { error: "Screenshot is not available for this claim" }, { status: image ? 200 : 404 });
       }
       if (url.pathname.endsWith("/claim"))
-        return Response.json(await claimed(store, env, owner, runnerClaimSchema.parse(raw), host));
+        return Response.json(await claimed(store, env, owner, runnerClaimSchema.parse(raw), host, request.headers));
       if (url.pathname.endsWith("/heartbeat")) {
         const input = runnerHeartbeatSchema.parse(raw);
         attributes({ runId: input.id, generation: input.generation });

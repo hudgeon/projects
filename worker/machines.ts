@@ -1,6 +1,7 @@
 import { digest, token } from "./auth";
 import { FALLBACK_AFTER_MS, type Lane } from "../src/run-model";
 import type { MachineView } from "../src/model";
+import type { UpkeepAuth } from "../src/upkeep-model";
 
 // A machine publishes its own snapshot with its collector token and runs
 // conversations with its runner token; only their hashes are kept. Machines
@@ -23,6 +24,9 @@ type Row = {
   runner_hash: string | null;
   plain_owner: number;
 };
+const upkeepPriority = (status?: UpkeepAuth | null) =>
+  status === "ready" ? 2 : status === "signed_out" ? 0 : 1;
+type Offer = { lanes: string; upkeep_auth: UpkeepAuth | null };
 export const machineName = (value: string) => {
   const name = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return name.length >= 1 && name.length <= 40 ? name : null;
@@ -37,13 +41,15 @@ export class Machines {
       "CREATE TABLE IF NOT EXISTS collector_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL)",
     );
     sql.exec(
-      "CREATE TABLE IF NOT EXISTS runner_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL,offered_at INTEGER,lanes TEXT)",
+      "CREATE TABLE IF NOT EXISTS runner_contact(host TEXT PRIMARY KEY,at INTEGER NOT NULL,offered_at INTEGER,lanes TEXT,upkeep_auth TEXT)",
     );
     const columns = sql.exec<{ name: string }>("PRAGMA table_info(runner_contact)").toArray();
     if (!columns.some((column) => column.name === "offered_at"))
       sql.exec("ALTER TABLE runner_contact ADD COLUMN offered_at INTEGER");
     if (!columns.some((column) => column.name === "lanes"))
       sql.exec("ALTER TABLE runner_contact ADD COLUMN lanes TEXT");
+    if (!columns.some((column) => column.name === "upkeep_auth"))
+      sql.exec("ALTER TABLE runner_contact ADD COLUMN upkeep_auth TEXT");
   }
   private rows() {
     return this.storage.sql
@@ -79,28 +85,42 @@ export class Machines {
   }
   // Claims report which lanes have room. Heartbeats and reports only prove
   // the runner is alive; they do not extend its last offer of capacity.
-  runnerContact(host: string, lanes?: Lane[], now = Date.now()) {
+  runnerContact(host: string, lanes?: Lane[], now = Date.now(), upkeepAuth?: UpkeepAuth) {
     this.storage.sql.exec(
-      `INSERT INTO runner_contact(host,at,offered_at,lanes) VALUES(?,?,?,?)
+      `INSERT INTO runner_contact(host,at,offered_at,lanes,upkeep_auth) VALUES(?,?,?,?,?)
       ON CONFLICT(host) DO UPDATE SET at=excluded.at,
         offered_at=COALESCE(excluded.offered_at,runner_contact.offered_at),
-        lanes=COALESCE(excluded.lanes,runner_contact.lanes)`,
+        lanes=COALESCE(excluded.lanes,runner_contact.lanes),
+        upkeep_auth=CASE WHEN excluded.offered_at IS NULL THEN runner_contact.upkeep_auth ELSE excluded.upkeep_auth END`,
       host, now, lanes ? now : null, lanes ? JSON.stringify(lanes) : null,
+      lanes?.includes("upkeep") ? upkeepAuth ?? null : null,
     );
   }
-  private offeredLanes(host: string, now: number) {
+  private offer(host: string, now: number) {
     const cutoff = now - FALLBACK_AFTER_MS;
-    return this.storage.sql.exec<{ lane: Lane }>(
-      "SELECT value AS lane FROM runner_contact, json_each(lanes) WHERE host=? AND at>? AND offered_at>?",
+    const offer = this.storage.sql.exec<Offer>(
+      "SELECT lanes,upkeep_auth FROM runner_contact WHERE host=? AND at>? AND offered_at>?",
       host, cutoff, cutoff,
-    ).toArray().map(({ lane }) => lane);
+    ).toArray()[0];
+    return { lanes: (offer ? JSON.parse(offer.lanes) : []) as Lane[], priority: upkeepPriority(offer?.upkeep_auth) };
   }
-  // Only fresh offers from earlier machines have priority for new work.
-  newWorkLanes(host: string, lanes: Lane[], now = Date.now()): Lane[] {
+  // Only fresh offers compete. Upkeep prefers a working Claude login, then
+  // machine order. If every login failed, one runner can still report why.
+  newWorkLanes(host: string, lanes: Lane[], now: number): Lane[] {
     const available = new Set(lanes);
+    const priority = lanes.includes("upkeep") ? this.offer(host, now).priority : 0;
+    let earlier = true;
     for (const { id } of this.rows()) {
-      if (id === host || !available.size) break;
-      for (const lane of this.offeredLanes(id, now)) available.delete(lane);
+      if (!available.size || (!earlier && !available.has("upkeep"))) break;
+      if (id === host) {
+        earlier = false;
+        continue;
+      }
+      const other = this.offer(id, now);
+      for (const lane of other.lanes)
+        if (lane === "upkeep"
+          ? other.priority > priority || (earlier && other.priority === priority)
+          : earlier) available.delete(lane);
     }
     return [...available];
   }
@@ -115,7 +135,7 @@ export class Machines {
       lastCollected: this.contact("collector_contact", row.id),
       lastRunner: this.contact("runner_contact", row.id),
       duties: this.collectorDuties(row.id, now),
-      newWork: this.newWorkLanes(row.id, this.offeredLanes(row.id, now), now).length > 0,
+      newWork: this.newWorkLanes(row.id, this.offer(row.id, now).lanes, now).length > 0,
     }));
   }
   // The token's hash, from the Worker; the token itself never arrives here.
@@ -141,7 +161,7 @@ export class Machines {
       digest(runner),
       id,
     );
-    this.storage.sql.exec("UPDATE runner_contact SET offered_at=NULL,lanes=NULL WHERE host=?", id);
+    this.storage.sql.exec("UPDATE runner_contact SET offered_at=NULL,lanes=NULL,upkeep_auth=NULL WHERE host=?", id);
     return { collector, runner };
   }
   // A new machine goes last.

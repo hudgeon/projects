@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScreenshotInput } from "../src/screenshot-model";
@@ -26,6 +26,8 @@ import {
 } from "./native-events";
 import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
 import { nativeEnv } from "./native-env";
+import { confirmStopped, Failure, NativeStopError, readLines, stopProcess } from "./native-process";
+export { Failure, NativeStopError, nativeProcessStopped } from "./native-process";
 export { nativeEnv } from "./native-env";
 import { fullAccess, codexPermissions, codexFilesystem, claudeTools, CODEX_TIER, claudePermissions } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
@@ -91,36 +93,6 @@ export type NativeOptions = {
   // First wait before re-running a turn a busy model could not start.
   retryDelayMs?: number;
 };
-export function stopProcess(child: ChildProcessWithoutNullStreams) {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null)
-    return;
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
-  const timer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    }
-  }, 3000);
-  timer.unref();
-}
-export class NativeStopError extends Error {}
-// A failure with a known cause, native or the runner's own: its message is
-// what the user reads, its reason the category telemetry keeps.
-export class Failure extends Error {
-  constructor(
-    readonly reason: FailureReason,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 // The model was at capacity or its connection dropped; `acted` says whether
 // the turn had already run a command or tool, so a retry is unsafe.
 export class NativeBusyError extends Error {
@@ -200,40 +172,6 @@ const rejected: Record<string, [FailureReason, string]> = {
   "thread/resume": opening,
   "turn/start": ["turn_rejected", "Codex rejected the turn."],
 };
-// What a refused request would have done, never its tool, command or text.
-export function nativeProcessStopped(pid: number | null): boolean {
-  if (!pid || pid <= 1) return false;
-  // The detached process group too: a shell or tool can outlive it.
-  for (const target of [pid, -pid]) {
-    try {
-      process.kill(target, 0);
-      return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
-    }
-  }
-  return true;
-}
-async function confirmStopped(child: ChildProcessWithoutNullStreams) {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null)
-    return;
-  await new Promise<void>((resolve, reject) => {
-    const closed = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      child.off("close", closed);
-      reject(
-        new NativeStopError(
-          "An agent process did not confirm it stopped, so nothing else was started. Send a follow-up once it has stopped.",
-        ),
-      );
-    }, 6000);
-    child.once("close", closed);
-    stopProcess(child);
-  });
-}
 const userContent = (input: SteerInput, kind: "codex" | "claude") => [
   { type: "text", text: input.text },
   ...(input.screenshots ?? []).map((image) =>
@@ -245,55 +183,6 @@ const userContent = (input: SteerInput, kind: "codex" | "claude") => [
         },
   ),
 ];
-// Only native protocol events are parsed; tool output is drained, never sent.
-function readLines(
-  child: ChildProcessWithoutNullStreams,
-  receive: (line: Record<string, unknown>) => void,
-  fail: (error: Error) => void,
-) {
-  let buffer = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.resume();
-  child.stdout.on("data", (chunk: string) => {
-    buffer += chunk;
-    if (buffer.length > 8_000_000) {
-      fail(
-        new Failure(
-          "protocol_error",
-          "Native response exceeded the protocol limit.",
-        ),
-      );
-      return;
-    }
-    let index: number;
-    while ((index = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, index);
-      buffer = buffer.slice(index + 1);
-      if (!line.trim()) continue;
-      try {
-        receive(object(JSON.parse(line)));
-      } catch {
-        fail(
-          new Failure(
-            "protocol_error",
-            "Native session returned an invalid protocol message.",
-          ),
-        );
-      }
-    }
-  });
-  child.on("error", () =>
-    fail(
-      new Failure(
-        "native_unavailable",
-        "Native agent could not start. Check its installation and local login.",
-      ),
-    ),
-  );
-  child.stdin.on("error", () =>
-    fail(Error("Native session input closed unexpectedly.")),
-  );
-}
 export async function nativeTurn(options: NativeOptions): Promise<unknown> {
   options.signal.throwIfAborted();
   return options.agent === "codex" ? codexTurn(options) : claudeTurn(options);
@@ -705,6 +594,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     failed = false,
     refusals: string[] = [],
     subtype = "",
+    authFailed = false,
     open = true,
     overran = false,
     exit: NodeJS.Timeout | undefined;
@@ -755,6 +645,8 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         if (message.type === "system" && message.subtype === "compact_boundary")
           o.onActivity?.({ kind: "compaction", state: "finished" });
         if (message.type === "assistant") {
+          if (!received && !message.parent_tool_use_id && message.error === "authentication_failed")
+            authFailed = true;
           const sent = object(message.message);
           const used = object(sent.usage);
           if (typeof sent.id === "string" && Object.keys(used).length) {
@@ -810,7 +702,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         // A resumed session can first report a turn that never ran, such as a
         // background task's notice from its previous process; the turn for
         // this prompt follows, its input open until then.
-        if (message.subtype === "success" && message.num_turns === 0) return;
+        if (message.subtype === "success" && !message.is_error && message.num_turns === 0) return;
         // Only the first result answers this prompt.
         if (received) return;
         o.onUsage?.(usage(object(message.usage)));
@@ -839,7 +731,9 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
       open = false;
       clearTimeout(exit);
       o.signal.removeEventListener("abort", abort);
-      if (subtype === "error_max_turns")
+      if (authFailed && (failed || !received || result === undefined || (code !== 0 && !overran)))
+        reject(new Failure("signed_out", "Claude Code could not authenticate on this machine. Sign in to Claude Code there, then send a follow-up."));
+      else if (subtype === "error_max_turns")
         reject(
           new Failure(
             "turn_limit",

@@ -19,6 +19,8 @@ test("every native and runner failure carries a precise cause, and the master he
       ["codex", "novel", "turn_failed", /what it finished is unconfirmed/],
       ["claude", "maxTurns", "turn_limit", /turn limit/],
       ["claude", "execution", "turn_failed", /what it finished is unconfirmed/],
+      ["claude", "auth", "signed_out", /Sign in to Claude Code there/],
+      ["claude", "subagentAuth", "turn_failed", /what it finished is unconfirmed/],
       ["claude", "exit", "native_exited", /exited before confirming/],
     ];
     for (const [agent, mode, reason, message] of cases) {

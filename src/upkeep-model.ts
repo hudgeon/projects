@@ -8,6 +8,10 @@ import { FRICTION_CATEGORIES, FRICTION_DAYS, FRICTION_SIGNS, frictionAppSchema, 
 import { machineIdSchema } from "./telemetry";
 export const UPKEEP_CRON = "0 18 * * 5";
 export const UPKEEP_SCHEDULE = "Fridays at 18:00 UTC";
+// Older Workers ignore the header and older runners have unknown readiness.
+export const UPKEEP_AUTH_HEADER = "X-Projects-Upkeep-Auth";
+export const upkeepAuthSchema = z.enum(["ready", "unknown", "signed_out"]);
+export type UpkeepAuth = z.infer<typeof upkeepAuthSchema>;
 export type UpkeepScheduleReceipt = {
   kind?: "work-review";
   scheduledAt: number;

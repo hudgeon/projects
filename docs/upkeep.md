@@ -33,6 +33,13 @@ Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
   without a reserved or extra slot. At most two upkeep conversations are active
   at once (the week's, and a follow-up to an earlier one). A runner from before
   the lane never claims it.
+- For a new cycle, Projects prefers a machine with an active Claude
+  subscription login. With Claude Code 2.1.317 or newer the runner periodically
+  asks its local CLI for status, which can refresh its existing sign-in. Only
+  the readiness category reaches Projects. If no ready machine is available, a runner can
+  still claim the cycle and report why it could not run. Renew an expired
+  sign-in in Claude Code, then continue the same conversation. Existing
+  conversations stay on the machine that claimed them.
 - A finished cycle sends no notification: its result waits in Today and the
   standing issue. A cycle that needs a decision, or fails, notifies the owner
   like any other conversation.

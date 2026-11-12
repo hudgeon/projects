@@ -15,7 +15,7 @@ import {
 } from "../src/run-model";
 import { runMeasures } from "../src/run-measures";
 import { decodeScreenshots, type ScreenshotInput } from "../src/screenshot-model";
-import { UPKEEP_ACTIVE_LIMIT } from "../src/upkeep-model";
+import { UPKEEP_ACTIVE_LIMIT, type UpkeepAuth } from "../src/upkeep-model";
 import { latestPlan, runTitle, statusLine } from "../src/run-text";
 import type { ConversationRecord } from "./runs";
 import type { Machines } from "./machines";
@@ -323,11 +323,12 @@ export class Runs {
     activeRunIds: string[] = [],
     lanes: Lane[] = ["standard", "quick"],
     host: RunnerHost,
+    upkeepAuth?: UpkeepAuth,
   ): Promise<Run | null> {
     return this.select(async () => {
       await this.migrate();
       const now = Date.now();
-      this.machines.runnerContact(host, lanes, now);
+      this.machines.runnerContact(host, lanes, now, upkeepAuth);
       // A full or pressure-paused runner stays present without consuming or
       // recovering any reservation. Retry it unchanged when capacity returns.
       if (!lanes.length) return null;

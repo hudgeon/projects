@@ -112,7 +112,10 @@ test("a wrap-up request waits for the turn to take input instead of being lost",
 test("a helper that never takes the wrap-up request is still stopped after its grace period", async () => {
   const dir = await fixture(), o = engineOptions(dir);
   let last: Progress | undefined, masters = 0, asked = 0, stopped = false;
-  o.limits = {helperMs: 20, graceMs: 150, checkMs: 10};
+  // The grace period runs from the limit, which passes before the turn takes
+  // input; under load that can take longer than a short grace, leaving no
+  // check to ask again before the stop.
+  o.limits = {helperMs: 20, graceMs: 1000, checkMs: 10};
   o.processStopped = () => true;
   o.report = async (p) => { last = structuredClone(p); };
   o.turn = async (opts) => {

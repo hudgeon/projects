@@ -8,8 +8,51 @@ import { digest, token } from "./auth";
 import type { Portfolio } from "./index";
 import { randomUUID } from "node:crypto";
 import type { Lane, Run, RunInput } from "../src/run-model";
+import { UPKEEP_AUTH_HEADER } from "../src/upkeep-model";
 import { start, options } from "./miniflare-fixtures";
 import { archiveSnapshot } from "./snapshot-fixtures";
+
+test("new upkeep prefers a ready Claude login without moving existing work", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "projects-upkeep-routing-"));
+  const script = path.join(dir, "worker.mjs");
+  await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
+  const studio = "m".repeat(64), laptop = "a".repeat(64), origin = "https://example.com";
+  const mf = await start(await options(script, dir, {ALLOWED_EMAILS: "owner@example.com", RUNNER_TOKEN: studio, LAPTOP_RUNNER_TOKEN: laptop}));
+  const miniId = randomUUID(), airId = randomUUID();
+  const claim = async (bearer: string, runnerId: string, auth?: string, lanes: Lane[] = ["standard", "upkeep"], activeRunIds: string[] = []) => {
+    const response = await mf.dispatchFetch(origin + "/api/runner/claim", {
+      method: "POST",
+      headers: {Authorization: `Bearer ${bearer}`, "Content-Type": "application/json", ...(auth ? {[UPKEEP_AUTH_HEADER]: auth} : {})},
+      body: JSON.stringify({runnerId, lanes, activeRunIds}),
+    });
+    assert.equal(response.status, 200);
+    return (await response.json() as {run: Run | null}).run;
+  };
+  try {
+    const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
+    const store = ns.get(ns.idFromName("test")) as unknown as Portfolio;
+    const create = (lane: Lane) => store.createRun({requestId: randomUUID(), text: lane, projectId: null, agent: "auto", workIssue: null, lane}, "owner@example.com");
+    const run = await create("upkeep");
+    assert.equal(await claim(laptop, airId, "ready", []), null, "a full machine offers no lanes");
+    assert.equal((await claim(studio, miniId, "signed_out"))?.id, run.id, "the only available machine can still report a sign-in failure");
+    assert.equal(await claim(laptop, airId, "ready"), null, "a ready machine never takes over a claimed cycle");
+    const standard = await create("standard");
+    assert.equal(await claim(laptop, airId, "ready", ["standard", "upkeep"]), null, "the preferred machine still gets ordinary work");
+    assert.equal((await claim(studio, miniId, "signed_out"))?.id, run.id, "unacknowledged claims are still retried on their own machine");
+    const next = await create("upkeep");
+    const blocked = {seq: 1, state: "blocked", summary: "Sign in to Claude Code", children: [], masterSessionId: null, reviewedMessageIds: [run.messages[0].id]};
+    assert.equal((await mf.dispatchFetch(origin + "/api/runner/report", {
+      method: "POST", headers: {Authorization: `Bearer ${studio}`, "Content-Type": "application/json"},
+      body: JSON.stringify({runnerId: miniId, id: run.id, generation: 1, progress: blocked}),
+    })).status, 200);
+    assert.equal((await claim(studio, miniId, "signed_out"))?.id, standard.id);
+    assert.equal(await claim(studio, miniId, "signed_out", undefined, [standard.id]), null, "a ready runner beats an earlier signed-out runner");
+    assert.equal((await claim(laptop, airId, "ready"))?.id, next.id);
+    await store.messageRun(run.id, {requestId: randomUUID(), text: "The login is renewed"});
+    assert.equal(await claim(laptop, airId, "ready", undefined, [next.id]), null);
+    assert.equal((await claim(studio, miniId, "ready", undefined, [standard.id]))?.id, run.id);
+  } finally { await mf.dispose(); await rm(dir, {recursive: true, force: true}); }
+});
 
 test("new conversations follow runner capacity and existing conversations stay on their machine", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-fallback-")), script = path.join(dir, "worker.mjs");

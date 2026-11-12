@@ -30,98 +30,10 @@ import { memoryAdmission } from "./memory-admission";
 import { readDocument } from "./documents";
 import { documentJobSchema } from "../src/document-model";
 import { installedRelease, loadConfig, type Config } from "./config";
-import { telemetry, type TelemetryFields } from "../src/telemetry";
+import { telemetry } from "../src/telemetry";
+import { runnerClient, type Post } from "./api";
+import { upkeepAuth } from "./upkeep-auth";
 
-type Route = `/api/runner/${"claim" | "heartbeat" | "report" | "browser" | "screenshot" | "document"}`;
-type Body = {
-  runnerId: string;
-  activeRunIds?: string[];
-  lanes?: Lane[];
-  id?: string;
-  generation?: number;
-  progress?: Progress;
-  screenshotId?: string;
-  documents?: boolean;
-  lease?: string;
-  content?: string;
-  failure?: string;
-};
-// The Worker's runner API. A failure is logged when it starts and at each
-// doubling of attempts, its recovery once, so an outage cannot flood logs.
-function client(endpoint: URL, token: string) {
-  const failures = new Map<string, { attempt: number; at: number }>();
-  return async function post(route: Route, body: Body) {
-    const started = performance.now();
-    const failureKey = `${route}:${body.id ?? "pool"}`;
-    let response: Response | undefined;
-    const context: TelemetryFields = {
-      route,
-      // A document's id is not a conversation's.
-      runId: route === "/api/runner/document" ? undefined : body.id,
-      generation: body.generation,
-      seq: body.progress?.seq,
-    };
-    try {
-      response = await fetch(new URL(route, endpoint), {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-        redirect: "error",
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok)
-        throw new Failure(
-          "report_failed",
-          `Runner request failed (${response.status}).`,
-        );
-      const result = (await response.json()) as Record<string, unknown>;
-      const failure = failures.get(failureKey);
-      if (failure) {
-        telemetry("runner", "runner_request_recovered", {
-          ...context,
-          attempt: failure.attempt,
-          durationMs: Math.max(0, Date.now() - failure.at),
-        });
-        failures.delete(failureKey);
-      }
-      return result;
-    } catch (error) {
-      const failure = failures.get(failureKey) ?? {
-        attempt: 0,
-        at: Date.now(),
-      };
-      failure.attempt++;
-      failures.set(failureKey, failure);
-      if (Number.isInteger(Math.log2(failure.attempt))) {
-        const requestId = z
-          .uuid()
-          .safeParse(response?.headers.get("X-Projects-Request-Id"));
-        telemetry(
-          "runner",
-          "runner_request_failed",
-          {
-            ...context,
-            attempt: failure.attempt,
-            durationMs: Math.round(performance.now() - started),
-            status: response?.status,
-            requestId: requestId.success ? requestId.data : undefined,
-            reason: response?.ok
-              ? "invalid_response"
-              : response
-                ? "http_error"
-                : "network_error",
-          },
-          "warn",
-        );
-      }
-      throw error;
-    }
-  };
-}
-type Post = ReturnType<typeof client>;
 // Tells the owner a conversation needs a look when its execution could not
 // set up or report, keeping the native identity, phase and pending receipt.
 async function needsInspection(
@@ -449,7 +361,7 @@ async function executor(config: Config, endpoint: URL, runId: string) {
     await executeClaim({
       config,
       endpoint,
-      post: client(endpoint, handoff.token),
+      post: runnerClient(endpoint, handoff.token),
       runnerId: handoff.runnerId,
       claim,
       control,
@@ -493,7 +405,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
     runnerId = randomUUID();
     await savePrivate(identity, { id: runnerId });
   }
-  const post = client(endpoint, token);
+  const post = runnerClient(endpoint, token);
   const once = process.argv.includes("--once");
   // This runner's known executors, by conversation.
   const executors = new Map<string, number>();
@@ -643,6 +555,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
     })();
   };
   // Serial check-ins continue while full or pressure-paused, carrying documents.
+  const claudeAuth = upkeepAuth();
   try {
     await runPool({
       concurrency: config.concurrency,
@@ -654,15 +567,16 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       leave: true,
       once,
       claim: async (activeRunIds, lanes) => {
+        const auth = !once && lanes.includes("upkeep") ? claudeAuth() : undefined;
         const reserved = reserve();
         let claim: Record<string, unknown> = {};
         try {
           claim = await post("/api/runner/claim", {
             runnerId,
             activeRunIds,
-            lanes,
+            lanes: auth || once ? lanes : lanes.filter((lane) => lane !== "upkeep"),
             documents: reserved,
-          });
+          }, auth);
         } finally {
           offered(reserved, claim.document);
         }

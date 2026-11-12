@@ -78,6 +78,14 @@ if(${JSON.stringify(agent)}==='codex') {
     // whole session's per-model totals.
     if(mode==='stale')send({type:'result',subtype:'success',is_error:false,num_turns:0,usage:{input_tokens:0,cache_creation_input_tokens:0,cache_read_input_tokens:0,output_tokens:0},modelUsage:{'model-a':{inputTokens:5000,cacheCreationInputTokens:90000,cacheReadInputTokens:800000,outputTokens:7000}}});
     send({type:'system',subtype:'init',session_id:'test-session'});
+    if(['auth','subagentAuth','recoveredAuth'].includes(mode)){
+      send({type:'assistant',error:'authentication_failed',parent_tool_use_id:mode==='subagentAuth'?'tool-1':null,message:{content:[{type:'text',text:'private-provider-detail'}]}});
+      if(mode!=='recoveredAuth'){
+        send({type:'result',subtype:'success',is_error:true,num_turns:0});
+        process.exitCode=1;
+        return;
+      }
+    }
     send({type:'assistant',message:{id:'msg-1',usage:{input_tokens:10,cache_creation_input_tokens:1000,cache_read_input_tokens:0,output_tokens:50},content:[{type:'thinking',thinking:'private-reasoning'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'secret-command'}}]}});
     send({type:'assistant',message:{id:'msg-2',usage:{input_tokens:5,cache_creation_input_tokens:200,cache_read_input_tokens:1000,output_tokens:30},content:[{type:'thinking',thinking:note},{type:'text',text:'ordinary private commentary'},{type:'text',text:note}]}});
     send({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tool-1',content:'private-output'}]}});

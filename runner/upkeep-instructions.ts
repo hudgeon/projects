@@ -187,7 +187,7 @@ Source: <the listed source it was read on, as a link>
 Applies to: <the runner flag, runner prompt, shared rule, skill or hook it bears on>
 Replaces: <the workaround or measured friction category it would remove, or none>
 Guard: <the test or check that would keep it adopted>
-A child that finds nothing returns "Nothing to adopt" with the versions it reviewed. Anything read outside these sources is not evidence; a source that has moved or does not answer is reported as such, never replaced by another site.
+A child that finds nothing returns "Nothing to adopt" with the versions it reviewed. Anything read outside these sources is not evidence; a source that has moved or does not answer is reported as such, never replaced by another site. If Claude Code reports that it could not authenticate, pause for the owner to sign in on this machine before dispatching another research turn.
 Sources. ${researchSources()}`;
   return `This is Projects' upkeep lane: a weekly cycle that keeps the agent setup improving from evidence, under the rules below. The agent setup is the shared global rules, skills, hooks and repository templates in the configuration repository, each repository's AGENTS.md, and the runner's own prompts and flags in the Projects repository (runner/master-instructions.ts, runner/instructions.ts, runner/upkeep-instructions.ts, the flags in runner/native.ts and hooks/work-item.ts). Nothing here invents progress: the usual result of a cycle is that no change is needed.
 

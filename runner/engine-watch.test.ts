@@ -9,7 +9,10 @@ import { result, fixture, complete, dispatch, engineOptions, waitFor } from "./r
 test("a helper's quiet wait is shown, reported as possibly stuck, and the helper is told once", async () => {
   const dir = await fixture(), o = engineOptions(dir), steered: string[] = [], reports: Progress[] = [];
   let masters = 0;
-  o.limits = {showMs: 20, quietMs: 40, idleMs: 80, silentMs: 60_000, sampleMs: 10};
+  // A process reading counts for two samples, so the interval outlasts ps
+  // itself (tens of milliseconds on a busy Mac); a shorter one drops the stuck
+  // mark between readings, and the report every three seconds can miss it.
+  o.limits = {showMs: 20, quietMs: 40, idleMs: 80, silentMs: 60_000, sampleMs: 1000};
   o.report = async (p) => { reports.push(structuredClone(p)); };
   o.turn = async (opts) => {
     await opts.onSession(randomUUID());
