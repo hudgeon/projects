@@ -1,15 +1,6 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import type { ContextFailure } from "../src/telemetry";
 import type { ProjectDirectory } from "./workspaces";
-import {
-  JEV_MODEL,
-  QUESTION_BYTES,
-  REQUEST_BYTES,
-  type Selector,
-  type SelectionRecord,
-} from "./context";
-import { BATCH, judgeBatches, question, sendBatches, shown, type SendOrder } from "./project-judge";
 import {
   command,
   credentialLike,
@@ -37,10 +28,10 @@ import {
 
 // Retrieval stays in code: every eligible source splits into natural units
 // (markdown sections, top-level code statements and recent work comments),
-// ranked by the task's words. Jev judges a shortlist and code supplies the
-// best few. The private receipt describes exactly
-// what was considered; it never represents this as a review of all code.
-const POLICY = 2;
+// ranked by the task's words; the best few that fit the budget are supplied.
+// The private receipt describes exactly what was considered; it never
+// represents this as a review of all code.
+const POLICY = 3;
 const CORPUS_BYTES = 32_000_000;
 const SHORTLIST = 40;
 const SOURCE_UNITS = 8;
@@ -52,10 +43,6 @@ const PROTECTED_CHARS = 24_000;
 // An instruction file a native app loads by itself, up to the size Codex
 // reads whole.
 const NATIVE_BYTES = 32_768;
-// Validated on labelled real turns: a unit Jev rates below this is not
-// supplied, however much of the budget remains.
-export const KEEP_FROM = 0.5;
-export { BATCH } from "./project-judge";
 type Options = {
   project: ProjectDirectory;
   cwd?: string;
@@ -70,19 +57,11 @@ type Options = {
   // Instruction files already sent to the turn's native session, by hash.
   given?: Record<string, string>;
   signal: AbortSignal;
-  selector?: Selector;
-  cached?: unknown;
   readIssue?: (repo: string, number: number) => Promise<Issue>;
-  // Replays of stored reviews are tagged apart from real turns.
-  trigger?: "project-replay";
-  // Replays only: send the shortlist reversed or shuffled, or so many
-  // candidates per request, to measure how the request shape moves ratings.
-  order?: SendOrder;
-  batch?: number;
 };
 
-// Jev reads the original request and the newest instructions as far as they
-// fit; native agents still receive every instruction.
+// Retrieval reads the original request and the newest instructions as far as
+// they fit; native agents still receive every instruction.
 function steering(task: string, instructions: string[]) {
   const order = instructions.map((_, i) => i).reverse();
   if (order.length > 1) order.splice(1, 0, order.pop()!);
@@ -95,8 +74,7 @@ function steering(task: string, instructions: string[]) {
     }
   return instructions.filter((_, i) => kept.has(i));
 }
-// What a review read, so it can be replayed without the conversation: the
-// instructions are those Jev saw.
+// What a review read: the instructions are those retrieval used.
 const input = (o: Options, root: string | null) => ({
   plan: o.project.plan,
   cwd: o.cwd ?? o.project.cwd,
@@ -266,33 +244,8 @@ async function collect(o: Options) {
   for (const u of scored)
     if (!pinned.includes(u) && (perSource.get(source(u)) ?? 0) < SOURCE_UNITS)
       add(ranked, u);
-  // Pack the shortlist within the model's limits. Byte counts here slightly
-  // overstate the request, which judgeContext checks exactly.
-  const largest = Buffer.byteLength(JSON.stringify(question(SHORTLIST)));
-  let stateBytes = Buffer.byteLength(
-      JSON.stringify({ task: o.task, userInstructions: steer, candidates: [] }),
-    ),
-    requestBytes = stateBytes + 200;
-  const candidates: Unit[] = [];
-  for (const unit of ranked) {
-    if (candidates.length === SHORTLIST) break;
-    const size = Buffer.byteLength(JSON.stringify(shown(unit))) + 1;
-    if (
-      stateBytes + size + largest > QUESTION_BYTES ||
-      requestBytes + size + largest + 16 > REQUEST_BYTES
-    )
-      continue;
-    candidates.push(unit);
-    stateBytes += size;
-    requestBytes += size + largest + 16;
-  }
-  const groups = sendBatches(
-    candidates.length,
-    o.order,
-    hash(JSON.stringify(candidates.map((u) => [u.path, u.startChar]))),
-    Math.max(1, Math.floor(o.batch ?? BATCH)),
-  );
-  const perm = groups.flat();
+  // The shortlist the receipt indexes; the best of it is supplied.
+  const candidates = ranked.slice(0, SHORTLIST);
   const instructions = new Set<string>(["AGENTS.md"]);
   for (const { path: name } of candidates) {
     if (name.includes("://")) continue;
@@ -336,20 +289,17 @@ async function collect(o: Options) {
   }
   o.signal.throwIfAborted();
   const gaps = sources.filter((s) => s.status !== "read");
-  // A judgment covers exactly what Jev saw. Edits elsewhere in the project,
-  // instructions and gaps reach the prompt fresh without invalidating it.
+  // The version covers the shortlist; instructions and gaps reach the prompt
+  // fresh.
   const version = hash(
     JSON.stringify({
       scope: "project",
       policy: POLICY,
-      model: JEV_MODEL,
       project: o.project.id,
       root,
       plan: o.project.plan,
       task: o.task,
       query: o.query,
-      order: o.order,
-      batch: o.batch,
       instructions: o.instructions,
       candidates: candidates.map(({ score: _, prior: __, ...unit }) => unit),
     }),
@@ -363,12 +313,6 @@ async function collect(o: Options) {
     sources: sources.filter((s) => s.status !== "read" || used.has(s.path)),
     gaps,
     unscanned,
-    state: {
-      task: o.task,
-      userInstructions: steer,
-      candidates: perm.map((i) => shown(candidates[i])),
-    },
-    groups,
     candidates,
     baseline: supply(candidates),
     protectedSources,
@@ -386,18 +330,13 @@ export async function reviewProjectContext(o: Options) {
   } catch {
     o.signal.throwIfAborted();
     return {
-      prompt: o.selector?.mode === "shadow" ? "" : unavailable,
+      prompt: unavailable,
       view: hash(unavailable),
       sent: {} as Record<string, string>,
       receipt: {
         version: hash(
           JSON.stringify([o.project.id, o.cwd, o.instructions, o.task]),
         ),
-        strategy: "baseline",
-        reason: "source_unavailable",
-        cached: false,
-        order: o.order,
-        batch: Math.max(1, Math.floor(o.batch ?? BATCH)),
         projectId: o.project.id,
         head: null,
         input: input(o, null),
@@ -407,77 +346,17 @@ export async function reviewProjectContext(o: Options) {
         workBrief: undefined,
         considered: [] as (Omit<Excerpt, "text"> & { score: number })[],
         supplied: [] as number[],
-        selected: 0,
-        omitted: 0,
-        baselineChars: 0,
-        selectedChars: 0,
-        keepFrom: KEEP_FROM,
-        failure: undefined as ContextFailure | undefined,
+        suppliedChars: 0,
       },
-      record: undefined,
     };
   }
-  let record: SelectionRecord | undefined,
-    failure: ContextFailure | undefined,
-    cached = false,
-    reason = "disabled";
-  if (
-    o.selector &&
-    o.selector.mode !== "off" &&
-    snapshot.available &&
-    snapshot.candidates.length
-  ) {
-    const judgment = await judgeBatches(snapshot, o);
-    record = judgment.record;
-    failure = judgment.failure;
-    cached = judgment.cached;
-    reason = judgment.reason ?? "selected";
-    if (record && !cached) {
-      try {
-        const latest = await collect(o);
-        if (latest.version !== snapshot.version) {
-          record = undefined;
-          cached = false;
-          reason = "evidence_changed";
-        }
-        snapshot = latest;
-      } catch {
-        o.signal.throwIfAborted();
-        record = undefined;
-        cached = false;
-        reason = "source_unavailable";
-      }
-    }
-  } else if (o.selector?.mode !== "off")
-    reason = !snapshot.available ? "source_unavailable" : "no_candidates";
-  // Jev ranks; code keeps the best units it rates at or above the cutoff.
-  // Shadow mode records that ranking and supplies nothing: the turn's prompt
-  // is as it would be with selection off.
-  const judged = record,
-    shadow = o.selector?.mode === "shadow";
-  const kept = shadow
-    ? []
-    : judged
-      ? supply(
-          snapshot.candidates
-            .map((unit, i) => ({ unit, p: judged.probabilities[`keep_${i}`] }))
-            .filter(({ p }) => p >= KEEP_FROM)
-            .sort((a, b) => b.p - a.p)
-            .map(({ unit }) => unit),
-        )
-      : snapshot.baseline;
-  const strategy = shadow ? "shadow" : record ? o.selector!.mode : "baseline";
+  const kept = snapshot.baseline;
   const { text: workText, ...workSource } = snapshot.workBrief ?? {};
   const receipt = {
     version: snapshot.version,
     projectId: o.project.id,
     head: snapshot.head,
     input: input(o, snapshot.root),
-    strategy,
-    reason,
-    cached,
-    order: o.order,
-    batch: Math.max(1, Math.floor(o.batch ?? BATCH)),
     coverage: "bounded_excerpts",
     inventoryCount: snapshot.inventoryCount,
     unscanned: snapshot.unscanned,
@@ -493,12 +372,7 @@ export async function reviewProjectContext(o: Options) {
     ),
     // Indexes into considered of the units supplied, best first.
     supplied: kept.map((unit) => snapshot.candidates.indexOf(unit)),
-    selected: kept.length,
-    omitted: snapshot.candidates.length - kept.length,
-    baselineChars: snapshot.baseline.reduce((n, c) => n + c.text.length, 0),
-    selectedChars: kept.reduce((n, c) => n + c.text.length, 0),
-    keepFrom: KEEP_FROM,
-    failure,
+    suppliedChars: kept.reduce((n, c) => n + c.text.length, 0),
   };
   const urls = new Map(snapshot.sources.map(({ path, hash, url }) => [`${path}:${hash}`, url]));
   const evidence = kept.map(({ score: _, prior: __, ...unit }) => ({
@@ -517,12 +391,11 @@ export async function reviewProjectContext(o: Options) {
   };
   const given = o.given ?? {};
   return {
-    record,
     receipt,
-    prompt: shadow ? "" : view(given),
+    prompt: view(given),
     // The same content whatever the session already holds.
     view: hash(view({})),
     // The instruction files this prompt carries, by hash.
-    sent: Object.fromEntries(shadow ? [] : snapshot.protectedSources.filter((s) => given[s.path] !== s.hash).map((s) => [s.path, s.hash])),
+    sent: Object.fromEntries(snapshot.protectedSources.filter((s) => given[s.path] !== s.hash).map((s) => [s.path, s.hash])),
   };
 }

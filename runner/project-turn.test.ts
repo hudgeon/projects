@@ -7,7 +7,7 @@ import { savePrivate } from "./engine";
 import { contextBrief, REVIEW_DAYS, REVIEWS, reviewsDir, usage } from "./project-turn";
 import { reviewProjectContext } from "./project-context";
 import { sessionMemory } from "./session-memory";
-import { fixture, selector } from "../tests/project-fixtures";
+import { fixture } from "../tests/project-fixtures";
 
 test("a turn's usage keeps project-relative paths and line ranges and only counts other files", () => {
   const used = usage(["/real/project", "/link/project"]);
@@ -47,8 +47,6 @@ test("every review is receipted with its inputs, within a bounded history", asyn
       {
         stateDir,
         run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 },
-        host: "test",
-        selector: selector().value,
         signal: options.signal,
         instructions: options.instructions,
         save: savePrivate,
@@ -79,7 +77,7 @@ test("every review is receipted with its inputs, within a bounded history", asyn
       task: options.task,
       instructions: options.instructions,
     });
-    assert.equal(receipt.supplied.length, receipt.selected);
+    assert.ok(receipt.supplied.length > 0 && receipt.suppliedChars > 0);
     assert.deepEqual(receipt.usage.files, [{ path: "src/invoices.ts", read: true, lines: [[1, 1]] }]);
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -92,13 +90,13 @@ test("instruction files the turn's app loads itself are named, never sent; other
   const stateDir = path.join(cwd, ".state");
   const brief = (native: string, session?: string) =>
     contextBrief(
-      { stateDir, run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 }, host: "test", selector: selector().value, signal: options.signal, instructions: options.instructions, native, save: savePrivate },
+      { stateDir, run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 }, signal: options.signal, instructions: options.instructions, native, save: savePrivate },
       options.project, cwd, options.task, "master", "codex", session,
     );
   try {
     await writeFile(path.join(cwd, "src/AGENTS.md"), "Never change the account boundary in this directory.\n");
     // A helper works in the project: its app loads the root file, not the nested one.
-    const helper = await reviewProjectContext({ ...options, selector: selector().value, native: cwd });
+    const helper = await reviewProjectContext({ ...options, native: cwd });
     // Should an app stop loading it, the agent is still told which file to read.
     assert.match(helper.prompt, /Repository instructions your app has loaded itself, not repeated here: AGENTS\.md\. Read any of them you do not hold before you act\./);
     assert.doesNotMatch(helper.prompt, /Drafting only/);
@@ -124,7 +122,7 @@ test("instruction files the turn's app loads itself are named, never sent; other
     await third.remember("session-1");
     const memory = sessionMemory(stateDir, "cccccccc-0000-4000-8000-000000000000");
     const turn = (session: string) => contextBrief(
-      { stateDir, run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 }, host: "test", selector: selector().value, signal: options.signal, instructions: options.instructions, native: elsewhere, memory, save: savePrivate },
+      { stateDir, run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 }, signal: options.signal, instructions: options.instructions, native: elsewhere, memory, save: savePrivate },
       options.project, cwd, options.task, "master", "codex", session,
     );
     const compacting = await turn("session-1");
@@ -134,34 +132,11 @@ test("instruction files the turn's app loads itself are named, never sent; other
     assert.match((await turn("session-1")).prompt, /two approvals[\s\S]*Never change the account boundary/, "what the compacting turn held does not count");
     // A file too long to send is a gap only for an app that does not load it.
     await writeFile(path.join(cwd, "AGENTS.md"), "Long standing rules. ".repeat(1_250));
-    const long = await reviewProjectContext({ ...options, selector: selector().value, native: cwd });
+    const long = await reviewProjectContext({ ...options, native: cwd });
     assert.match(long.prompt, /loaded itself, not repeated here: AGENTS\.md/);
     assert.doesNotMatch(long.prompt, /read_required/);
-    assert.match((await reviewProjectContext({ ...options, selector: selector().value, native: elsewhere })).prompt, /"path":"AGENTS\.md"[^}]*"status":"read_required"/);
+    assert.match((await reviewProjectContext({ ...options, native: elsewhere })).prompt, /"path":"AGENTS\.md"[^}]*"status":"read_required"/);
   } finally {
     await Promise.all([rm(cwd, { recursive: true, force: true }), rm(elsewhere, { recursive: true, force: true })]);
-  }
-});
-
-test("shadow mode receipts its review and leaves the turn's prompt as it is with selection off", async () => {
-  const { cwd, options } = await fixture();
-  const stateDir = path.join(cwd, ".state");
-  try {
-    const brief = await contextBrief(
-      { stateDir, run: { id: "cccccccc-0000-4000-8000-000000000000", generation: 1 }, host: "test", selector: { ...selector().value, mode: "shadow" }, signal: options.signal, instructions: options.instructions, save: savePrivate },
-      options.project, cwd, options.task, "master", "codex", "session-1",
-    );
-    assert.equal(brief.prompt, "");
-    brief.onFile({ path: path.join(cwd, "src/invoices.ts") });
-    await brief.remember("session-1");
-    const [name] = (await readdir(reviewsDir(stateDir))).filter((n) => n.endsWith(".json"));
-    const receipt = JSON.parse(await readFile(path.join(reviewsDir(stateDir), name), "utf8"));
-    assert.equal(receipt.strategy, "shadow");
-    assert.ok(receipt.record && receipt.considered.length, "Jev's ranking is kept to compare with what the turn went on to read");
-    assert.deepEqual(receipt.supplied, []);
-    assert.deepEqual(receipt.usage.files, [{ path: "src/invoices.ts", read: true }]);
-    assert.deepEqual(await readdir(path.join(stateDir, "runs")).catch(() => []), [], "no view was given to remember");
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
   }
 });

@@ -54,9 +54,8 @@ commands). It publishes `live.watch`, times and categories only:
 
 - a tool call open for two minutes shows as a wait, with what a command waits
   on as a category (a review, CI checks, tests, a build, a deploy, Git,
-  another machine or a wait loop): from local rules on the command, or, when
-  they place nothing, from Jev (below); only the category reaches the
-  overview;
+  another machine or a wait loop) from local rules on the command; only the
+  category reaches the overview;
 - the agent silent for two minutes with no tool call open shows as "no word";
 - **may be stuck**, `idle`: a tool call open while nothing the commands run
   has used CPU and the agent has said nothing for 10 minutes, or for 3 minutes
@@ -71,53 +70,6 @@ gets one push notification for it, the runner records `turn_stuck` (reason
 `commands_idle` or `agent_silent`), and a helper is told once, at its next
 step, to stop anything waiting for input or say what it is waiting on. Stop
 ends the turn as usual.
-
-## Jev shadow checks
-
-`runner/run-checks.ts` asks the machine's Jev selector (see
-[context-selection.md](context-selection.md)) yes/no questions whenever
-context selection is on (`select` or `shadow`):
-
-- before each dispatch, for each finished helper (up to eight), whether its
-  report already shows done or verified something the new brief asks for
-  (the judged value, which the labels mean) and whether the brief asks for
-  anything beyond it (kept beside it; on the 19 October receipts it was high
-  for every report, so the overlap rating is the signal); one question about
-  "everything" was read literally and never fired. On that day's 12 labelled
-  dispatches (4 repeated finished work), the overlap rating separates them
-  with AUC 0.97 and flags all 4 at 0.8 with 4 to 7 false alarms, where the
-  old question flagged none at any threshold. Reports are dropped oldest
-  first until the request fits the model's limits, and the receipt counts
-  them;
-- at each helper progress note, whether that helper's recent notes (up to six)
-  show it progressing, repeating steps, waiting on something outside its own
-  work, or blocked;
-- for a command open two minutes that the local rules cannot place, how likely
-  it waits on each category, and whether it waits for input it will not get.
-
-Jev sees the brief, the helpers' summaries and checks, the notes' done,
-remaining and your-move lists, and, for the last check only, the command's
-text; never tool output, sessions or evidence lines (owner's approvals, 19
-October 2026). The command first has recognizable credentials replaced
-(`runner/command-text.ts`: known token formats, private keys, passwords in
-URLs, authorization headers, literal values of secret-named keys, variables
-and flags, and any long, random-looking value given to a variable, flag or
-key) and is bounded to 2,000 characters; one still
-credential-like after that is not sent at all. That is best effort, so a
-command can still carry private paths, names or an unrecognized secret to the
-gateway. Requests use context selection's key, gateway, request limits and
-failure diagnostics, tagged process `run-checks` with trigger
-`dispatch-check`, `progress-check` or `wait-check`. Each
-judgment is a private receipt in the runner state's `run-checks/` (newest
-1,000) with the helper it concerns, its inputs, probabilities, tokens and
-latency, never in snapshots or telemetry; logs count `jev_check_judged` and record `jev_selection_failed`
-with these triggers. Only the wait label is shown, when one category is rated
-at least 0.5; it is a display, and the local rules come first. Nothing else
-acts on a judgment: the master and the owner see no difference until labelled
-conversations validate a threshold, as the 0.5 cutoff was validated for
-project review. `npm run context:replay -- checks`
-labels and scores them (see the quality loop in
-[context-selection.md](context-selection.md)).
 
 ## Current work and conversation measures
 

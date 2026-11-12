@@ -28,7 +28,6 @@ A private overview of the owner's repositories across their connected machines, 
 - `src/run-text.ts` owns how agent text is shown (titles, status lines, documents); it only removes protocol residue and never invents progress or verification.
 - `collector/friction*.ts` derives friction from native transcripts by fixed local rules. Receipts (counts, versions, cwd, session ids) stay in the machine's state directory; snapshots carry only per-day totals by app, median start and peak tokens by app and source, and the versions seen. Never let transcript text, commands, paths or output into a field that leaves the machine.
 - `src/telemetry.ts` owns safe logging/receipt fields; `worker/telemetry.ts` owns Cloudflare spans. Keep prompts, native output, paths and raw exceptions out of telemetry. Preserve correlation IDs and sampling labels; logs never prove execution success.
-- A change to Jev project review's retrieval, question wording, request shape, 0.5 cutoff or pinned model carries before/after metrics from `npm run context:replay` in its PR (docs/context-selection.md).
 - Project names and canonical plan links belong in repository-local `.project-overview.json`; identity must survive path moves. See public/agents.md. Snapshot replacement removes moved/deleted entries without deleting native sessions.
 
 ## Delivery

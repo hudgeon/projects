@@ -5,70 +5,6 @@ export const machineIdSchema = z
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/);
 
 const ms = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const contextErrorCodeSchema = z.enum([
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
-  "ETIMEDOUT",
-  "ECONNRESET",
-  "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_SOCKET",
-  "CERT_HAS_EXPIRED",
-  "CERT_NOT_YET_VALID",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UND_ERR_ABORTED",
-  "ABORT_ERR",
-  "ERR_INVALID_URL",
-  "ERR_INVALID_CHAR",
-  "UND_ERR_INVALID_ARG",
-]);
-export const contextFailureSchema = z
-  .object({
-    selectionId: z.uuid(),
-    stage: z.enum(["prepare", "key", "request", "response", "validation"]),
-    kind: z.enum([
-      "request_too_large",
-      "key_unavailable",
-      "timeout",
-      "dns",
-      "connect",
-      "tls",
-      "socket",
-      "aborted",
-      "request_invalid",
-      "network",
-      "unexpected",
-      "http",
-      "invalid_json",
-      "invalid_schema",
-      "answer_coverage",
-    ]),
-    transport: z.enum(["direct", "gateway"]),
-    durationMs: ms,
-    stageDurationMs: ms,
-    timeoutMs: ms,
-    requestBytes: ms,
-    candidateCount: ms,
-    status: z.number().int().min(100).max(599).optional(),
-    errorCode: contextErrorCodeSchema.optional(),
-    gatewayLogId: z.uuid().optional(),
-    providerRequestId: z.uuid().optional(),
-    cfRay: z
-      .string()
-      .regex(/^[a-f0-9]{16}(?:-[A-Z]{3})?$/i)
-      .optional(),
-  })
-  .strict();
-export type ContextFailure = z.infer<typeof contextFailureSchema>;
 const outcome = z.enum([
   "completed",
   "blocked",
@@ -287,8 +223,6 @@ const logFieldsSchema = telemetryFieldsSchema.extend({
   supportPreviewPhase: z.enum(["poll", "native", "finish"]).optional(),
   admission: z.enum(["open", "paused"]).optional(),
   memoryPressure: z.enum(["normal", "warning", "critical", "unknown", "unsupported"]).optional(),
-  contextTrigger: z.enum(["project-turn", "dispatch-check", "progress-check", "wait-check"]).optional(),
-  contextFailure: contextFailureSchema.optional(),
   // The key path a runner's config failed on, never a value: identifier
   // segments joined by dots, "*" for a segment the owner chose, or a
   // placeholder in angle brackets when no key applies.
@@ -341,9 +275,6 @@ const logEventSchema = z.enum([
   "runner_draining",
   "runner_executor_adopted",
   "runner_executor_failed",
-  "jev_selection_failed",
-  // A shadow run check was judged; its receipt stays on the machine.
-  "jev_check_judged",
   "notification_sent",
   // A delegated mailbox got no token for a turn, which ran without one.
   "mailbox_unavailable",

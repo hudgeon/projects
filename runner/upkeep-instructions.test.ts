@@ -74,7 +74,7 @@ test("the brief says where the receipts are, names the record and the configurat
   assert.ok(text.includes(upkeepEvidence(activity, now)));
   assert.match(text, /On this machine \(studio\) each native session has one receipt under \/Users\/owner\/\.local\/share\/project-overview\/friction/);
   assert.match(text, /never transcript text/);
-  assert.match(text, /Jev run-check receipts are under \/Users\/owner\/\.local\/share\/project-overview\/runner/);
+  assert.match(text, /The runner's journals are under \/Users\/owner\/\.local\/share\/project-overview\/runner/);
   assert.match(text, /`npm run friction -- --since 7d --top 10`/);
   assert.match(text, /dispatch a read child for that detail/);
   assert.match(text, /reads them over SSH, read-only, with the login this machine already has \(never adding keys or changing SSH configuration\)/);

@@ -4,20 +4,13 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { reviewProjectContext } from "../runner/project-context";
-import { QUESTION_BYTES, REQUEST_BYTES } from "../runner/context";
-import { fixture, selector } from "./project-fixtures";
+import { fixture } from "./project-fixtures";
 
 test("only recent work comments enter the shortlist when a current position is present", async () => {
   const { cwd, options } = await fixture();
-  // Candidates arrive over the review's batched requests.
-  const sent: { path: string; section?: string }[] = [];
-  const mock = selector((body) => {
-    sent.push(...body.state.candidates);
-  });
   try {
     const view = await reviewProjectContext({
       ...options,
-      selector: mock.value,
       workIssue: { repo: "example/work", number: 9 },
       readIssue: async () => ({
         title: "Invoice importer",
@@ -29,7 +22,7 @@ test("only recent work comments enter the shortlist when a current position is p
         })),
       }),
     });
-    const paths = sent.map((c) => c.path);
+    const paths = view.receipt.considered.map((c) => c.path);
     assert.ok(!paths.includes("https://github.com/example/work/issues/9"));
     assert.match(view.prompt, /The delimiter check remains/);
     assert.ok(
@@ -42,15 +35,16 @@ test("only recent work comments enter the shortlist when a current position is p
         "https://github.com/example/work/issues/9#comment-2026-01-02T00:00:00Z",
       ),
     );
-    const latest = sent.find((c) => c.path.endsWith("01-07T00:00:00Z"));
+    const latest = view.receipt.considered.find((c) =>
+      c.path.endsWith("01-07T00:00:00Z"),
+    );
     assert.equal(latest!.section, "Comment 2026-01-07T00:00:00Z > Status");
-    assert.ok(mock.calls >= 1);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("a large project sends 20 to 40 candidates within the documented request limits", async () => {
+test("a large project's shortlist holds 40 units and what it supplies fits 6,000 characters", async () => {
   const { cwd, options } = await fixture();
   await mkdir(path.join(cwd, "docs"));
   for (let i = 0; i < 30; i++)
@@ -62,29 +56,11 @@ test("a large project sends 20 to 40 candidates within the documented request li
           `## Invoice note ${j}\n${"The invoice importer keeps its delimiter. ".repeat(12)}\n`,
       ).join("\n"),
     );
-  let candidates = 0;
-  const mock = selector((body) => {
-    candidates += body.state.candidates.length;
-    const largest = Math.max(
-      ...Object.values(body.questions).map((q) =>
-        Buffer.byteLength(JSON.stringify(q)),
-      ),
-    );
-    assert.ok(
-      Buffer.byteLength(JSON.stringify(body.state)) + largest <= QUESTION_BYTES,
-    );
-    assert.ok(Buffer.byteLength(JSON.stringify(body)) <= REQUEST_BYTES);
-  });
   try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-    });
-    assert.ok(candidates >= 20 && candidates <= 40, String(candidates));
-    assert.equal(view.receipt.considered.length, candidates);
-    assert.equal(mock.calls, 1, "one request holds the whole shortlist");
-    assert.equal(view.record!.batches, 1);
-    assert.ok(view.receipt.selectedChars <= 6_000);
+    const view = await reviewProjectContext(options);
+    assert.equal(view.receipt.considered.length, 40, "120 notes match");
+    assert.ok(view.receipt.supplied.length > 0);
+    assert.ok(view.receipt.suppliedChars <= 6_000);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -106,16 +82,12 @@ test("files a brief names lead the shortlist; only its opening steers retrieval"
       path.join(cwd, `docs/importer-${i}.md`),
       `## Importer note ${i}\n${"The invoice importer reads each invoice line. ".repeat(20)}\n`,
     );
-  const paths: string[] = [];
-  const mock = selector((body) => {
-    paths.push(...body.state.candidates.map((c: { path: string }) => c.path));
-  });
   try {
-    await reviewProjectContext({
+    const view = await reviewProjectContext({
       ...options,
       task: `change: Fix the invoice importer; the row store is src/ledger.ts.\n${"Keep the delivery gates. ".repeat(50)}Check the weather display too.`,
-      selector: mock.value,
     });
+    const paths = view.receipt.considered.map((c) => c.path);
     assert.ok(
       paths.includes("src/ledger.ts"),
       "a named file is a candidate without matching words",
@@ -130,7 +102,7 @@ test("files a brief names lead the shortlist; only its opening steers retrieval"
   }
 });
 
-test("YAML records are candidates; YAML holding an unquoted secret or in a hidden folder never reaches Jev", async () => {
+test("YAML records are candidates; YAML holding an unquoted secret or in a hidden folder never reaches the review", async () => {
   const { cwd, options } = await fixture();
   const value = randomUUID().replaceAll("-", "");
   await mkdir(path.join(cwd, "policies"));
@@ -155,23 +127,16 @@ test("YAML records are candidates; YAML holding an unquoted secret or in a hidde
     path.join(cwd, ".github/workflows/invoices.yml"),
     "name: Invoice importer delimiter check\n",
   );
-  let sections: string[] = [];
-  const mock = selector((body) => {
-    assert.ok(!JSON.stringify(body).includes(value));
-    sections = body.state.candidates
-      .filter((c: { path: string }) => c.path.endsWith(".yml"))
-      .map((c: { path: string; section: string }) => `${c.path}: ${c.section}`);
-  });
   try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-    });
+    const view = await reviewProjectContext(options);
+    const sections = view.receipt.considered
+      .filter((c) => c.path.endsWith(".yml"))
+      .map((c) => `${c.path}: ${c.section}`);
     assert.deepEqual(sections.sort(), [
       "policies/answers.yml: topics > key: invoice-archive",
       "policies/answers.yml: topics > key: invoice-delimiter",
     ]);
-    assert.ok(!view.prompt.includes(value));
+    assert.ok(!JSON.stringify(view).includes(value));
     assert.ok(
       view.receipt.sources.some(
         (s) =>

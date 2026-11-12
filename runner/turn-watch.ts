@@ -68,20 +68,18 @@ export function commandProcesses(rows: ProcessRow[], root: number) {
 const TOOLS = new Set<NativeActivity["kind"]>(["command", "read", "search", "edit", "tool"]);
 // Follows one native turn: its open tool calls, its last word and the CPU its
 // commands use. publish gets each change of what to show; stuck is called
-// once for each wait that may be stuck; label, when given, is asked once what
-// a long command the local rules cannot place waits on.
+// once for each wait that may be stuck.
 export function watchTurn(o: {
   pid: () => number | null;
   publish: (watch: LiveWatch | undefined) => void;
   stuck: (reason: NonNullable<LiveWatch["stuck"]>) => void;
-  label?: (command: string) => Promise<WaitLabel | undefined>;
   rows?: () => Promise<ProcessRow[]>;
   limits?: Partial<typeof WATCH_LIMITS>;
   now?: () => number;
 }) {
   const limits = { ...WATCH_LIMITS, ...o.limits },
     now = o.now ?? Date.now;
-  const open: { kind: NativeActivity["kind"]; at: number; label?: WaitLabel; command?: string; asked?: boolean }[] = [];
+  const open: { kind: NativeActivity["kind"]; at: number; label?: WaitLabel }[] = [];
   // Each command process: CPU seconds, when first seen, when it last used CPU.
   const procs = new Map<number, { cpu: number; seen: number; busy: number }>();
   let said = now(),
@@ -108,15 +106,6 @@ export function watchTurn(o: {
           : idle && t - quiet >= limits.quietMs
             ? idle.busy
             : null;
-      if (o.label && first.command && !first.label && !first.asked && t - first.at >= limits.showMs) {
-        first.asked = true;
-        void o.label(first.command).then((label) => {
-          if (label && open.includes(first)) {
-            first.label = label;
-            check();
-          }
-        }, () => {});
-      }
       if (stuckSince !== null || t - first.at >= limits.showMs)
         watch = {
           since: first.at,
@@ -172,7 +161,7 @@ export function watchTurn(o: {
       said = now();
       if (TOOLS.has(event.kind)) {
         if (event.state === "started")
-          open.push({ kind: event.kind, at: said, label: waitLabel(command), command });
+          open.push({ kind: event.kind, at: said, label: waitLabel(command) });
         else {
           const i = open.findLastIndex((t) => t.kind === event.kind);
           if (i >= 0) open.splice(i, 1);

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { projectsLinks } from "./friction-runner";
 
-test("native sessions Projects ran are linked to their conversation, helper, events and judgments", async () => {
+test("native sessions Projects ran are linked to their conversation, helper and events; old run-check receipts are not read", async () => {
   const stateDir = await mkdtemp(path.join(tmpdir(), "runner-"));
   await mkdir(path.join(stateDir, "runs"), { recursive: true });
   await mkdir(path.join(stateDir, "run-checks"), { recursive: true });
@@ -51,9 +51,6 @@ test("native sessions Projects ran are linked to their conversation, helper, eve
       "result:completed": 1,
       "execution_handed_back:native_error": 1,
       "turn_stuck:commands_idle": 2,
-      "jev:progress_checks": 1,
-      "jev:repeating": 1,
-      "jev:blocked": 1,
     },
   });
   assert.deepEqual(links.get("Codex:master-session"), {

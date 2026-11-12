@@ -24,7 +24,7 @@ export async function runTurn(
   steer?: { exclude: string[]; received: string[] },
 ): Promise<unknown> {
   const {
-    o, checks, j, event, failureReason, persist, publish, turn, ranHere, delivery, lastSaved,
+    o, j, event, failureReason, persist, publish, turn, ranHere, delivery, lastSaved,
     overran, screenshots, memory,
   } = x;
   let timing: Pick<ExecutionEvent, "model" | "effort" | "attempts" | "firstOutputMs"> = {};
@@ -132,7 +132,6 @@ export async function runTurn(
   let pid: number | null = null;
   const stall = watchTurn({
     limits: o.limits,
-    label: (command) => checks.label(child?.id ?? "master", command),
     pid: () => pid,
     publish: (watch) => {
       if (!j.progress.live) return;
@@ -302,7 +301,6 @@ export async function runTurn(
             childId: child?.id ?? null,
           },
         ].slice(-PROGRESS_NOTE_LIMIT);
-        if (child) checks.progress(child.id, j.progress.notes);
         dirty = true;
       },
     });

@@ -60,7 +60,7 @@ export type NativeOptions = {
   signal: AbortSignal;
   onSession: (id: string) => Promise<void>;
   onProcess?: (pid: number) => Promise<void>;
-  // A command's own text comes too, for the runner and Jev only.
+  // A command's own text comes too, for the runner only.
   onActivity?: (event: NativeActivity, command?: string) => void;
   onProgress?: (note: ProgressNoteInput) => void;
   // The working agent's plan, as it changes; Codex alone reports one.

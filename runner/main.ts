@@ -292,11 +292,6 @@ async function executeClaim(o: {
       browserSignIn: browserSignInSchema.safeParse(claim.browserSignIn).data,
       latestMessages: () => messages,
       report,
-      contextSelector: {
-        mode: config.context.mode,
-        gateway: config.context.gateway,
-        key: () => machineSecret(config, "JEV_API_KEY"),
-      },
       browser,
       screenshot: async (image) => {
         const result = await post("/api/runner/screenshot", {

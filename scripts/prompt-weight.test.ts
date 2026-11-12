@@ -49,7 +49,7 @@ test("a stored conversation replays through the engine with stand-in turns, and 
     assert.equal(others.length, 0);
     assert.equal(conversation.projectId, options.project.id);
     assert.deepEqual(conversation.tasks[helper], { at: 200, task: "RECORDED-TASK" });
-    const turns = await weigh(conversation, { projects: [options.project], masterCwd: cwd, host: "studio", mode: "off" });
+    const turns = await weigh(conversation, { projects: [options.project], masterCwd: cwd, host: "studio" });
     assert.deepEqual(
       turns!.map((t) => [t.kind, t.resumed]),
       [["coordinator", false], ["helper", false], ["coordinator", true], ["coordinator", true]],

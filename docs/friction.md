@@ -74,8 +74,7 @@ what `home doctor`, or any local check, reads without signing in to anything.
 
 `collector/friction-runner.ts` links a session Projects ran to its
 conversation and helper from the runner's journals, with the runner's events
-for it (hand-backs, stuck and overrun turns, limits) and how often Jev rated
-the helper repeating itself or blocked, as counts.
+for it (hand-backs, stuck and overrun turns, limits), as counts.
 
 ## What leaves the machine
 

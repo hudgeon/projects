@@ -4,7 +4,6 @@ import path from "node:path";
 import { z } from "zod";
 import { configSchema } from "../collector/config";
 import { helperPolicySchema } from "./connectors";
-import { contextConfigSchema } from "./context";
 import { MAX_CONCURRENCY } from "./pool";
 import { telemetry } from "../src/telemetry";
 
@@ -24,9 +23,6 @@ export const schema = configSchema
     // runner-token file beside this config, else RUNNER_TOKEN from the
     // machine's Doppler config.
     tokenFile: absolute.optional(),
-    // The selector reads JEV_API_KEY only in this executor's memory. Native
-    // agents and the collector never receive it. Off until explicitly enabled.
-    context: contextConfigSchema.default({ mode: "off" }),
     // Local MCP servers Claude helpers may use on this machine, and tools to
     // hide from them as Claude permission rules (mcp__server__tool).
     helpers: helperPolicySchema,

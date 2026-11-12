@@ -179,8 +179,8 @@ briefs carry the objective, constraints and approvals, evidence, open
 questions and acceptance checks. It follows
 [Context Engineering Is Knowing When to Start Over](https://every.to/also-true-for-humans/why-i-start-a-new-thread-in-claude-every-time).
 
-Optional Jev project review (off by default) ranks project evidence before
-each turn: [docs/context-selection.md](docs/context-selection.md).
+Project review supplies ranked project evidence, by code alone, before each
+turn: [docs/context-selection.md](docs/context-selection.md).
 
 When a child returns, the runner adds current evidence: HEAD, branch, changed
 paths, commits not yet pushed, and the branch's pull request with its checks.

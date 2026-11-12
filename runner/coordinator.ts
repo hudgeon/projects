@@ -26,7 +26,6 @@ export async function openCoordinator(
   file: string,
   movedHere: boolean,
   agents: Agent[],
-  selector: EngineOptions["contextSelector"],
   memory: SessionMemory,
 ) {
   const workLine = o.run.workIssue ? `work: #${o.run.workIssue}\n\n` : "";
@@ -96,7 +95,7 @@ export async function openCoordinator(
   // The coordinator's app runs in its own folder, a helper's in the workspace
   // reviewed: each loads the instruction files there by itself.
   const projectBrief = (...turn: ProjectTurn) =>
-    contextBrief({stateDir: o.stateDir, run: o.run, host: o.host, workRepo: o.workRepo, selector, signal: o.signal, save: savePrivate, memory,
+    contextBrief({stateDir: o.stateDir, run: o.run, workRepo: o.workRepo, signal: o.signal, save: savePrivate, memory,
       native: turn[3] === "master" ? o.masterCwd : turn[1],
       instructions: s.messages.filter(m => m.role === "user").map(m => m.text)}, ...turn);
   const instructionsVersion = () => createHash("sha256").update(JSON.stringify(s.messages

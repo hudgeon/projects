@@ -6,9 +6,7 @@ import type { Agent, Child, RunMessage } from "../src/run-model";
 import { nativeTurn, Failure, NativeStopError } from "./native";
 import { prepareWorkspace, pruneSaved, workspaceEvidence } from "./workspaces";
 import { clip, plainText } from "../src/run-text";
-import { keptKey } from "./context";
 import { stoppedText } from "./turn-limits";
-import { runChecks } from "./run-checks";
 import type { EngineOptions, Execution, RunState } from "./execution";
 import { readJournal, openJournal } from "./journal";
 import { openCoordinator } from "./coordinator";
@@ -29,9 +27,6 @@ export type { EngineOptions } from "./execution";
 
 export async function executeRun(o: EngineOptions) {
   if (o.run.lane === "review") o = {...o, inboxes: o.inboxes?.filter(login => login.delegated)};
-  // An executor reads the selector's key once and keeps it in memory.
-  const selector = o.contextSelector && {...o.contextSelector, key: keptKey(o.contextSelector.key)};
-  const checks = runChecks({ selector, stateDir: o.stateDir, runId: o.run.id, signal: o.signal });
   const file = path.join(o.stateDir, "runs", `${o.run.id}.json`);
   const { journal: j, movedHere } = await readJournal(o, file);
   // Nothing is running yet; a live view saved before a restart is stale.
@@ -179,7 +174,7 @@ export async function executeRun(o: EngineOptions) {
     brief,
     rotation,
     rotate,
-  } = await openCoordinator(o, j, s, file, movedHere, agents, selector, memory);
+  } = await openCoordinator(o, j, s, file, movedHere, agents, memory);
   const begun = performance.now();
   const paused = async () => {
     if (!o.drain?.aborted) return false;
@@ -192,7 +187,7 @@ export async function executeRun(o: EngineOptions) {
     return true;
   };
   const x: Execution = {
-    s, o, selector, checks, file, j, event, failureReason, persist, publish, interrupted, turn,
+    s, o, file, j, event, failureReason, persist, publish, interrupted, turn,
     prepare, evidence, here, ranHere, undelivered, delivery, lastSaved, copiedAt, refusedBy,
     overran, freshIn, memory, screenshots, refreshMessages, agents, appName, workLine, coordinatorFile,
     contextFile, resumed, resetCoordinator, workContext, briefHash, activityHeld, projectBrief,

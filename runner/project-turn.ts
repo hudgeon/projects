@@ -1,9 +1,7 @@
-import { readdir, readFile, unlink } from "node:fs/promises";
+import { readdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import { telemetry } from "../src/telemetry";
 import type { Agent } from "../src/run-model";
 import type { ProjectDirectory } from "./workspaces";
-import type { Selector } from "./context";
 import type { FileTouch } from "./native-events";
 import { reviewProjectContext } from "./project-context";
 import { hash } from "./project-sources";
@@ -106,17 +104,14 @@ export type ProjectTurn = [
   // "" when the task is a role description: the instructions steer retrieval.
   query?: string,
 ];
-// One native turn's project context, reviewed, then cached and receipted
-// privately. A view the same native session already received is named, not
-// resent, and so is an instruction file it was sent before. In shadow mode
-// the review is receipted and the prompt gets nothing.
+// One native turn's project context, reviewed and receipted privately. A view
+// the same native session already received is named, not resent, and so is
+// an instruction file it was sent before.
 export async function contextBrief(
   o: {
     stateDir: string;
     run: { id: string; generation: number; workIssue?: number | null };
-    host: string;
     workRepo?: string;
-    selector?: Selector;
     signal: AbortSignal;
     instructions: string[];
     // Where the turn's native app runs, when not in the reviewed folder.
@@ -128,20 +123,13 @@ export async function contextBrief(
   },
   ...[project, cwd, task, actor, agent, session, query]: ProjectTurn
 ) {
-  if (!project || !o.selector || o.selector.mode === "off")
+  if (!project)
     return {
       prompt: "",
       onFile: (_file: FileTouch) => {},
       remember: async (_session?: string | null) => {},
     };
   const key = hash(JSON.stringify([project.id, cwd, task, o.instructions]));
-  const cacheFile = path.join(o.stateDir, "project-context", key + ".json");
-  let cached: unknown;
-  try {
-    cached = JSON.parse(await readFile(cacheFile, "utf8"));
-  } catch {
-    /* No reusable review. */
-  }
   // What this native session was given before: a view and instruction files.
   const memory = o.memory ?? sessionMemory(o.stateDir, o.run.id);
   const known = await memory.held(session);
@@ -158,10 +146,7 @@ export async function contextBrief(
         ? { repo: o.workRepo, number: o.run.workIssue }
         : undefined,
     signal: o.signal,
-    selector: o.selector,
-    cached,
   });
-  if (review.record) await o.save(cacheFile, review.record);
   const at = Date.now(),
     dir = reviewsDir(o.stateDir),
     id = `${at}-${o.run.id.slice(0, 8)}-${actor.slice(0, 8)}`,
@@ -176,26 +161,10 @@ export async function contextBrief(
     actor,
     agent,
     ...review.receipt,
-    record: review.record,
     reusedInSession,
   };
   await o.save(receipt, saved);
   await prune(dir, at).catch(() => {});
-  if (review.receipt.failure)
-    telemetry(
-      "runner",
-      "jev_selection_failed",
-      {
-        runId: o.run.id,
-        generation: o.run.generation,
-        host: o.host,
-        actor: actor === "master" ? "master" : agent,
-        childId: actor === "master" ? undefined : actor,
-        contextTrigger: "project-turn",
-        contextFailure: review.receipt.failure,
-      },
-      "warn",
-    );
   const used = usage(
     [review.receipt.input.root, review.receipt.input.cwd].filter(
       (root): root is string => !!root,

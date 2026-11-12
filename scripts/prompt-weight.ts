@@ -1,7 +1,7 @@
 // Replays this machine's stored conversations through the engine with
 // stand-in native turns, on this checkout's code, and counts what each native
-// turn was sent. Nothing native runs: no agent, worktree, GitHub call or Jev
-// request, and the replay keeps its own state in a temporary folder. A
+// turn was sent. Nothing native runs: no agent, worktree or GitHub call, and
+// the replay keeps its own state in a temporary folder. A
 // conversation's messages, helpers and their reports are as recorded; which
 // project it started in, each helper's task and when it started come from its
 // review receipts when those are kept. Reports carry counts only.
@@ -11,7 +11,6 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { executeRun, type EngineOptions } from "../runner/engine";
-import { JEV_MODEL, type ContextConfig } from "../runner/context";
 import { reviewsDir } from "../runner/project-turn";
 import type { ProjectDirectory } from "../runner/workspaces";
 import { agentSchema, childSchema, type Agent, type Child, type Progress, type Run, type RunMessage } from "../src/run-model";
@@ -105,7 +104,6 @@ export type Setup = {
   host: string;
   workRepo?: string;
   agents?: Agent[];
-  mode: ContextConfig["mode"];
 };
 // The native turns one conversation's replay made, or null when the engine
 // could not follow the record (a project no longer registered, say).
@@ -156,15 +154,6 @@ export async function weigh(c: Conversation, o: Setup): Promise<Turn[] | null> {
         activity: [{ host: o.host, observedAt: started + index * 120_000, projects: o.projects.map((p) => ({ id: p.id, sessions: [], worktrees: [], pulls: [], sources: {} })) }],
         report: async (reported) => {
           progress = structuredClone(reported);
-        },
-        // Jev stands in: every candidate is rated worth keeping.
-        contextSelector: {
-          mode: o.mode,
-          key: async () => "replay",
-          fetch: (async (_url, init) => {
-            const body = JSON.parse(String(init?.body));
-            return Response.json({ model: JEV_MODEL, answers: Object.fromEntries(Object.keys(body.questions).map((k) => [k, { type: "noul", noul: 0.9 }])), usage: { input_tokens: 0, output_tokens: 0 } });
-          }) as typeof fetch,
         },
         browser: async () => ({ endpoint: "wss://projects.invalid/api/browser/replay/cdp", capability: "replay".repeat(8), outputDir: stateDir }),
         screenshot: async (image) => ({ id: image.id, mime: image.mime, data: "AAAA" }),

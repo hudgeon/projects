@@ -1,52 +1,16 @@
 # Context selection
 
-Optional Jev project review runs locally in the conversation's executor; it is
-checked before each coordinator, helper and recovery turn. A fresh
-coordinator's handover is rebuilt by code alone (below) and asks Jev nothing.
-Set `context.mode` in the
-machine config to `select`, `shadow` (evaluate without changing the prompt),
-or `off` (the default). The executor reads `JEV_API_KEY` from that machine's
-Doppler config through its existing read-only service token the first time it
-needs it and keeps it in memory for its lifetime; a failed read is retried at
-the next selection. No key enters the Worker, collector, agent environment or
-repository. Enabling a new
-consumer requires the deployment owner's credential and data-scope approval.
-The run checks in [run-health.md](run-health.md) are one such consumer: the
-owner approved briefs, helper reports, progress notes and command text with
-credentials redacted for them in October 2026.
+Code chooses each turn's context; no model judges it. Project review runs
+locally in the conversation's executor before each coordinator, helper and
+recovery turn, and a fresh coordinator's handover is rebuilt by fixed rules
+(below). TypeSafe's Jev rated the shortlist until November 2026. Of 178 turns
+that went on to read or change project files, its selection held one of those
+files in 82 and retrieval order in 85, so it was removed.
 
-For AI Gateway cost reporting, set `context.gateway` to an object with the
-deployment's `accountId` (32 lowercase hexadecimal characters) and `gatewayId`.
-In that account, configure the custom provider with slug `typesafe` and base
-URL `https://api.typesafe.ai`. Requests use its native `/v1/systemone` path,
-tagged as process `context-selection`, trigger `project-turn` for project
-reviews or `project-replay` for their evaluation replays, and worker
-`projects-runner`. The pinned model's input-token rate is supplied as custom
-pricing; output tokens are free. Payload logging, gateway caching and retries
-are disabled for these requests; usage/cost metadata remains available. The
-existing provider key stays in executor memory. If the gateway fails, context
-falls back to the deterministic view without retrying the provider directly.
-With no gateway configured, requests use the direct TypeSafe endpoint.
-
-Failed Jev reviews retain a bounded `failure` diagnostic in the private
-project receipt and emit `jev_selection_failed`
-in the runner's structured logs. It distinguishes key access, request, response
-body and validation stages, with total/stage timings, the eight-second request
-deadline, request size, candidate count, HTTP status, and allowlisted network
-error codes (including nested causes). Timeouts, DNS, connections, TLS, sockets,
-invalid JSON/schema and missing answers have separate categories. A generated
-`selectionId` also goes into gateway metadata, allowing correlation even when
-the client receives no response. Validated gateway log IDs, UUID request IDs
-and Cloudflare Ray IDs are retained when returned. Diagnostics contain no
-prompts, source text, key values, URLs, raw exceptions or response bodies;
-unknown codes and malformed IDs are discarded. User cancellation still
-propagates without a misleading failure log or a fallback native turn.
-
-`runner/context.ts` owns the rebuilt handover and the shared Jev
-transport. `runner/project-context.ts` owns project review and its wiring into
-turns, `runner/project-judge.ts` the review's request shape (question, send
-order, batches), `runner/project-sources.ts` which files may be read and how,
-and `runner/project-units.ts` natural units and their ranking.
+`runner/context.ts` owns the rebuilt handover. `runner/project-context.ts`
+owns project review, `runner/project-turn.ts` its receipts and wiring into
+turns, `runner/project-sources.ts` which files may be read and how, and
+`runner/project-units.ts` natural units and their ranking.
 
 A handover is rebuilt by code alone: the exact first and newest user
 instructions within 8,000 characters, each agent reply one of them answered
@@ -72,8 +36,7 @@ the full-body size limit. The agent receives up to 2,000 characters of this
 section, its issue link and source status. An over-budget section keeps
 complete fields, prioritising status, the evidence cutoff and the next
 action, and is marked partial. The private receipt records its hash and
-length. The section stays outside Jev's request. To investigate history or
-omitted detail, use the issue link to read the relevant sections or exact
+length. To investigate history or omitted detail, use the issue link to read the relevant sections or exact
 comments and verify the date and any superseding decision.
 
 Project review splits every eligible text source (markdown, code, YAML and
@@ -90,34 +53,16 @@ where its line is longer than that. BM25
 ranks the units by the brief's opening 1,000 characters (a brief states its
 subject first; delivery wording follows) and the user's instructions. The work
 issue, the plan and files the brief names lead with up to four units each, and
-no source supplies more than eight. Code packs the 20–40 candidates into one
-Jev request (`runner/project-judge.ts` owns the request shape), one Noul
-question per unit over shared state: the task, the original and newest
-instructions up to 8,000 characters with the task, and the candidates.
-Jev's ratings depend on that shape: on the 14 labelled reviews, on-subject
-units ranked 16th or later were never rated 0.5 in retrieval order, the same
-units sent first always were, and a shuffled order cut Jev's AUC from 0.88
-to 0.76. Judging the shortlist in parallel batches of 2 to 16 removed that
-dependence (AUC 0.91) but admitted more off-topic units at 0.5, so the units
-supplied within the budget were less precise (strict precision 73–76%
-against 83–84%) at the same recall; interleaving the retrieval tiers across
-batches did not help either (20 October 2026). The single request stays,
-its position effect understood as a preference for retrieval rank, and a
-replay re-tests the shape with `--batch N` and `--order` as the gold set
-grows, especially with blind labels and code-heavy turns. A review judged in
-batches fails as a whole if any batch fails. Repository instructions are
-retained separately, outside the request, and are never removal candidates.
-An instruction file the turn's own app loads (the `AGENTS.md` of its working
-folder and of the folders above it, up to 32 KiB) is named, not sent: a
+no source supplies more than eight. The best 40 units form the shortlist the
+receipt indexes; code supplies the best of them, in retrieval order, within
+the 6,000-character budget. Repository instructions are retained separately
+and are never dropped for relevance. An instruction file the turn's own app
+loads (the `AGENTS.md` of its working folder and of the folders above it, up to 32 KiB) is named, not sent: a
 helper's in its workspace, a coordinator's where it runs. The agent is told to
 read any named file it does not hold, should an app stop loading it (both
 did in November 2026: Claude Code 2.1.304, Codex 0.162.1). Any other is sent
 once to a native session, and again only when it changes or the session
-compacts its history. Code supplies the units Jev rates
-at or above 0.5, best first, within the 6,000-character budget; failures
-supply the retrieval order within the same budget. Shadow mode receipts its
-review and Jev's ranking and supplies nothing: the turn's prompt is as it is
-with selection off. The review records
+compacts its history. The review records
 full-file hashes, character offsets, retrieval scores and missing/partial
 coverage; it is a bounded relevance selection, not a code review or proof of
 completion. Agents read applicable repository instructions. For routine work
@@ -137,133 +82,40 @@ Kubernetes Secret manifests; code is not checked this way because its unquoted
 values are expressions. A credential-like file is excluded in full. Oversized
 or unavailable sources remain explicit gaps.
 
-The 0.5 cutoff was validated on 15 real project turns from two machines,
-replayed at their recorded commits and labelled by hand (October 2026). At
-0.5, 90% of supplied units were relevant to the task (25% for the previous
-keyword windows), giving about 2.5 times as much relevant text per turn in
-fewer characters; lower cutoffs added mostly off-topic units and higher ones
-dropped relevant ones. With the key in memory, the Jev call took a median of
-0.4 seconds, against 1.8 seconds when each call read the key from Doppler.
-
-Before each turn, the task, instructions, model/policy, workspace and the
-judged units' exact text and offsets validate the private cached judgment.
-Repository instructions, source gaps and edits elsewhere in the project reach
-the prompt fresh without a new judgment. A changed input causes a new gateway
-review. An unchanged view
-already supplied to the same native session is referenced without reinserting
-its text; fresh native sessions, and one that compacted its history, receive
-the view. What each session holds is kept beside the conversation's journal. Project receipts and cache
-records live under the runner state directory's `project-context/` (see
-Quality loop below). They never enter portfolio snapshots or telemetry. Feedback
-or changed sources arriving during review discard the stale selection/action;
-a prepared workspace survives an update without replaying work. Service or
-source failures retain deterministic evidence and retrieval pointers.
-Cancellation during review starts no native turn.
+An unchanged view already supplied to the same native session is referenced
+without reinserting its text; fresh native sessions, and one that compacted
+its history, receive the view. What each session holds is kept beside the
+conversation's journal. Project receipts live under the runner state
+directory's `project-context/reviews/` (Quality loop below) and never enter
+portfolio snapshots or telemetry. Feedback arriving during review discards
+the stale action; a prepared workspace survives an update without replaying
+work. Source failures keep retrieval pointers. Cancellation during review
+starts no native turn.
 
 Each handover keeps a private index beside the conversation's context file:
 a source-version hash, its messages and helpers, and the journal that keeps
-every report. Project receipts record the exact model, raw probabilities,
-usage, latency and transport; changed evidence invalidates cached judgments.
-The model is pinned to `jev-1.14.0`. Requests are checked against the model's
-documented limits (64k tokens per request, 32k for the state with any one
-question), counting UTF-8 bytes as an upper bound on tokens. An oversized
-request is never silently abridged. Missing credentials, invalid or
-incomplete answers, timeouts and service failures keep the deterministic
-evidence and retrieval pointers. Cancellation still stops the turn.
+every report.
 
 ## Quality loop
 
 Every project review keeps its own private receipt in the runner state
 directory's `project-context/reviews/`, named by its time; the newest 1,000
 within 180 days are kept. The receipt records what the review read (the task,
-retrieval query, the instructions Jev saw, project, plan, workspace, commit and
-linked work issue) and what it did: the considered and supplied units, Jev's
-probabilities, tokens and latency. After the native turn it served, the
-receipt also records the project files that turn read or changed, as relative
-paths and the line ranges read; never file text, commands or output. Claude
-reports them through its Read, Edit and Write tools, Codex through its own
-parse of each command and its applied patches; files read by other shell
-commands are not seen. Files outside the project are only counted.
+retrieval query, the instructions retrieval used, project, plan, workspace,
+commit and linked work issue) and what it did: the considered and supplied
+units. After the native turn it served, the receipt also records the project
+files that turn read or changed, as relative paths and the line ranges read;
+never file text, commands or output. Claude reports them through its Read,
+Edit and Write tools, Codex through its own parse of each command and its
+applied patches; files read by other shell commands are not seen. Files
+outside the project are only counted. A change to retrieval can be measured
+against what turns used.
 
-`npm run context:replay`, run on a connected machine from a checkout of the
-code to evaluate, replays stored reviews on that code: each at its recorded
-commit in a `git clone --shared` (never the project's own checkout), with its
-recorded inputs and live Jev through the machine's gateway. The work issue is
-read as it is now, without comments posted after the review. By default it
-replays the labelled reviews and the 20 newest others (`--limit N`, `--all`,
-`--review <id>`, or `--same <replay file>` for exactly the reviews of an
-earlier replay). It saves the replay, unit text included, in the private
-`jev-evaluation/` directory beside the runner state (the newest 20 are kept)
-and prints:
-
-- units and characters supplied per turn, and the characters of project
-  context a turn's prompt is given (coordinator and helper turns apart);
-- precision and recall at cutoffs 0.30 to 0.70 against the machine's labels
-  in `jev-evaluation/labels.json` (2 on the task's subject, 1 adjacent, 0
-  off-topic; strict counts 2, lenient 1 or 2), over labelled units only, with
-  the retrieval order that failures supply, Jev's AUC, the
-  units still unlabelled and how many labelled relevant units the shortlist
-  still holds;
-- usage proxies for reviews with recorded usage, for the replayed and the
-  original selection: the share of supplied units in files the turn read or
-  changed (and overlapping the lines read), and the share of eligible project
-  files the turn used that the selection supplied or shortlisted;
-- Jev latency, input tokens and estimated cost.
-
-`weight` measures everything a native turn is sent, not the review alone. It
-replays this machine's stored conversations (their messages, helpers and
-reports as recorded) through the engine with stand-in native turns, on the
-checkout's code, and prints the prompt characters per native turn, for new and
-resumed coordinator and helper sessions (`--limit N`, the newest 30 by
-default, or `--all`). It starts no agent or worktree and calls neither GitHub
-nor Jev: every candidate is rated worth keeping, and no work issue is linked.
-A change to what the runner sends each turn carries its before and after.
-
-`score [file]` reprints a saved replay's report (`--json` gives counts to
-combine machines); `usage` reports the selections turns actually received
-against their usage across all stored reviews, without calling Jev.
-`--order reversed`, `--order shuffled` or `--order interleaved` sends each
-shortlist in another order (a shuffle is the same for a review every time;
-the receipt, scores and labels stay in retrieval order), `--batch N` judges
-N candidates per request instead of all, and `position [file...]` prints a saved
-replay's ratings by retrieval rank band (on-subject, adjacent and off-topic
-units: count, mean, share at or above 0.5, AUC), so a replay in retrieval
-order compared with one sent reversed shows whether a candidate's slot in
-the request moves its rating.
-`unlabelled [id]` prints the newest replay's unlabelled units with the
-review's task and without Jev's ratings, so labels are not anchored, and `label <id> <index>=<0|1|2>...` records labels and copies
-the review's receipt into `jev-evaluation/reviews/`, so the gold set outlives
-the history. Each machine's labels and gold set stay on that machine. The
-October 2026 validation's `turns.json`, `labels.json` and `replay3.json` in
-that directory are read in place; `score replay3.json` reproduces its numbers.
-
-`checks` scores the shadow run checks of [run-health.md](run-health.md) from
-the receipts in the runner state's `run-checks/`, without calling Jev: for
-whether a dispatch overlaps a finished helper's report (each report, each
-dispatch by its highest report, and, unlabelled, each report fully covered:
-the overlap rating against the rating that the brief asks for more) and for
-each progress sign, how many checks
-each threshold from 0.30 to 0.95 would flag, its precision and recall against
-the machine's `jev-evaluation/check-labels.json`, Jev's AUC, latency, input
-tokens and estimated cost. `checks replay` judges the labelled checks and the
-20 newest others again with the current questions (`--limit N`, `--all`,
-`--same <file>`), saves them in `checks-replay-*.json` and adds how far each
-probability moved and how many crossed each threshold; `checks score <file>`
-reprints one. `checks unlabelled` lists checks still to label, newest first,
-with what the conversation's journal shows the helper did next and without
-Jev's ratings, and `checks label <id> <report index or sign>=<0|1>...` records
-them (1: the dispatched helper redid work that report showed done, or the sign
-held at the newest note) and copies the receipt into `jev-evaluation/checks/`.
-`--kind repeat` or `progress` narrows any of them. A change to a run check's
-questions carries before/after metrics from `checks replay`, as below.
-
-Any change to retrieval, question wording, the request shape (order or
-batch size), the 0.5 cutoff or the pinned model ships with before/after
-metrics from this command in its PR: on each machine
-with labels, replay on main, then replay `--same` reviews on the branch, and
-report both. Jev's probabilities vary between identical requests: two replays
-of the same 14 reviews (19 October) differed by 0.02 on average and at most
-0.17, 2% of units crossed 0.5, and precision at 0.5 moved by three points.
-Replay each side twice and treat a difference within that spread as no change.
-Whenever about 20 new reviews accumulate, label a sample of them, especially
-from code-heavy repositories, so the gold set follows real use.
+`npm run prompt-weight` measures everything a native turn is sent, not the
+review alone. It replays this machine's stored conversations (their messages,
+helpers and reports as recorded) through the engine with stand-in native
+turns, on the checkout's code, and prints the prompt characters per native
+turn, for new and resumed coordinator and helper sessions (`--limit N`, the
+newest 30 by default, or `--all`). It starts no agent or worktree, calls no
+GitHub, and links no work issue. A change to what the runner sends each turn
+carries its before and after.

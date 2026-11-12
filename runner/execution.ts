@@ -7,9 +7,8 @@ import type { InboxLogin } from "../collector/config";
 import type { NativeOptions, nativeProcessStopped } from "./native";
 import type { ProjectDirectory, liveChanges, prepareWorkspace, pruneSaved, saveWorkspace, workspaceEvidence } from "./workspaces";
 import type { ConnectorAccess } from "./connectors";
-import type { Selector, rebuildContext } from "./context";
+import type { rebuildContext } from "./context";
 import type { TURN_LIMITS } from "./turn-limits";
-import type { runChecks } from "./run-checks";
 import type { WATCH_LIMITS } from "./turn-watch";
 import type { Journal, openJournal } from "./journal";
 import type { openCoordinator } from "./coordinator";
@@ -30,7 +29,6 @@ export type EngineOptions = {
   screenshot?: (image: Screenshot) => Promise<ScreenshotInput>;
   browser?: () => Promise<NativeOptions["browser"]>;
   fullAccess?: boolean;
-  contextSelector?: Selector;
   turn?: (options: NativeOptions) => Promise<unknown>;
   prepare?: typeof prepareWorkspace;
   evidence?: typeof workspaceEvidence;
@@ -99,8 +97,6 @@ export type Execution = ReturnType<typeof openJournal> &
   Awaited<ReturnType<typeof openCoordinator>> & {
     s: RunState;
     o: EngineOptions;
-    selector: EngineOptions["contextSelector"];
-    checks: ReturnType<typeof runChecks>;
     file: string;
     j: Journal;
     interrupted: boolean;

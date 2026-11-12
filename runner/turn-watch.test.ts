@@ -103,27 +103,22 @@ test("an agent with no tool call open shows as silent, may be stuck after ten mi
   } finally { v.clear(); }
 });
 
-test("Jev is asked once what a long command the local rules cannot place waits on, and its label is shown", async () => {
+test("a long command the local rules cannot place shows as a wait without a label", async () => {
   let clock = 0;
-  const shown: (LiveWatch | undefined)[] = [], asked: string[] = [];
+  const shown: (LiveWatch | undefined)[] = [];
   const w = watchTurn({
     pid: () => 100, now: () => clock, rows: async () => [],
     publish: (watch) => shown.push(watch), stuck: () => {},
-    label: async (command) => { asked.push(command); return "deploy"; },
   });
   try {
     w.activity({kind: "command", state: "started"}, "./scripts/release.sh --all");
     clock = MIN; await w.sample();
-    assert.deepEqual(asked, [], "a short wait is not labelled");
+    assert.equal(shown.length, 0, "a short wait is not shown");
     clock = 3 * MIN; await w.sample();
-    await new Promise((r) => setTimeout(r, 0));
-    clock = 4 * MIN; await w.sample();
-    assert.deepEqual(asked, ["./scripts/release.sh --all"]);
-    assert.deepEqual(shown.at(-1), {since: 0, on: "command", label: "deploy"});
+    assert.deepEqual(shown.at(-1), {since: 0, on: "command"});
     w.activity({kind: "command", state: "finished"});
     w.activity({kind: "command", state: "started"}, "npm test");
     clock = 8 * MIN; await w.sample();
-    assert.equal(asked.length, 1, "a command the rules place is not sent");
-    assert.equal(shown.at(-1)?.label, "tests");
+    assert.equal(shown.at(-1)?.label, "tests", "a command the rules place is labelled");
   } finally { w.clear(); }
 });

@@ -4,7 +4,7 @@ GitHub issues in the configured `workRepo` remain authoritative. This manual
 adapter reads the optional retained-work service; it never substitutes its
 records for `Issue`, `WorkSnapshot`, hook/offline caches, runner verification,
 Mark done, mail linking or upkeep. It installs no schedule and changes no
-machine configuration, work selection or Jev request/policy/model.
+machine configuration or work selection.
 
 The service is deployed independently. Its versioned `/api/work/v1` contract
 returns only explicitly granted rehearsal records, attributed source metadata
@@ -53,8 +53,8 @@ receipt so failure cannot leave an old success presented as current.
 
 The reusable client also validates exact excerpt source/hash/byte ranges,
 UTF-8 length and excerpt digest. Nothing is sent to a model. The later
-Overview/Decisions/Timeline/Sources UI, protected context receipts and labelled
-Jev replays remain separate slices. Direct native chats remain outside the
+Overview/Decisions/Timeline/Sources UI and protected context receipts remain
+separate slices. Direct native chats remain outside the
 Projects selector. Content-authority milestones must precede work-authority
 activation, with final source reconciliation, all writer/client fencing,
 both-machine acceptance and post-write recovery proved separately.

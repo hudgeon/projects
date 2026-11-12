@@ -1,8 +1,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 // What Projects knows about a native session it ran: whose conversation and
-// which helper it was, and the runner's events and Jev progress judgments for
-// it, as counts by category. Read from this machine's private runner state.
+// which helper it was, and the runner's events for it, as counts by category.
+// Read from this machine's private runner state.
 export type ProjectsLink = {
   runId: string;
   role: "master" | "helper";
@@ -21,8 +21,8 @@ const bump = (events: Record<string, number>, key: string) => {
   if (!(key in events) && Object.keys(events).length >= EVENTS_KEPT) return;
   events[key] = (events[key] ?? 0) + 1;
 };
-// Links by `${App}:${nativeSessionId}`, from the conversation journals and
-// the Jev run-check receipts in the runner state directory.
+// Links by `${App}:${nativeSessionId}`, from the conversation journals in the
+// runner state directory.
 export async function projectsLinks(stateDir: string): Promise<Map<string, ProjectsLink>> {
   const links = new Map<string, ProjectsLink>();
   const byChild = new Map<string, ProjectsLink>();
@@ -69,27 +69,6 @@ export async function projectsLinks(stateDir: string): Promise<Map<string, Proje
     if (typeof progress.masterSessionId === "string") {
       const app = progress.masterAgent === "claude" ? "Claude" : "Codex";
       links.set(`${app}:${progress.masterSessionId}`, masterLink);
-    }
-  }
-  // Progress judgments: how often Jev rated a helper as repeating itself or
-  // blocked, at the 0.5 the receipts are labelled against.
-  let checks: string[] = [];
-  try {
-    checks = (await readdir(path.join(stateDir, "run-checks"))).filter((n) => n.includes("-progress-"));
-  } catch {
-    return links;
-  }
-  for (const name of checks.slice(-1000)) {
-    try {
-      const receipt = object(JSON.parse(await readFile(path.join(stateDir, "run-checks", name), "utf8")));
-      const link = typeof receipt.child === "string" ? byChild.get(receipt.child) : undefined;
-      const judged = object(receipt.judged);
-      if (!link) continue;
-      bump(link.events, "jev:progress_checks");
-      for (const sign of ["repeating", "blocked", "waiting"])
-        if (typeof judged[sign] === "number" && judged[sign] >= 0.5) bump(link.events, `jev:${sign}`);
-    } catch {
-      /* A receipt being written; the next scan reads it. */
     }
   }
   return links;

@@ -6,134 +6,91 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { reviewProjectContext } from "../runner/project-context";
 import { git } from "../runner/workspaces";
-import { JEV_MODEL, REQUEST_BYTES } from "../runner/context";
-import { fixture, selector } from "./project-fixtures";
+import { fixture } from "./project-fixtures";
 
-test("a first turn selects project evidence through the priced gateway and retains instructions verbatim", async () => {
+test("a first turn supplies project evidence and retains instructions verbatim", async () => {
   const { cwd, options } = await fixture();
-  const mock = selector((body, init) => {
-    assert.deepEqual(body.state.userInstructions, options.instructions);
-    assert.equal(
-      body.state.repositoryInstructions,
-      undefined,
+  try {
+    const view = await reviewProjectContext(options);
+    assert.deepEqual(view.receipt.input.instructions, options.instructions);
+    assert.ok(
+      view.receipt.considered.every((c) => !c.path.endsWith("AGENTS.md")),
       "protected instructions are not relevance candidates",
     );
-    assert.doesNotMatch(JSON.stringify(body), /Drafting only/);
-    assert.equal(
-      Object.keys(body.questions).length,
-      body.state.candidates.length,
-    );
-    const headers = new Headers(init.headers);
-    assert.equal(headers.get("cf-aig-collect-log-payload"), "false");
-    assert.equal(headers.get("cf-aig-skip-cache"), "true");
-    assert.equal(
-      JSON.parse(headers.get("cf-aig-metadata")!).trigger,
-      "project-turn",
-    );
-    assert.equal(
-      JSON.parse(headers.get("cf-aig-custom-cost")!).per_token_in,
-      0.000000042,
-    );
-  });
-  try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-    });
-    assert.equal(view.receipt.strategy, "select");
-    assert.equal(view.record?.transport, "gateway");
     assert.match(
       view.prompt,
       /Drafting only\. Publishing requires the owner's approval/,
     );
+    assert.deepEqual(view.sent, {
+      "AGENTS.md": view.receipt.sources.find((s) => s.path === "AGENTS.md")!
+        .hash,
+    });
     assert.match(view.prompt, /pipe delimiter/);
+    assert.match(view.prompt, /imports invoices/);
     assert.match(view.prompt, /Use the excerpts that apply to the task/);
     assert.doesNotMatch(view.prompt, /complete plan/);
     assert.doesNotMatch(view.prompt, /sunny/);
     assert.equal(view.receipt.coverage, "bounded_excerpts");
-    assert.equal(mock.calls, 1);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("reviews cache what Jev judged and invalidate on task, instruction, dirty-source and new-source changes", async () => {
-  const { cwd, options } = await fixture(),
-    mock = selector();
+test("dirty and new sources, the task and changed instructions reach each review fresh, without a commit", async () => {
+  const { cwd, options } = await fixture();
   try {
-    let view = await reviewProjectContext({ ...options, selector: mock.value });
+    const first = await reviewProjectContext(options);
     const originalHead = await git(cwd, ["rev-parse", "HEAD"]);
-    const same = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-      cached: view.record,
-    });
-    assert.equal(same.receipt.cached, true);
-    assert.equal(mock.calls, 1);
+    assert.equal(
+      (await reviewProjectContext(options)).view,
+      first.view,
+      "an unchanged project is the same view",
+    );
     await writeFile(
       path.join(cwd, "src/invoices.ts"),
       'export const delimiter = ";"; // Changed invoice format\n',
     );
-    view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-      cached: view.record,
-    });
-    assert.equal(view.receipt.cached, false);
+    const dirty = await reviewProjectContext(options);
     assert.equal(
       await git(cwd, ["rev-parse", "HEAD"]),
       originalHead,
-      "dirty contents invalidate without a commit",
+      "dirty contents count without a commit",
     );
-    assert.match(view.prompt, /Changed invoice format/);
-    await writeFile(
-      path.join(cwd, "src/invoices.ts"),
-      'export const delimiter = ","; // Changed again while still dirty\n',
-    );
-    view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-      cached: view.record,
-    });
+    assert.match(dirty.prompt, /Changed invoice format/);
     await writeFile(
       path.join(cwd, "AGENTS.md"),
       "Drafting only. Also retain the fixture's recovery copy.\n",
     );
-    view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-      cached: view.record,
-    });
-    assert.match(view.prompt, /recovery copy/);
-    assert.equal(
-      view.receipt.cached,
-      true,
-      "instructions reach the prompt fresh; Jev never judged them",
+    const instructed = await reviewProjectContext(options);
+    assert.match(instructed.prompt, /recovery copy/);
+    assert.notEqual(instructed.view, dirty.view);
+    assert.match(
+      (
+        await reviewProjectContext({
+          ...options,
+          task: "Inspect the weather display instead",
+        })
+      ).prompt,
+      /sunny/,
     );
-    view = await reviewProjectContext({
-      ...options,
-      task: "Inspect the weather display instead",
-      selector: mock.value,
-      cached: view.record,
-    });
     await writeFile(
       path.join(cwd, "src/invoice-validation.ts"),
       "// Newly added invoice validation\n",
     );
-    await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-      cached: view.record,
-    });
-    assert.equal(mock.calls, 5);
+    const added = await reviewProjectContext(options);
+    assert.ok(
+      added.receipt.considered.some(
+        (c) => c.path === "src/invoice-validation.ts",
+      ),
+    );
+    assert.match(added.prompt, /Newly added invoice validation/);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("a current work issue is evidence and changed issue contents invalidate a review", async () => {
-  const { cwd, options } = await fixture(),
-    mock = selector();
+test("a current work issue is evidence and its changed contents reach the next review", async () => {
+  const { cwd, options } = await fixture();
   let body = "Inspect invoice allocation only; delivery remains unverified.";
   const readIssue = async () => ({
     title: "Invoice work",
@@ -143,7 +100,6 @@ test("a current work issue is evidence and changed issue contents invalidate a r
   try {
     const o = {
       ...options,
-      selector: mock.value,
       workIssue: { repo: "example/work", number: 7 },
       readIssue,
     };
@@ -158,10 +114,10 @@ test("a current work issue is evidence and changed issue contents invalidate a r
     );
     body =
       "Current correction: invoice allocation requires an account boundary check.";
-    const changed = await reviewProjectContext({ ...o, cached: first.record });
-    assert.equal(changed.receipt.cached, false);
-    assert.equal(mock.calls, 2);
+    const changed = await reviewProjectContext(o);
     assert.match(changed.prompt, /Current correction/);
+    assert.doesNotMatch(changed.prompt, /delivery remains unverified/);
+    assert.notEqual(changed.view, first.view);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -171,14 +127,9 @@ test("an oversized work record supplies its latest position and a real comment l
   const { cwd, options } = await fixture();
   const url = "https://github.com/example/work/issues/7";
   let position = "Next: Verify the invoice account with the owner.";
-  const mock = selector((body) => {
-    assert.doesNotMatch(JSON.stringify(body), /Verify the invoice account|Recheck invoice boundaries|Old invoice history/);
-    position = "Next: Recheck invoice boundaries with the owner.";
-  });
   const review = {
     ...options,
     workIssue: { repo: "example/work", number: 7 },
-    selector: mock.value,
     readIssue: async () => ({
       title: "Invoice work",
       body: `## Current position\nStatus: being worked on. Reviewed: 2026-01-01.\n${position}\n\n## Superseded position\n${"Old invoice history. ".repeat(8_000)}`,
@@ -193,13 +144,17 @@ test("an oversized work record supplies its latest position and a real comment l
   try {
     const view = await reviewProjectContext(review);
     assert.equal(view.receipt.workBrief?.status, "read");
-    assert.match(view.prompt, /Recheck invoice boundaries with the owner/);
+    assert.match(view.prompt, /Verify the invoice account with the owner/);
     assert.match(view.prompt, /#issuecomment-123/);
-    assert.doesNotMatch(view.prompt, /Verify the invoice account|Old invoice history|#comment-2026/);
+    assert.doesNotMatch(view.prompt, /Old invoice history|#comment-2026/);
+    assert.ok(
+      !view.receipt.considered.some((c) => c.path === url),
+      "the archived body is not a candidate",
+    );
     position = "Next: Compare the invoice output with the approved sample.";
-    const revised = await reviewProjectContext({ ...review, cached: view.record });
-    assert.equal(revised.receipt.cached, true);
+    const revised = await reviewProjectContext(review);
     assert.match(revised.prompt, /Compare the invoice output/);
+    assert.doesNotMatch(revised.prompt, /Verify the invoice account/);
     assert.notEqual(revised.receipt.workBrief?.hash, view.receipt.workBrief?.hash);
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -229,34 +184,7 @@ test("a long active position keeps complete priority fields and reports omitted 
   }
 });
 
-test("sources changing during Jev selection discard that judgment and retain a fresh baseline", async () => {
-  const { cwd, options } = await fixture();
-  const mock = selector(async () => {
-    await writeFile(
-      path.join(cwd, "src/invoices.ts"),
-      "// Corrected invoice delimiter is now a semicolon.\n",
-    );
-  });
-  try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-    });
-    assert.equal(view.receipt.reason, "evidence_changed");
-    assert.equal(view.receipt.strategy, "baseline");
-    assert.equal(view.record, undefined);
-    assert.match(view.prompt, /Corrected invoice delimiter/);
-    assert.match(
-      view.prompt,
-      /pipe delimiter/,
-      "fallback retains retrieval evidence",
-    );
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test("ignored secrets, unsafe plan paths, links and binary files never reach Jev or its prompt", async () => {
+test("ignored secrets, unsafe plan paths, links and binary files never reach the prompt or receipt", async () => {
   const { cwd, options } = await fixture(),
     outside = await mkdtemp(path.join(tmpdir(), "outside-project-"));
   const secret = "PRIVATE-CONTENT-MUST-NOT-LEAVE";
@@ -272,9 +200,6 @@ test("ignored secrets, unsafe plan paths, links and binary files never reach Jev
   );
   await mkdir(path.join(cwd, "secrets"));
   await writeFile(path.join(cwd, "secrets/invoice.ts"), secret);
-  const mock = selector((body) => {
-    assert.doesNotMatch(JSON.stringify(body), new RegExp(secret));
-  });
   try {
     for (const plan of [
       ".env",
@@ -284,9 +209,8 @@ test("ignored secrets, unsafe plan paths, links and binary files never reach Jev
       const view = await reviewProjectContext({
         ...options,
         project: { ...options.project, plan },
-        selector: mock.value,
       });
-      assert.doesNotMatch(view.prompt, new RegExp(secret));
+      assert.doesNotMatch(JSON.stringify(view), new RegExp(secret));
       assert.ok(
         view.receipt.sources?.some(
           (s) => s.path === "invoice-linked.md" && s.status === "linked_source",
@@ -317,14 +241,8 @@ test("nested instructions stay protected and bounded excerpts preserve exact off
     "Never change the account boundary in this directory.\n",
   );
   await writeFile(path.join(cwd, "src/invoices.ts"), text);
-  const mock = selector((body) =>
-    assert.ok(Buffer.byteLength(JSON.stringify(body)) <= REQUEST_BYTES),
-  );
   try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: mock.value,
-    });
+    const view = await reviewProjectContext(options);
     assert.match(view.prompt, /Never change the account boundary/);
     assert.match(view.prompt, /Invoice delimiter correction/);
     const evidence = JSON.parse(
@@ -343,47 +261,35 @@ test("nested instructions stay protected and bounded excerpts preserve exact off
     assert.ok(
       view.receipt.considered.every((c) => c.endChar - c.startChar <= 1_200),
     );
-    assert.ok((view.receipt.baselineChars ?? 0) <= 6_000);
-    assert.ok((view.receipt.selectedChars ?? 0) <= 6_000);
+    assert.ok(view.receipt.suppliedChars <= 6_000);
+    assert.equal(
+      view.receipt.suppliedChars,
+      evidence.reduce((n, e) => n + e.text.length, 0),
+    );
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("HTTP and invalid-answer failures retain baseline evidence; cancellation prevents a native-ready review", async () => {
+test("cancellation during a review prevents a native-ready review", async () => {
   const { cwd, options } = await fixture();
+  const controller = new AbortController();
   try {
-    for (const fetch of [
-      async () => new Response(null, { status: 503 }),
-      async () =>
-        Response.json({
-          model: JEV_MODEL,
-          answers: {},
-          usage: { input_tokens: 1, output_tokens: 0 },
-        }),
-    ]) {
-      const view = await reviewProjectContext({
-        ...options,
-        selector: { mode: "select", key: async () => "fixture-key", fetch },
-      });
-      assert.equal(view.receipt.strategy, "baseline");
-      assert.equal(
-        view.receipt.failure?.stage,
-        view.receipt.reason === "http_error" ? "response" : "validation",
-      );
-      assert.ok(view.receipt.failure?.selectionId);
-      assert.match(view.prompt, /pipe delimiter/);
-      assert.match(view.prompt, /imports invoices/);
-      assert.match(view.prompt, /Drafting only/);
-    }
-    const controller = new AbortController(),
-      mock = selector(() => controller.abort("cancelled"));
     await assert.rejects(
       reviewProjectContext({
         ...options,
         signal: controller.signal,
-        selector: mock.value,
+        workIssue: { repo: "example/work", number: 7 },
+        readIssue: async () => {
+          controller.abort("cancelled");
+          return {
+            title: "Invoice work",
+            body: "Inspect the invoice delimiter.",
+            updatedAt: "2026-01-01T00:00:00Z",
+          };
+        },
       }),
+      (reason) => reason === "cancelled",
     );
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -401,13 +307,9 @@ test("recognizable credentials in normally named source or work issues are exclu
     path.join(cwd, "src/invoice-config.ts"),
     `export const provider = '${value}';\n`,
   );
-  const mock = selector((body) =>
-    assert.ok(!JSON.stringify(body).includes(value)),
-  );
   try {
     const view = await reviewProjectContext({
       ...options,
-      selector: mock.value,
       workIssue: { repo: "example/work", number: 8 },
       readIssue: async () => ({
         title: "Invoice correction",
@@ -415,7 +317,7 @@ test("recognizable credentials in normally named source or work issues are exclu
         updatedAt: "2026-01-01T00:00:00Z",
       }),
     });
-    assert.ok(!view.prompt.includes(value));
+    assert.ok(!JSON.stringify(view).includes(value));
     assert.equal(
       view.receipt.sources.filter((s) => s.status === "credential_like_content")
         .length,
@@ -428,113 +330,33 @@ test("recognizable credentials in normally named source or work issues are exclu
   }
 });
 
-test("Jev ranks the shortlist; code supplies the best units at or above the cutoff", async () => {
+test("code supplies the shortlist's units in retrieval order while each fits the 6,000-character budget", async () => {
   const { cwd, options } = await fixture();
-  await writeFile(
-    path.join(cwd, "PLAN.md"),
-    [
-      "# Importer plan",
-      "## Phase 1: delimiter",
-      "The invoice importer must preserve the pipe delimiter. Every exported line keeps its columns in the account's order, and a missing column is an error rather than an empty value.",
-      "```sh",
-      "# not a heading inside a fence",
-      "```",
-      "## Phase 2: invoice archive",
-      "Archive imported invoice files after a week. The archive keeps the original file name and the import date, and a second import of the same file is refused.",
-      "## Phase 3: weather",
-      "Show invoice-free weather tiles.",
-      "",
-    ].join("\n"),
-  );
-  await writeFile(
-    path.join(cwd, "src/invoices.ts"),
-    [
-      'import { readFile } from "node:fs/promises";',
-      "",
-      "// Splits one invoice line at the pipe delimiter.",
-      "export function splitInvoice(line: string) {",
-      "  const parts = line.split(DELIMITER);",
-      '  if (parts.length < COLUMNS) throw Error("Missing invoice column");',
-      "",
-      "  return parts;",
-      "}",
-      "",
-      "export function archiveInvoice(file: string) {",
-      `  return readFile(file, "utf8"); // ${"archive ".repeat(40)}`,
-      "}",
-      "",
-    ].join("\n"),
-  );
-  let sent: { path: string; section?: string; text: string }[] = [];
-  const nouls: Record<string, number> = {
-    "Phase 1": 0.6,
-    splitInvoice: 0.95,
-    "Phase 2": 0.4,
-    archiveInvoice: 0.2,
-  };
-  const value = {
-    ...selector().value,
-    fetch: (async (_url, init) => {
-      const body = JSON.parse(init!.body as string);
-      sent = body.state.candidates;
-      assert.equal(Object.keys(body.questions).length, sent.length);
-      for (const [i, q] of Object.values(body.questions).entries())
-        assert.match(
-          (q as { instructions: string }).instructions,
-          new RegExp(`candidates\\[${i}\\]`),
-        );
-      return Response.json({
-        model: JEV_MODEL,
-        answers: Object.fromEntries(
-          sent.map((c, i) => [
-            `keep_${i}`,
-            {
-              type: "noul",
-              noul:
-                Object.entries(nouls).find(([k]) =>
-                  `${c.section ?? ""} ${c.text}`.includes(k),
-                )?.[1] ?? 0.1,
-            },
-          ]),
-        ),
-        usage: { input_tokens: 900, output_tokens: 40 },
-      });
-    }) as typeof fetch,
-  };
+  await mkdir(path.join(cwd, "docs"));
+  for (let i = 0; i < 12; i++)
+    await writeFile(
+      path.join(cwd, `docs/invoice-${i}.md`),
+      `## Invoice note ${i}\n${"The invoice importer keeps its delimiter. ".repeat(i % 2 ? 6 : 24)}\n`,
+    );
   try {
-    const view = await reviewProjectContext({ ...options, selector: value });
+    const view = await reviewProjectContext(options);
+    const { considered, supplied, suppliedChars } = view.receipt;
+    let chars = 0;
+    const fits = considered.flatMap((c, i) => {
+      if (chars + c.endChar - c.startChar > 6_000) return [];
+      chars += c.endChar - c.startChar;
+      return [i];
+    });
+    assert.deepEqual(supplied, fits);
+    assert.ok(supplied.length < considered.length, "the budget binds");
+    assert.equal(suppliedChars, chars);
     const evidence = JSON.parse(
       view.prompt.split("offsets are characters): ")[1],
-    ) as { text: string }[];
+    ) as { path: string; startChar: number }[];
     assert.deepEqual(
-      evidence.map((e) => e.text.split("\n")[0]),
-      ["// Splits one invoice line at the pipe delimiter.", "# Importer plan"],
-      "ranked by probability; units below the cutoff are not supplied",
+      evidence.map((e) => [e.path, e.startChar]),
+      supplied.map((i) => [considered[i].path, considered[i].startChar]),
     );
-    assert.equal(view.receipt.selected, 2);
-    assert.equal(view.receipt.omitted, sent.length - 2);
-    assert.equal(view.receipt.keepFrom, 0.5);
-    assert.ok(
-      view.receipt.considered.every((c) => typeof c.score === "number"),
-    );
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test("shadow mode records Jev's ranking and supplies nothing", async () => {
-  const { cwd, options } = await fixture();
-  const mock = selector();
-  try {
-    const view = await reviewProjectContext({
-      ...options,
-      selector: { ...mock.value, mode: "shadow" },
-    });
-    assert.equal(view.receipt.strategy, "shadow");
-    assert.ok(view.record);
-    assert.ok(view.receipt.baselineChars > 0 && view.receipt.considered.length > 0);
-    assert.deepEqual([view.receipt.supplied, view.receipt.selectedChars, view.sent], [[], 0, {}]);
-    assert.equal(view.prompt, "", "the turn's prompt is as it is with selection off");
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

@@ -34,7 +34,7 @@ export async function dispatch(
   refuse: (message: string) => void,
 ) {
   const {
-    s, o, checks, j, event, failureReason, persist, publish, prepare, here, undelivered, runTurn,
+    s, o, j, event, failureReason, persist, publish, prepare, here, undelivered, runTurn,
     copiedAt, refusedBy, freshIn, screenshots, refreshMessages, agents, appName, workLine,
     resetCoordinator, workContext, projectBrief, handBack, acceptChild, recoverChild, paused,
   } = x;
@@ -158,7 +158,6 @@ export async function dispatch(
   delete j.checkpoint;
   child.state = "running";
   s.dispatched++;
-  checks.dispatch(task.prompt, child, j.progress.children);
   j.phase = "child";
   await persist();
   await publish("running", decision.summary);
