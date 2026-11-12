@@ -33,7 +33,7 @@
     "CHAT_SOURCES": "slack,teams,support",
   },
   // Weekly upkeep (worker/upkeep.ts); src/upkeep-model.ts names the same schedule.
-  "triggers": { "crons": ["0 18 * * 5", "30 * * * *"] },
+  "triggers": { "crons": ["0 18 * * FRI", "30 * * * *"] },
   "browser": { "binding": "BROWSER" },
   "send_email": [{ "name": "EMAIL" }],
   "secrets": {

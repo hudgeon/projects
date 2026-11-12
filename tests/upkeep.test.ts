@@ -27,7 +27,7 @@ test("the Worker's cron and the local emulator's run the schedule the model name
     const crons = /"crons":\s*\[([^\]]*)\]/.exec(await readFile(file, "utf8"))?.[1] ?? "";
     assert.deepEqual(crons.match(/"[^"]+"/g)?.map((s) => JSON.parse(s)), [UPKEEP_CRON, WORK_REVIEW_CRON], file);
   }
-  assert.equal(UPKEEP_CRON, "0 18 * * 5");
+  assert.equal(UPKEEP_CRON, "0 18 * * FRI");
   assert.equal(UPKEEP_SCHEDULE, "Fridays at 18:00 UTC");
   assert.match(upkeepText("schedule"), /^Weekly upkeep cycle: read the friction totals/);
   assert.match(upkeepText("settings"), /^Upkeep cycle, started from Settings: /);

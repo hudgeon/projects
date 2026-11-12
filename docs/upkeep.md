@@ -45,7 +45,7 @@ Upkeep conversations run in the `upkeep` lane (`src/run-model.ts`):
   like any other conversation.
 
 Locally, `wrangler dev` runs the trigger from
-`curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+18+*+*+5"`.
+`curl "http://127.0.0.1:8798/cdn-cgi/local/scheduled?cron=0+18+*+*+FRI"`.
 
 ## The brief
 

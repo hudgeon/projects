@@ -53,7 +53,9 @@ test("the weekly trigger starts one upkeep conversation a week for the deploymen
     assert.deepEqual(await cycles(), []);
     assert.equal((await db.upkeepSchedule())?.outcome, "no_snapshot");
     await db.publish({ ...closeSnapshot(friday - 60_000), work: { issues: [issue(7), issue(10, { upkeep: true, open: false }), issue(9, { title: "Agent upkeep", upkeep: true })], associations: [], associationsState: "ok" }, friction } as Parameters<Portfolio["publish"]>[0]);
-    await scheduled(friday);
+    await scheduled(friday - DAY, "0 18 * * 5");
+    assert.deepEqual(await cycles(), [], "Cloudflare's numeric Thursday trigger cannot start upkeep");
+    await scheduled(friday, "0 18 * * fri");
     const [first] = await cycles();
     assert.deepEqual([(await db.upkeepSchedule())?.scheduledAt, (await db.upkeepSchedule())?.outcome, (await db.upkeepSchedule())?.runId], [friday, "started", first.id]);
     assert.equal(first.owner, "owner@example.com", "the deployment owner's, as nobody asked for it");

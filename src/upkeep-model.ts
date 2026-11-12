@@ -6,7 +6,8 @@
 import { z } from "zod";
 import { FRICTION_CATEGORIES, FRICTION_DAYS, FRICTION_SIGNS, frictionAppSchema, type FrictionCategory } from "./friction-model";
 import { machineIdSchema } from "./telemetry";
-export const UPKEEP_CRON = "0 18 * * 5";
+// Cloudflare numbers weekdays from Sunday = 1. Spell out Friday.
+export const UPKEEP_CRON = "0 18 * * FRI";
 export const UPKEEP_SCHEDULE = "Fridays at 18:00 UTC";
 // Older Workers ignore the header and older runners have unknown readiness.
 export const UPKEEP_AUTH_HEADER = "X-Projects-Upkeep-Auth";

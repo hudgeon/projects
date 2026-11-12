@@ -64,7 +64,7 @@ export function saveUpkeepSchedule(storage: DurableObjectStorage, receipt: Upkee
 // The Worker's weekly trigger: one cycle per ISO week, whenever in the week
 // it fires. A cron this Worker does not know starts nothing.
 export async function scheduledUpkeep(env: Env, at: number, cron?: string) {
-  if (cron && cron !== UPKEEP_CRON) return;
+  if (cron && cron.toUpperCase() !== UPKEEP_CRON) return;
   const store = env.PORTFOLIOS.getByName(env.PORTFOLIO_ID);
   const requestId = await upkeepRequestId(env.PORTFOLIO_ID, upkeepWeek(at));
   const receipt: UpkeepScheduleReceipt = { scheduledAt: at, observedAt: Date.now(), outcome: "checking" };
