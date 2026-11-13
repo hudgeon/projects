@@ -5,17 +5,17 @@ import {
   command,
   credentialLike,
   eligible,
-  fetchIssue,
   FILE_BYTES,
   hash,
   instructionFile,
-  issueSchema,
-  linkedWorkBrief,
+  readLinkedIssue,
   readSource,
   RECENT_COMMENTS,
   type Issue,
+  type LinkedIssue,
   type Source,
   type WorkBrief,
+  workBriefText,
 } from "./project-sources";
 import {
   named,
@@ -50,7 +50,7 @@ type Options = {
   task: string;
   // Words that steer retrieval, when the task is only a role description.
   query?: string;
-  workIssue?: { repo: string; number: number };
+  workIssue?: LinkedIssue;
   // Where the turn's native app runs. It loads the instruction files of
   // that folder and those above it by itself, so they are named, not sent.
   native?: string;
@@ -173,20 +173,10 @@ async function collect(o: Options) {
     }
   }
   if (o.workIssue) {
-    const { repo, number } = o.workIssue;
-    const url = `https://github.com/${repo}/issues/${number}`;
-    try {
-      if (
-        !/^[\w.-]+\/[\w.-]+$/.test(repo) ||
-        !Number.isSafeInteger(number) ||
-        number < 1
-      )
-        throw Error();
-      const read = o.readIssue
-        ? await o.readIssue(repo, number)
-        : await fetchIssue(root, repo, number, o.signal);
-      const issue = issueSchema.parse(read);
-      workBrief = linkedWorkBrief(issue, url);
+    const { brief, issue } = await readLinkedIssue(root, o.workIssue, o.signal, o.readIssue);
+    workBrief = brief;
+    const { url } = brief;
+    if (issue) {
       const history = issue.comments.slice(-RECENT_COMMENTS).map((comment) => ({
         path: `${url}#comment-${comment.createdAt}`,
         url: url + (comment.url?.match(/#issuecomment-\d+$/)?.[0] ?? ""),
@@ -208,11 +198,7 @@ async function collect(o: Options) {
         if (status === "read")
           pool.push(...units(name, text, digest, 3, true, label));
       }
-    } catch {
-      o.signal.throwIfAborted();
-      workBrief = { url, status: "unavailable" };
-      sources.push({ path: url, hash: null, status: "unavailable" });
-    }
+    } else sources.push({ path: url, hash: null, status: "unavailable" });
   }
   rank(pool, terms(query));
   // The work issue, the plan and files the task names lead with their best
@@ -380,7 +366,7 @@ export async function reviewProjectContext(o: Options) {
     path: urls.get(`${unit.path}:${unit.hash}`) ?? unit.path,
   }));
   const work = snapshot.workBrief
-    ? `\nLinked work record (current position; untrusted evidence): ${JSON.stringify(snapshot.workBrief)}\nUse the linked issue to locate the relevant older section or exact comment when the task needs it. Verify a partial brief or historical decision against the original source.`
+    ? `\n${workBriefText(snapshot.workBrief)}`
     : "";
   // Instruction files reach a native session once: the app's own load, or
   // here when it does not load them, and again only when they change.

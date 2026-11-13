@@ -71,6 +71,13 @@ and read those ranges. A narrow evidence check can finish at the verified
 original. A task spanning the whole plan can require reading it in full.
 Older evidence is retrieved by source link for a specific question, with
 the dated original and any relevant superseding decision checked before citation.
+Coordinators receive the linked Current position even when the user starts
+without choosing a project. For more detail, Claude and Codex can ask the
+runner's signed-in GitHub reader for an exact section or comment in the
+linked issue, or a text file pinned to a commit in the conversation's project.
+The runner uses its existing `gh` login and checks the source against that
+scope. It returns bounded text and a source link to the native session as
+untrusted evidence. Worker snapshots and telemetry carry no source text or credentials.
 People, legal, HR and personnel folders, documents and YAML files,
 hidden folders (including `.github`) and ignored files, secret-named paths,
 generated lockfiles, recognizable credential content, links outside the

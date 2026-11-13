@@ -375,7 +375,7 @@ export const workRecordSchema = z
   .strict();
 export const masterDecisionSchema = z
   .object({
-    action: z.enum(["dispatch", "complete", "blocked"]),
+    action: z.enum(["dispatch", "read_github", "complete", "blocked"]),
     // Unbounded here so an over-long label cannot invalidate a decision; the
     // runner trims it to the progress title limit.
     title: z.string().nullable(),
@@ -386,6 +386,14 @@ export const masterDecisionSchema = z
     // The coordinator's readback assessment of the canonical work record,
     // kept in its private decision journal, never a second work backlog.
     workRecord: workRecordSchema.nullable().optional(),
+    github: z.object({
+      section: z.string().trim().min(1).max(200).nullable(),
+      commentId: z.number().int().positive().nullable(),
+      file: z.object({
+        commit: z.string().regex(/^[a-f0-9]{40}$/),
+        path: z.string().min(1).max(500),
+      }).strict().nullable(),
+    }).strict().nullable().optional(),
     task: z
       .object({
         projectId,

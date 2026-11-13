@@ -48,6 +48,7 @@ export type EngineOptions = {
   mailboxToken?: (account: string, readOnly?: boolean) => Promise<string>;
   workRepo?: string;
   readWorkRecord?: import("../collector/work-record").ReadWorkRecord;
+  githubCommand?: typeof import("./project-sources").command;
   // The upkeep lane's sources on this machine: the configuration repository
   // its changes go to, and the home folder where the collector keeps the
   // friction receipts and the work item cache the brief reads.

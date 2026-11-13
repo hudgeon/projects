@@ -15,6 +15,7 @@ import { runTurn } from "./turns";
 import { handBack, acceptChild, inspect, recoverChild, resumeInterrupted } from "./children";
 import { dispatch } from "./dispatch";
 import { sessionMemory } from "./session-memory";
+import { githubEvidence } from "./github-evidence";
 export { contextConversation, rebuildContext, HANDOVER_CHAR_LIMIT } from "./context";
 export { activityBrief } from "./activity-brief";
 export { MASTER_INPUT_CHAR_LIMIT, MASTER_CONTEXT_LIMIT, HANDBACK_LIMIT, stoppedText } from "./turn-limits";
@@ -201,6 +202,7 @@ export async function executeRun(o: EngineOptions) {
   try {
     if ((await resumeInterrupted(x)) === "paused") return;
     const maxSteps = o.maxSteps ?? 12;
+    const githubReads = new Set<string>();
     for (let step = 0; step < maxSteps; step++) {
       if (await paused()) return;
       await refreshMessages();
@@ -251,6 +253,33 @@ export async function executeRun(o: EngineOptions) {
           message,
           `Your decision was not carried out: ${message} Nothing ran for it. Decide again within this request.`,
         );
+      if (decision.action === "read_github") {
+        if (last) {
+          j.phase = "finished";
+          await publish("blocked", stoppedText("This turn used its last step before the GitHub read could start."));
+          await settle();
+          return;
+        }
+        const source = decision.github;
+        if (o.run.lane === "quick" || !source || decision.task) {
+          refuse("a GitHub read needs a source selector and no helper task, and is unavailable in the email lane.");
+          continue;
+        }
+        const key = JSON.stringify([source.section?.toLowerCase(), source.commentId, source.file?.commit, source.file?.path]);
+        if (githubReads.has(key) || githubReads.size >= 3) {
+          s.nextPrompt = "The signed-in GitHub reader already attempted that source or used its three reads for this turn. Use the evidence already supplied and report any remaining gap.";
+          continue;
+        }
+        githubReads.add(key);
+        const projectId = o.run.projectId ?? j.progress.children.at(-1)?.projectId;
+        s.nextPrompt = await githubEvidence({
+          cwd: o.masterCwd,
+          issue: o.workRepo && o.run.workIssue ? { repo: o.workRepo, number: o.run.workIssue } : undefined,
+          projectRepo: o.projects.find((project) => project.id === projectId)?.repo,
+          signal: o.signal,
+        }, source, o.githubCommand);
+        continue;
+      }
       const unfinished = completionProblem(
         decision,
         j.progress.children,

@@ -53,6 +53,16 @@ weight was read is counted again from the start of its transcript, within the
 scan's budget, so a machine's first hours on a new collector show medians of
 the sessions read so far.
 
+On the first Claude desktop prompt after a model call reaches 140,000 input
+tokens, the installed work hook asks for a handoff at the next safe phase
+boundary. Use the existing issue, plan or worktree pointers to start a fresh
+Claude Code session for the next phase. A read-only task can leave its
+pointers in the reply. The notice is advisory and appears once per session.
+It uses the newest complete desktop usage record in a bounded local
+transcript tail. An unavailable reading or a later compaction skips it. The
+warning leaves room before the 150,000-token target. One long turn can still
+cross that target before the next prompt.
+
 ## Receipts
 
 Each session has one receipt under the machine's state directory,

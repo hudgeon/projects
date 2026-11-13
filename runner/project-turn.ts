@@ -4,7 +4,7 @@ import type { Agent } from "../src/run-model";
 import type { ProjectDirectory } from "./workspaces";
 import type { FileTouch } from "./native-events";
 import { reviewProjectContext } from "./project-context";
-import { hash } from "./project-sources";
+import { command, fetchIssue, hash, readLinkedIssue, workBriefText } from "./project-sources";
 import { sessionMemory, type SessionMemory } from "./session-memory";
 
 // Each review's private receipt is kept, with what it read, so later code
@@ -110,8 +110,9 @@ export type ProjectTurn = [
 export async function contextBrief(
   o: {
     stateDir: string;
-    run: { id: string; generation: number; workIssue?: number | null };
+    run: { id: string; generation: number; workIssue?: number | null; lane?: string };
     workRepo?: string;
+    githubCommand?: typeof command;
     signal: AbortSignal;
     instructions: string[];
     // Where the turn's native app runs, when not in the reviewed folder.
@@ -123,12 +124,21 @@ export async function contextBrief(
   },
   ...[project, cwd, task, actor, agent, session, query]: ProjectTurn
 ) {
-  if (!project)
+  const workIssue = o.workRepo && o.run.workIssue && o.run.lane !== "quick"
+    ? { repo: o.workRepo, number: o.run.workIssue } : undefined;
+  const readIssue = o.githubCommand && ((repo: string, number: number) =>
+    fetchIssue(cwd, repo, number, o.signal, o.githubCommand));
+  if (!project) {
+    const memory = o.memory ?? sessionMemory(o.stateDir, o.run.id);
+    const brief = workIssue && (await readLinkedIssue(cwd, workIssue, o.signal, readIssue)).brief;
+    const view = brief ? hash(JSON.stringify(brief)) : undefined;
+    const known = await memory.held(session);
     return {
-      prompt: "",
+      prompt: brief && known.view !== view ? workBriefText(brief) : "",
       onFile: (_file: FileTouch) => {},
-      remember: async (_session?: string | null) => {},
+      remember: async (id?: string | null) => { if (view) await memory.keep(id, { view }); },
     };
+  }
   const key = hash(JSON.stringify([project.id, cwd, task, o.instructions]));
   // What this native session was given before: a view and instruction files.
   const memory = o.memory ?? sessionMemory(o.stateDir, o.run.id);
@@ -141,10 +151,8 @@ export async function contextBrief(
     native: o.native ?? cwd,
     given: known.instructions,
     instructions: o.instructions,
-    workIssue:
-      o.workRepo && o.run.workIssue
-        ? { repo: o.workRepo, number: o.run.workIssue }
-        : undefined,
+    workIssue,
+    readIssue,
     signal: o.signal,
   });
   const at = Date.now(),

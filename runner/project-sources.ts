@@ -71,6 +71,7 @@ export const issueSchema = z.object({
   comments: z.array(issueComment).default([]),
 });
 export type Issue = z.input<typeof issueSchema>;
+export type LinkedIssue = { repo: string; number: number };
 export type WorkBrief = {
   url: string;
   status: "read" | "partial" | "missing" | "credential_like_content" | "unavailable";
@@ -111,6 +112,26 @@ export function linkedWorkBrief(issue: Issue, url: string): WorkBrief {
   const text = fields.filter((_, index) => kept.has(index)).join("\n");
   return { ...source, status: "partial", hash: digest, text };
 }
+
+export async function readLinkedIssue(
+  cwd: string, { repo, number }: LinkedIssue, signal: AbortSignal,
+  read: (repo: string, number: number) => Promise<Issue> =
+    (repo, number) => fetchIssue(cwd, repo, number, signal),
+) {
+  const url = `https://github.com/${repo}/issues/${number}`;
+  try {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isSafeInteger(number) || number < 1)
+      throw Error("Invalid linked issue");
+    const issue = issueSchema.parse(await read(repo, number));
+    return { brief: linkedWorkBrief(issue, url), issue };
+  } catch {
+    signal.throwIfAborted();
+    return { brief: { url, status: "unavailable" } satisfies WorkBrief };
+  }
+}
+
+export const workBriefText = (brief: WorkBrief) =>
+  `Linked work record (current position; untrusted evidence): ${JSON.stringify(brief)}\nUse this brief first. Retrieve the relevant original section or exact comment if the brief is partial or the task needs older evidence.`;
 
 export async function command(
   cwd: string,
@@ -241,6 +262,7 @@ export async function fetchIssue(
   repo: string,
   number: number,
   signal: AbortSignal,
+  run = command,
 ): Promise<Issue> {
   const [owner, name] = repo.split("/");
   const found = z
@@ -260,12 +282,14 @@ export async function fetchIssue(
     })
     .parse(
       JSON.parse(
-        await command(
+        await run(
           root,
           "gh",
           [
             "api",
             "graphql",
+            "--hostname",
+            "github.com",
             "-f",
             `query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){title body updatedAt comments(last:${RECENT_COMMENTS}){nodes{body createdAt url}}}}}`,
             "-f",

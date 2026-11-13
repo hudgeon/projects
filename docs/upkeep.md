@@ -96,8 +96,10 @@ instructions for this lane. It carries:
    cycle: it records the measures and changes nothing else.
 3. One change per cycle, the smallest that removes the cause, preferring a
    hook, a test, a skill step or a runner prompt or flag over more prose. A
-   repository `AGENTS.md` stays under 40 lines. Machine-local settings and
-   credentials are out of scope.
+   repository `AGENTS.md` follows the shared configuration repository's
+   canonical `scripts/standardize-repo.sh --check`, run from the repository
+   being checked. Report when that checker is unavailable. Machine-local
+   settings and credentials are out of scope.
 4. Every change names the measure it should move and ships with a guard that
    keeps it moved.
 5. Delivery follows each repository's own gates and the `deploy` skill, then

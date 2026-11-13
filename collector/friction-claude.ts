@@ -17,10 +17,16 @@ export type ClaudeState = {
   peak?: number;
 };
 // A model call's context: what it read, cached or not. Other values are no call.
-export function noteWeight(state: { start?: number; peak?: number }, tokens: unknown[]) {
+function inputTokens(tokens: unknown[]) {
   let context = 0;
   for (const value of tokens)
     if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) context += value;
+  return context;
+}
+export function noteWeight(state: { start?: number; peak?: number }, tokens: unknown[]) {
+  noteContext(state, inputTokens(tokens));
+}
+function noteContext(state: { start?: number; peak?: number }, context: number) {
   if (!context) return;
   state.start ??= context;
   state.peak = Math.max(state.peak ?? 0, context);
@@ -42,6 +48,14 @@ const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+export function claudeContextTokens(value: unknown) {
+  const usage = object(value);
+  return inputTokens([
+    usage.input_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens,
+  ]);
+}
 const resultText = (content: unknown) =>
   typeof content === "string"
     ? content
@@ -95,14 +109,7 @@ export function claudeRecord(
     : [];
   if (row.type === "assistant") {
     // A subagent's calls are its own context, not the session's.
-    if (row.isSidechain !== true) {
-      const usage = object(message.usage);
-      noteWeight(state, [
-        usage.input_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
-      ]);
-    }
+    if (row.isSidechain !== true) noteContext(state, claudeContextTokens(message.usage));
     for (const block of blocks) {
       if (block.type !== "tool_use") continue;
       counts.toolCalls += 1;

@@ -23,6 +23,7 @@ export function workReadInstructions(repo?: string, issue?: number | null, perso
 export function workCoordinatorInstructions(repo?: string, issue?: number | null, person?: Person) {
   if (!repo) return "";
   return `${workSource(repo, issue, person)}
+Use the supplied Current position before asking for the linked issue's original evidence. The signed-in reader serves one exact section or comment when needed.
 Keep each piece of work centred on one outcome, the clients it serves (customer: labels), the people involved, commitments and a concise Current position overview: what we are achieving, where it stands and what happens next. Maintain it at meaningful checkpoints and before finishing linked work through the existing change helper, which is given the record rules. ${whose(person, "User")} corrections take precedence over earlier summaries. Read-only requests remain read-only: report unchanged. A discussion is not an instruction to execute the underlying customer work. Combine means one continuing piece of work, Split means separate outcomes; a change helper restructures the records, preserving history and reciprocal links, after material ambiguity is resolved conversationally. Never reopen or execute superseded work automatically.
 ${workRecordReturn}`;
 }

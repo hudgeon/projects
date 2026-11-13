@@ -1,4 +1,5 @@
 import { readWorkRecord, verifiedRecord, writeWorkPosition } from "../collector/work-record";
+import { adviseClaudeHandoff, handoffContext, handoffNotice } from "./claude-handoff";
 import {
   mkdir,
   open,
@@ -178,7 +179,10 @@ export async function handleHook(
   app: "Codex" | "Claude",
   home: string,
   readRecord = (repo: string, number: number) => readWorkRecord(repo, number, 1200),
-) {
+): Promise<{
+  systemMessage?: string;
+  hookSpecificOutput?: { hookEventName: string; additionalContext: string };
+}> {
   const event = String(input.hook_event_name ?? "");
   if (
     !["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"].includes(event)
@@ -311,17 +315,21 @@ export async function handleHook(
     await rename(temp, file);
   }
   if (event !== "SessionStart" && event !== "UserPromptSubmit") return {};
+  const handoff = app === "Claude" && event === "UserPromptSubmit" &&
+    await adviseClaudeHandoff(home, sessionId, input.transcript_path, `${file.slice(0, -5)}.handoff`);
+  const output = (context: string) => ({
+    ...(handoff ? { systemMessage: handoffNotice } : {}),
+    hookSpecificOutput: {
+      hookEventName: event,
+      additionalContext: handoff ? `${context}\n\n${handoffContext}` : context,
+    },
+  });
   let context: string;
   if (invalidChoice)
     context =
       "The requested work issue could not be verified. Do not proceed on the old association. Ask the user to choose a valid issue or work: none. ";
   else if (record.selection !== "unassigned")
-    return {
-      hookSpecificOutput: {
-        hookEventName: event,
-        additionalContext: linked(record, found(record.issue)?.title) + (record.issue ? " Before finishing meaningful linked work, reconcile its Current position, people, commitments and reviewed email IDs against actual evidence. Include Evidence checked: YYYY-MM-DDTHH:mm:ss.sssZ with the actual UTC evidence cutoff in Current position, not a fabricated fresh date. Replace the single top Current position in place, with at most 2,000 characters below the heading. Use the installed work-item.mjs replace-position command described in the Projects work reconciliation guide and verify the readback. The Stop hook independently verifies fresh record changes; unreadable or unchanged records remain unverified in Projects. Read-only questions stay read-only; their session evidence may await the daily reconciliation." : ""),
-      },
-    };
+    return output(linked(record, found(record.issue)?.title) + (record.issue ? " Before finishing meaningful linked work, reconcile its Current position, people, commitments and reviewed email IDs against actual evidence. Include Evidence checked: YYYY-MM-DDTHH:mm:ss.sssZ with the actual UTC evidence cutoff in Current position, not a fabricated fresh date. Replace the single top Current position in place, with at most 2,000 characters below the heading. Use the installed work-item.mjs replace-position command described in the Projects work reconciliation guide and verify the readback. The Stop hook independently verifies fresh record changes; unreadable or unchanged records remain unverified in Projects. Read-only questions stay read-only; their session evidence may await the daily reconciliation." : ""));
   else context = "";
   if (work) {
     const { associations } = await readAssociations(home);
@@ -342,9 +350,7 @@ export async function handleHook(
   } else
     context +=
       "The work issue list is unavailable on this machine, so this session stays untracked for now. Mention that once and continue; do not invent or declare a work issue until the list is restored.";
-  return {
-    hookSpecificOutput: { hookEventName: event, additionalContext: context },
-  };
+  return output(context);
 }
 async function main() {
   const app = process.argv[2];

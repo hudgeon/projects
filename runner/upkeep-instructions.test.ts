@@ -101,7 +101,8 @@ test("the brief states the rules: evidence thresholds, a baseline cycle, one gua
     "Anything less is noted, not fixed.",
     "2. A standing issue with no recorded baseline makes this a baseline cycle",
     "change nothing else",
-    "3. One change per cycle, the smallest that removes the cause: prefer a hook, a test, a skill step or a runner prompt or flag over more instruction prose. A repository AGENTS.md stays under 40 lines.",
+    "3. One change per cycle, the smallest that removes the cause: prefer a hook, a test, a skill step or a runner prompt or flag over more instruction prose.",
+    "Check a repository AGENTS.md with the shared configuration repository's canonical scripts/standardize-repo.sh --check, run from the repository being checked. If the checker is unavailable, report that gap.",
     "4. Every change names the measure it should move and ships with a guard that keeps it moved",
     "5. Delivery follows each repository's own gates and the deploy skill, then the configuration repository's sync on every connected machine, with the before measure recorded in the standing issue before the change lands.",
     "revises or reverts a change whose measure did not move",
@@ -110,6 +111,7 @@ test("the brief states the rules: evidence thresholds, a baseline cycle, one gua
   ])
     assert.ok(rules.includes(phrase), phrase);
   assert.equal(rules.match(/^\d+\. /gm)?.length, 14);
+  assert.doesNotMatch(rules, /40 lines/);
 });
 
 test("the brief closes the loop: what moved means, revised once or reverted, kept guards stay, the guard each change gets, and who keeps the record", () => {

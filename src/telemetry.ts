@@ -107,7 +107,7 @@ export const executionEventSchema = z
     outputTokens: ms.optional(),
     outcome: outcome.optional(),
     reason: reason.optional(),
-    action: z.enum(["dispatch", "complete", "blocked"]).optional(),
+    action: z.enum(["dispatch", "read_github", "complete", "blocked"]).optional(),
   })
   .strict();
 export type ExecutionEvent = z.infer<typeof executionEventSchema>;

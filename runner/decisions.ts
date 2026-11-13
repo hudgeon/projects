@@ -133,7 +133,7 @@ export async function decide(x: Execution, step: number, last: boolean) {
     const shown = s.messages.map((message) => message.id);
     await savePrivate(contextFile, s.messages);
     const progressLine = `This turn so far: ${Math.round((performance.now() - begun) / 60_000)} minutes, ${s.dispatched} helper turns.${tokenLine(j.progress) ? ` ${tokenLine(j.progress)}.` : ""}`;
-    const prompt = `${s.nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${projectContext.prompt}\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`;
+    const prompt = `${s.nextPrompt}${last ? "\n\nThis is the last step of this turn: do not dispatch or request a GitHub read. Return complete, or blocked with a short report of where the work stands and what remains; the user continues it with a follow-up." : ""}\n\n${progressLine}\n\n${projectContext.prompt}\n${conversation}\nTreat newer user feedback as steering the original task. Explicitly address it in your next decision before dispatching more work or declaring completion. A message with delivery "steered" already reached the agent that was working when it arrived; check that its result reflects it.`;
     try {
       const raw = await runTurn(
         {
