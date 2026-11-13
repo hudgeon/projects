@@ -1,9 +1,9 @@
 // The coordinator's decisions: the schema native turns answer in, what a
 // completion must account for, and one coordinator turn.
 import { z } from "zod";
-import { masterDecisionSchema, MASTER_TAKEOVER, type Child, type MasterDecision } from "../src/run-model";
+import { masterDecisionSchema, MASTER_TAKEOVER, type Agent, type Child, type MasterDecision } from "../src/run-model";
 import { NativeStopError } from "./native";
-import { tokenLine } from "../src/run-text";
+import { DISPATCH_RETRY_STATUS, tokenLine } from "../src/run-text";
 import { mergedChildren } from "./child-report";
 import { rebuildContext } from "./context";
 import { MASTER_RETRIES, SPENT } from "./turn-limits";
@@ -23,6 +23,26 @@ export const outputSchema = (schema: z.ZodType) =>
         jsonSchema.required = Object.keys(jsonSchema.properties);
     },
   });
+
+// Offer only choices this runner could execute. Keep the persisted decision
+// schema and the dispatch checks independent of this provider constraint.
+function coordinatorOutputSchema(o: Execution["o"], agents: Agent[]) {
+  const projects = [...new Set(o.projects
+    .filter(project => !o.run.projectId || project.id === o.run.projectId)
+    .map(project => project.id))].sort();
+  const apps = agents.filter(agent => o.run.agent === "auto" || agent === o.run.agent).sort();
+  return outputSchema(projects.length && apps.length
+    ? masterDecisionSchema.extend({
+        task: masterDecisionSchema.shape.task.unwrap().extend({
+          projectId: z.enum(projects),
+          agent: z.enum(apps),
+        }).nullable(),
+      })
+    : masterDecisionSchema.extend({
+        action: masterDecisionSchema.shape.action.exclude(["dispatch"]),
+        task: z.null(),
+      }));
+}
 // A native turn's success is not the conversation's delivery. Require the
 // coordinator to account for each gate before finishing change work; pending
 // gates return to it without executing or replaying a child.
@@ -114,9 +134,11 @@ export async function decide(x: Execution, step: number, last: boolean) {
     await persist();
     await publish(
       "running",
-      handedOver
+      s.retryingDispatch
+        ? DISPATCH_RETRY_STATUS
+        : handedOver
         ? "Continuing with earlier context."
-        : step === 0
+        : step === 0 || !j.progress.children.some(child => child.result)
         ? "Master is reviewing the request."
         : "Master is reviewing the returned result.",
     );
@@ -143,7 +165,7 @@ export async function decide(x: Execution, step: number, last: boolean) {
           browser,
           prompt,
           sessionId: j.progress.masterSessionId ?? undefined,
-          schema: outputSchema(masterDecisionSchema),
+          schema: coordinatorOutputSchema(o, agents),
           readOnly: true,
           signal: o.signal,
           onSession: async (id) => {

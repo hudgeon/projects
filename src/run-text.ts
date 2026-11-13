@@ -56,8 +56,11 @@ export function runTitle(run: Pick<Run, "progress" | "messages">) {
   return run.progress?.title || requestTitle(run.messages[0]?.text ?? "");
 }
 type Plan = Pick<Run, "progress" | "updates" | "generation">;
+export const DISPATCH_RETRY_STATUS = "Retrying the handoff to a helper.";
 // The agent's most recent progress note for the current turn, if any.
 export function latestPlan(run: Plan): ProgressNote | null {
+  // The last plan may describe a helper that never started.
+  if (run.progress?.state === "running" && run.progress.summary === DISPATCH_RETRY_STATUS) return null;
   const notes = run.progress?.notes ?? [];
   if (notes.length) return notes.reduce((a, b) => (b.at >= a.at ? b : a));
   const update = (run.updates ?? [])

@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import type { NativeOptions } from "./native";
 import { activityBrief, completionProblem, workInstructions, executeRun, outputSchema } from "./engine";
 import { masterDecisionSchema, type Progress } from "../src/run-model";
-import { result, fixture, delivery, complete, dispatch, engineOptions } from "./run-fixtures";
+import { latestPlan, statusLine } from "../src/run-text";
+import { result, fixture, delivery, complete, dispatch, engineOptions, makeRun } from "./run-fixtures";
 
 test("work-record completion gate returns to the coordinator without replaying a child", async () => {
   const dir = await fixture(), o = engineOptions(dir), calls: NativeOptions[] = [];
@@ -111,22 +112,67 @@ test("project scope is enforced before preparing a workspace or launching a chil
 
 test("decisions the runner cannot carry out go back to the master before anything runs", async () => {
   const dir = await fixture(), o = engineOptions(dir), prompts: string[] = [];
-  let last: Progress | undefined, prepared = false;
-  o.report = async (p) => { last = structuredClone(p); };
+  const reports: Progress[] = [];
+  let prepared = false;
+  o.report = async (p) => { reports.push(structuredClone(p)); };
   o.prepare = async () => { prepared = true; return {cwd: dir, branch: "main", sessionId: null}; };
   o.turn = async (opts) => {
     prompts.push(opts.prompt);
     await opts.onSession(randomUUID());
-    if (prompts.length === 1) return {...dispatch(), task: {...dispatch().task!, projectId: "outside/project"}};
+    if (prompts.length === 1) {
+      opts.onProgress?.({done: [], remaining: ["Inspect the project"], yourMove: null});
+      return {...dispatch(), task: {...dispatch().task!, projectId: "outside/project"}};
+    }
     if (prompts.length === 2) return {...complete, task: dispatch().task};
     return complete;
   };
   try {
     await executeRun(o);
     assert.equal(prepared, false);
-    assert.equal(last?.state, "completed");
+    assert.equal(reports.at(-1)?.state, "completed");
+    const retry = reports.find(p => p.state === "running" && p.summary === "Retrying the handoff to a helper.");
+    assert.ok(retry);
+    assert.deepEqual(retry.children, []);
+    assert.deepEqual(retry.notes?.at(-1)?.remaining, ["Inspect the project"]);
+    const view = {...o.run, progress: retry};
+    assert.equal(latestPlan(view), null, "the previous plan no longer describes what is happening");
+    assert.equal(statusLine(view), "Retrying the handoff to a helper.");
+    assert.ok(!reports.some(p => p.summary === "Master is reviewing the returned result."), "no helper returned a result");
     assert.match(prompts[1], /Your decision was not carried out: that project is outside this request/);
     assert.match(prompts[2], /a finished or blocked decision cannot carry a task/);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test("coordinator output offers only projects and helper apps the runner can use", async () => {
+  const dir = await fixture();
+  const extra = {id: "acme/other", name: "Other", cwd: dir, plan: null};
+  try {
+    for (const [projectId, agent, projectIds, apps] of [
+      ["acme/test", "claude", ["acme/test"], ["claude"]],
+      [null, "auto", ["acme/other", "acme/test"], ["claude", "codex"]],
+      ["acme/missing", "auto", [], []],
+    ] as const) {
+      const o = engineOptions(dir, {...makeRun(), projectId, agent});
+      o.projects.push(extra);
+      let schema: NativeOptions["schema"] | undefined;
+      o.turn = async opts => { schema = opts.schema; return complete; };
+      await executeRun(o);
+      assert.equal(schema?.type, "object");
+      const properties = schema?.properties as {
+        action: {enum: string[]};
+        task: {type?: string; anyOf?: [{properties: Record<"projectId" | "agent", {enum?: string[]; const?: string}>}]};
+      };
+      assert.ok((schema?.required as string[]).includes("task"));
+      if (projectIds.length) {
+        assert.ok(properties.action.enum.includes("dispatch"));
+        const task = properties.task.anyOf![0].properties;
+        assert.deepEqual(task.projectId.enum ?? [task.projectId.const], projectIds);
+        assert.deepEqual(task.agent.enum ?? [task.agent.const], apps);
+      } else {
+        assert.deepEqual(properties.action.enum, ["read_github", "complete", "blocked"]);
+        assert.equal(properties.task.type, "null");
+      }
+    }
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 

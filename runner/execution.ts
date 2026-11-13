@@ -86,6 +86,7 @@ export type RunState = {
   contextPlan: ReturnType<typeof rebuildContext> | undefined;
   // What the coordinator hears at its next turn.
   nextPrompt: string;
+  retryingDispatch: boolean;
   dispatched: number;
   masterFailures: number;
   // Failures given back to the master this turn; past the limit the owner

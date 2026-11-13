@@ -73,6 +73,11 @@ ends the turn as usual.
 
 ## Current work and conversation measures
 
+The coordinator's dispatch choices are limited to repositories registered on
+its machine and the available helper apps, within the conversation's selected
+scope. If the runner rejects the coordinator's dispatch decision, Projects
+shows that it is retrying the handoff; no helper started for that decision.
+
 Today and the canonical conversation index distinguish current conversations
 from Done history. Local runner journals keep the last execution result and
 are not the current-work list. Reviews must reconcile the live current and

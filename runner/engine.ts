@@ -129,6 +129,7 @@ export async function executeRun(o: EngineOptions) {
     coordinator: null,
     contextPlan: undefined,
     nextPrompt: "",
+    retryingDispatch: false,
     dispatched: 0,
     masterFailures: 0,
     handbacks: 0,
@@ -214,6 +215,7 @@ export async function executeRun(o: EngineOptions) {
       if (decided === "paused") return;
       if (decided === "again") continue;
       const { decision, inputIds, heard } = decided;
+      s.retryingDispatch = false;
       // Feedback steered into the master's own turn was part of this decision.
       const reviewedIds = [...new Set([...inputIds, ...heard])];
       const title = clip(plainText(decision.title ?? ""), 80);
@@ -246,13 +248,15 @@ export async function executeRun(o: EngineOptions) {
       o.signal.throwIfAborted();
       // A decision the runner cannot carry out goes back with the reason;
       // nothing has run for it.
-      const refuse = (message: string) =>
+      const refuse = (message: string) => {
+        s.retryingDispatch = decision.action === "dispatch";
         x.handBack(
           "decision_rejected",
           { actor: "master", agent: s.masterAgent },
           message,
           `Your decision was not carried out: ${message} Nothing ran for it. Decide again within this request.`,
         );
+      };
       if (decision.action === "read_github") {
         if (last) {
           j.phase = "finished";
