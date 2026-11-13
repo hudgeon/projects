@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Lane, Progress } from "../src/run-model";
+import { INVESTIGATE_HEADER, type Lane, type Progress } from "../src/run-model";
 import { UPKEEP_AUTH_HEADER, type UpkeepAuth } from "../src/upkeep-model";
 import { telemetry, type TelemetryFields } from "../src/telemetry";
 import { Failure } from "./native";
@@ -22,7 +22,7 @@ type Body = {
 // doubling of attempts, its recovery once, so an outage cannot flood logs.
 export function runnerClient(endpoint: URL, token: string) {
   const failures = new Map<string, { attempt: number; at: number }>();
-  return async function post(route: Route, body: Body, upkeepAuth?: UpkeepAuth) {
+  return async function post(route: Route, body: Body, upkeepAuth?: UpkeepAuth, investigate = false) {
     const started = performance.now();
     const failureKey = `${route}:${body.id ?? "pool"}`;
     let response: Response | undefined;
@@ -40,6 +40,7 @@ export function runnerClient(endpoint: URL, token: string) {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
           ...(upkeepAuth ? { [UPKEEP_AUTH_HEADER]: upkeepAuth } : {}),
+          ...(investigate ? { [INVESTIGATE_HEADER]: "1" } : {}),
         },
         body: JSON.stringify(body),
         redirect: "error",

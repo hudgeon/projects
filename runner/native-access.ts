@@ -1,5 +1,6 @@
 // Process-local native execution policy, shared by launch and RPC requests.
 import path from "node:path";
+import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
 import type { NativeOptions } from "./native";
 
 export const fullAccess = (o: Pick<NativeOptions, "readOnly" | "fullAccess">) =>
@@ -62,4 +63,60 @@ export function codexFilesystem(o: NativeOptions) {
   const profile = `{${Object.entries(filesystem).map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(",")}}`;
   return ["-c", `permissions.projects_job.filesystem=${profile}`,
     "-c", "permissions.projects_job.network.enabled=true"];
+}
+
+export function claudeArguments(o: NativeOptions, session: string) {
+  const connectors = o.connectors?.claude;
+  const unrestricted = fullAccess(o);
+  const claude = claudeTools(o);
+  return [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    // Input stays open until the result, so feedback reaches the running turn.
+    "--input-format",
+    "stream-json",
+    "--json-schema",
+    JSON.stringify(o.schema),
+    ...claudePermissions(o),
+    "--tools", o.investigation ? "" : claude.enabled,
+    ...(o.investigation ? ["--restricted", "--safe-mode", "--setting-sources", ""] : []),
+    ...(unrestricted ? [] : [
+    "--allowedTools",
+    [
+      ...(o.investigation ? [] : claude.allowed),
+      ...(o.browser
+        ? browserTools(o.readOnly).map(
+            (tool) => `mcp__projects_browser__${tool}`,
+          )
+        : []),
+      ...(connectors?.allow ?? []),
+    ].join(","),
+    ]),
+    ...(o.browser || connectors?.deny.length
+      ? [
+          "--disallowedTools",
+          [
+            ...(o.browser
+              ? hiddenBrowserTools(o.readOnly).map(
+                  (tool) => `mcp__projects_browser__${tool}`,
+                )
+              : []),
+            ...(connectors?.deny ?? []),
+          ].join(","),
+        ]
+      : []),
+    // Without approved connectors, only this conversation's browser: anything
+    // else would be refused in dontAsk mode and fail the turn. With them,
+    // local MCP servers and blocked connector tools stay hidden.
+    ...(connectors || unrestricted ? [] : ["--strict-mcp-config"]),
+    "--mcp-config",
+    JSON.stringify({
+      mcpServers: o.browser
+        ? { projects_browser: { command: "npx", args: browserArgs(o) } }
+        : {},
+    }),
+    ...(o.sessionId ? ["--resume", session] : ["--session-id", session]),
+  ];
 }

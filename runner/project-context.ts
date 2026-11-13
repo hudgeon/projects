@@ -57,6 +57,7 @@ type Options = {
   // Instruction files already sent to the turn's native session, by hash.
   given?: Record<string, string>;
   signal: AbortSignal;
+  trackedOnly?: boolean;
   readIssue?: (repo: string, number: number) => Promise<Issue>;
 };
 
@@ -114,7 +115,7 @@ async function collect(o: Options) {
       command(
         root,
         "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["ls-files", "--cached", ...(o.trackedOnly ? [] : ["--others", "--exclude-standard"]), "-z"],
         o.signal,
       ),
     ]);
@@ -319,6 +320,8 @@ export async function reviewProjectContext(o: Options) {
       prompt: unavailable,
       view: hash(unavailable),
       sent: {} as Record<string, string>,
+      evidence: [] as Excerpt[],
+      workBrief: undefined as WorkBrief | undefined,
       receipt: {
         version: hash(
           JSON.stringify([o.project.id, o.cwd, o.instructions, o.task]),
@@ -378,6 +381,8 @@ export async function reviewProjectContext(o: Options) {
   const given = o.given ?? {};
   return {
     receipt,
+    evidence,
+    workBrief: snapshot.workBrief,
     prompt: view(given),
     // The same content whatever the session already holds.
     view: hash(view({})),

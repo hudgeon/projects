@@ -199,11 +199,14 @@ export class Runs {
         `SELECT payload FROM conversation_index
       WHERE (COALESCE(json_extract(payload,'$.archivedAt'),0) > 0) = ?
       AND (? IS NULL OR EXISTS (SELECT 1 FROM json_each(conversation_index.payload,'$.projectIds') WHERE value=?))
+      AND (?=1 OR COALESCE(json_extract(payload,'$.lane'),'standard')!='investigate' OR json_extract(payload,'$.owner')=?)
       ORDER BY (json_extract(payload,'$.state') IN ('queued','running','cancelling')) DESC,
       json_extract(payload,'$.updatedAt') DESC,id DESC LIMIT 50 OFFSET ?`,
         options.archived ? 1 : 0,
         options.projectId ?? null,
         options.projectId ?? null,
+        options.investigationOwner === undefined ? 1 : 0,
+        options.investigationOwner ?? null,
         options.offset ?? 0,
       )
       .toArray()
@@ -332,24 +335,29 @@ export class Runs {
       // A full or pressure-paused runner stays present without consuming or
       // recovering any reservation. Retry it unchanged when capacity returns.
       if (!lanes.length) return null;
+      const investigate = lanes.includes("investigate") ? 1 : 0;
       const slot = this.storage.sql
         .exec<{ id: string }>(
-          "SELECT id FROM runner_slots WHERE owner=?",
+          `SELECT runner_slots.id FROM runner_slots
+          LEFT JOIN conversation_index USING (id)
+          WHERE runner_slots.owner=? AND (?=1 OR COALESCE(json_extract(payload,'$.lane'),'standard')!='investigate')`,
           owner,
+          investigate,
         )
         .toArray()[0];
-      // Recovery of active claims ignores lanes. Queued follow-ups use this
-      // runner's offer; unclaimed work also respects earlier machines' offers.
+      // Investigations require a compatible runner even during recovery.
+      // Unclaimed work also respects earlier machines' offers.
       const unclaimedLanes = this.machines.newWorkLanes(host, lanes, now);
       const rows = this.storage.sql
         .exec<IndexRow>(
-          `SELECT * FROM conversation_index WHERE
+          `SELECT * FROM conversation_index WHERE (?=1 OR COALESCE(json_extract(payload,'$.lane'),'standard')!='investigate') AND (
         (owner=? AND json_extract(payload,'$.state') IN ('running','cancelling')) OR
         ((owner=? OR owner IS NULL) AND json_extract(payload,'$.state')='queued'
           AND COALESCE(json_extract(payload,'$.lane'),'standard') IN (
             SELECT value FROM json_each(CASE WHEN conversation_index.owner IS NULL THEN ? ELSE ? END)
-          ))
+          )))
         ORDER BY (owner=?) DESC,json_extract(payload,'$.updatedAt')`,
+          investigate,
           owner,
           owner,
           JSON.stringify(unclaimedLanes),
@@ -396,10 +404,11 @@ export class Runs {
   }
   // Serialized with claims, so the conversation's machine cannot claim
   // between the check and the move.
-  move(id: string): Promise<Run | "machine-present" | null> {
+  move(id: string): Promise<Run | "machine-present" | "single-session" | null> {
     return this.select(async () => {
       const run = await this.get(id);
       if (!run) return null;
+      if (run.lane === "investigate") return "single-session";
       // Conversations from before machines were recorded ran on the first.
       const host = run.host ?? (run.progress ? this.machines.first() : null);
       if (!host) return run;

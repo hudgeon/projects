@@ -16,6 +16,7 @@ import { handBack, acceptChild, inspect, recoverChild, resumeInterrupted } from 
 import { dispatch } from "./dispatch";
 import { sessionMemory } from "./session-memory";
 import { githubEvidence } from "./github-evidence";
+import { investigate } from "./investigation";
 export { contextConversation, rebuildContext, HANDOVER_CHAR_LIMIT } from "./context";
 export { activityBrief } from "./activity-brief";
 export { MASTER_INPUT_CHAR_LIMIT, MASTER_CONTEXT_LIMIT, HANDBACK_LIMIT, stoppedText } from "./turn-limits";
@@ -32,7 +33,8 @@ export async function executeRun(o: EngineOptions) {
   const { journal: j, movedHere } = await readJournal(o, file);
   // Nothing is running yet; a live view saved before a restart is stale.
   delete j.progress.live;
-  const { event, failureReason, persist, publish, undelivered, delivery } = openJournal(o, j, file);
+  const journal = openJournal(o, j, file);
+  const { event, failureReason, persist, publish, undelivered, delivery } = journal;
   if (j.generation > o.run.generation)
     throw new Failure(
       "journal_problem",
@@ -42,6 +44,8 @@ export async function executeRun(o: EngineOptions) {
     await o.report(j.progress);
     return;
   }
+  if (o.run.lane === "investigate")
+    return investigate(o, j, journal, movedHere);
   const interrupted = ["master", "child", "uncertain"].includes(j.phase);
   const followUp = j.generation !== o.run.generation && !interrupted;
   if (j.generation !== o.run.generation) {

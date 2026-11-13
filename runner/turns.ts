@@ -13,8 +13,12 @@ import { STANDING_APPLY } from "./session-memory";
 import { watchTurn } from "./turn-watch";
 import type { Execution } from "./execution";
 
+export type NativeExecution = Pick<Execution,
+  "o" | "j" | "event" | "failureReason" | "persist" | "publish" | "turn" | "ranHere" |
+  "delivery" | "lastSaved" | "overran" | "screenshots" | "memory">;
+
 export async function runTurn(
-  x: Execution,
+  x: NativeExecution,
   // rules: what the turn's session is told once, besides how to reply.
   { rules, ...options }: NativeOptions & { rules?: string },
   child?: Child,
@@ -222,7 +226,7 @@ export async function runTurn(
   // A delegated mailbox reaches the turn as an hour's token for its owner.
   // When none can be minted the turn gets no mailbox and is told so, never
   // another person's.
-  const connected = mailboxFor(o.person, o.inboxes);
+  const connected = options.investigation ? undefined : mailboxFor(o.person, o.inboxes);
   const mailboxToken = connected?.delegated
     ? await o.mailboxToken?.(connected.account, o.run.lane === "review").catch(() => undefined)
     : undefined;
@@ -231,7 +235,8 @@ export async function runTurn(
     telemetry("runner", "mailbox_unavailable", { runId: o.run.id, generation: o.run.generation }, "warn");
   // A session keeps its standing instructions; only one that lacks them, or
   // whose instructions changed, is sent them.
-  const standing = `${rules ? `${rules}\n\n` : ""}${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`;
+  const standing = options.investigation ? rules ?? "" :
+    `${rules ? `${rules}\n\n` : ""}${responseInstructions(o.person)}\n\n${progressInstructions(o.person)}${options.browser ? browserInstructions(options.browser.endpoint, o.person, o.browserSignIn) : ""}`;
   const standingKey = createHash("sha256").update(standing).digest("hex").slice(0, 24);
   const told = (await memory.held(options.sessionId)).standing === standingKey;
   let session = options.sessionId;
@@ -328,7 +333,8 @@ export async function runTurn(
             limit,
             child
               ? `It ran past its ${limit === "time_limit" ? "time" : "token"} limit and was stopped after being asked to save its work and report.`
-              : "The coordinator took too long to decide, so it was stopped.",
+              : options.investigation ? "The investigation reached its time limit."
+                : "The coordinator took too long to decide, so it was stopped.",
           )
         : thrown;
     const reason = failureReason(error);

@@ -554,7 +554,6 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
       }
     })();
   };
-  // Serial check-ins continue while full or pressure-paused, carrying documents.
   const claudeAuth = upkeepAuth();
   try {
     await runPool({
@@ -576,7 +575,7 @@ async function supervise(config: Config, endpoint: URL, configFile: string) {
             activeRunIds,
             lanes: auth || once ? lanes : lanes.filter((lane) => lane !== "upkeep"),
             documents: reserved,
-          }, auth);
+          }, auth, lanes.length > 0 && config.agents.includes("claude"));
         } finally {
           offered(reserved, claim.document);
         }

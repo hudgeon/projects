@@ -27,8 +27,9 @@ export const runStateSchema = z.enum([
 // lighter master turn, so it never waits behind long-running work. Upkeep is
 // the weekly cycle that keeps the agent setup improving (docs/upkeep.md): its
 // own brief and shared runner capacity, started by cron or from Settings.
-export const laneSchema = z.enum(["standard", "quick", "upkeep", "review"]);
+export const laneSchema = z.enum(["standard", "quick", "upkeep", "review", "investigate"]);
 export type Lane = z.infer<typeof laneSchema>;
+export const INVESTIGATE_HEADER = "X-Projects-Investigate";
 export const QUICK_ACTIVE_LIMIT = 30;
 export const STANDARD_ACTIVE_LIMIT = 10;
 export const messageInputSchema = z
@@ -59,7 +60,9 @@ export const runInputSchema = messageInputSchema
 // its schedule or Settings.
 export const startInputSchema = runInputSchema
   .extend({ lane: laneSchema.exclude(["upkeep", "review"]).optional() })
-  .strict();
+  .strict()
+  .refine(input => input.lane !== "investigate" ||
+    (input.projectId && input.agent === "claude" && input.masterAgent !== "codex" && !input.emailThread));
 export const runListSchema = z.object({
   archived: z
     .enum(["true", "false"])
@@ -79,6 +82,8 @@ export type RunListOptions = {
   projectId?: string;
   offset?: number;
   email?: boolean;
+  // Undefined for internal callers, null for viewers without investigation access.
+  investigationOwner?: string | null;
 };
 export const runArchiveSchema = z.object({ archived: z.boolean() }).strict();
 export const childResultSchema = z
@@ -326,8 +331,8 @@ export const runnerClaimSchema = runnerIdentitySchema
   .extend({
     activeRunIds: z.array(uuid).max(20).default([]),
     // Offered lanes; [] checks in without starting or recovering work.
-    // An older runner omits it and takes standard or quick work.
-    lanes: z.array(laneSchema).max(4).optional(),
+    // Investigate is offered in a header so a rolled-back Worker still accepts claims.
+    lanes: z.array(laneSchema.exclude(["investigate"])).max(4).optional(),
     // It can fetch an HTML edition the owner opened; an older runner cannot.
     documents: z.boolean().optional(),
   })

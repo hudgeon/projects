@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -17,15 +16,11 @@ import {
   MASTER_TAKEOVER,
   runProjectIds,
   usageTotal,
-  type Agent,
   type Child,
   type ProgressUpdate,
   type Run,
-  type RunInput,
   type RunMessage,
-  type Lane,
   type RunnerHost,
-  type RunSummary,
 } from "./run-model";
 import {
   clip,
@@ -54,7 +49,7 @@ import {
   overviewQueryOptions,
   privateQueryPolicy,
 } from "./overview-query";
-import { isArchived, type ArchiveEntry } from "./archive-model";
+import type { ArchiveEntry } from "./archive-model";
 import {
   conversationSearch,
   projectSearch,
@@ -64,338 +59,15 @@ import {
 } from "./navigation";
 
 
-type RunPage = {
-  runs: RunSummary[];
-  enabled: boolean;
-  nextOffset: number | null;
-};
-export function useRuns(projectId?: string, archived = false) {
-  return useInfiniteQuery({
-    queryKey: ["runs", projectId ?? null, archived],
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({
-        archived: String(archived),
-        offset: String(pageParam),
-      });
-      if (projectId) params.set("projectId", projectId);
-      return api<RunPage>(`/api/runs?${params}`);
-    },
-    getNextPageParam: (page) => page.nextOffset ?? undefined,
-    // Done conversations change rarely; current ones show live status.
-    ...privateQueryPolicy(archived ? 30_000 : 5000),
-  });
-}
-// Every conversation started from an email, current or Done, for the inbox.
-export function useEmailConversations() {
-  return useQuery({
-    queryKey: ["runs", "email"],
-    queryFn: () => api<RunPage>("/api/runs?email=true"),
-    ...privateQueryPolicy(15_000),
-  });
-}
+import { useRuns } from "./run-queries";
+export { useRuns, useEmailConversations } from "./run-queries";
 // Lists' rows and shared labels moved to conversation-row.tsx; still exported here.
 import { errorText, projectNames, runStates, ConversationRow, urgency } from "./conversation-row";
 export { errorText, projectNames, runStates, ConversationRow, urgency };
 import { useOwnerLabel } from "./people-view";
 
-// Enter sends and Shift+Enter starts a new paragraph. A phone or tablet keyboard
-// has no Shift+Return, so on touch Return starts a new line and the Send button
-// (or Cmd/Ctrl+Enter on an attached keyboard) sends. Enter that confirms an
-// input method's composition (keyCode 229 in Safari) only confirms the text.
-export const touchTyping = () =>
-  typeof matchMedia === "function" &&
-  matchMedia("(hover: none) and (pointer: coarse)").matches;
-export function sendOnEnter(
-  event: React.KeyboardEvent<HTMLTextAreaElement>,
-  send: () => void,
-  touch = touchTyping(),
-) {
-  if (
-    event.key !== "Enter" ||
-    event.shiftKey ||
-    event.nativeEvent.isComposing ||
-    event.keyCode === 229 ||
-    (touch && !event.metaKey && !event.ctrlKey)
-  )
-    return;
-  event.preventDefault();
-  send();
-}
-
-// The master last chosen on this device; Codex until Claude is picked.
-const MASTER_KEY = "projects.masterAgent";
-function savedMaster(): Agent {
-  try {
-    return localStorage.getItem(MASTER_KEY) === "claude" ? "claude" : "codex";
-  } catch {
-    return "codex";
-  }
-}
-function saveMaster(agent: Agent) {
-  try {
-    localStorage.setItem(MASTER_KEY, agent);
-  } catch {
-    /* A private window keeps the choice for this form only. */
-  }
-}
-
-// Start a conversation. Used on Today, under an email and under a work item.
-export function Composer({
-  snapshots,
-  archives,
-  initialText = "",
-  context,
-  projectId: initialProject,
-  workIssue: initialIssue,
-  emailThread,
-  lane: initialLane = "standard",
-  autoFocus,
-  placeholder = "What needs doing?",
-  submitLabel = "Start",
-  onStarted,
-  onCancel,
-}: {
-  snapshots: Snapshot[];
-  archives: ArchiveEntry[];
-  initialText?: string;
-  // Source context shown beside the owner's outcome, with its link appended.
-  context?: { title: string; detail: string };
-  projectId?: string;
-  workIssue?: number;
-  emailThread?: string;
-  lane?: Lane;
-  autoFocus?: boolean;
-  placeholder?: string;
-  submitLabel?: string;
-  onStarted?: (run: Run) => void;
-  onCancel?: () => void;
-}) {
-  const client = useQueryClient();
-  const current = useRuns();
-  const enabled = !!current.data?.pages[0]?.enabled;
-  const [text, setText] = useState(initialText),
-    [projectId, setProjectId] = useState(initialProject ?? ""),
-    [agent, setAgent] = useState<RunInput["agent"]>("auto"),
-    [masterAgent, setMasterAgent] = useState<Agent>(savedMaster),
-    [issue, setIssue] = useState(initialIssue ? String(initialIssue) : ""),
-    [lane, setLane] = useState<Lane>(initialLane),
-    [options, setOptions] = useState(false);
-  const images = useScreenshots();
-  const field = useRef<HTMLTextAreaElement>(null);
-  // An ambiguous network response must not create a second conversation.
-  const attempt = useRef<{ key: string; id: string } | null>(null);
-  useEffect(() => setProjectId(initialProject ?? ""), [initialProject]);
-  useEffect(() => {
-    const element = field.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight + 2, 360)}px`;
-  }, [text]);
-  // Focus once when the composer opens, with the cursor after any prefill.
-  useEffect(() => {
-    const element = field.current;
-    if (!autoFocus || !element) return;
-    element.focus();
-    element.setSelectionRange(element.value.length, element.value.length);
-  }, [autoFocus]);
-  const create = useMutation({
-    mutationFn: () => {
-      const words = text.trim();
-      const input = {
-        text: context
-          ? [words || "Review the attached screenshots.", context.detail].join("\n\n")
-          : words || "Review the attached screenshots.",
-        screenshots: images.images,
-        projectId: projectId || null,
-        agent,
-        ...(masterAgent === "claude" ? { masterAgent } : {}),
-        workIssue: issue ? Number(issue) : null,
-        ...(emailThread ? { emailThread } : {}),
-        ...(lane === "quick" ? { lane } : {}),
-      };
-      const key = JSON.stringify(input);
-      if (attempt.current?.key !== key)
-        attempt.current = { key, id: crypto.randomUUID() };
-      return api<{ run: Run }>("/api/runs", {
-        ...input,
-        requestId: attempt.current.id,
-      });
-    },
-    onSuccess: async (result) => {
-      attempt.current = null;
-      setText("");
-      images.clear();
-      client.setQueryData(["run", result.run.id], result);
-      onStarted?.(result.run);
-      await client.invalidateQueries({ queryKey: ["runs"] });
-    },
-  });
-  // Any connected machine may run the work, so offer projects registered on
-  // any of them.
-  const projects = [
-    ...new Map(
-      snapshots
-        .flatMap((s) => s.projects)
-        .map((p) => [p.id, p] as const),
-    ).values(),
-  ].filter(
-    (p) =>
-      p.id === projectId ||
-      !isArchived(archives, { kind: "project", projectId: p.id }),
-  );
-  const issues = currentWork(snapshots)?.issues.filter((i) => i.open) ?? [];
-  const chosen = [
-    projects.find((p) => p.id === projectId)?.name,
-    issue ? (issues.find(i => i.number === Number(issue))?.title ?? `Work #${issue}`) : "",
-    agent === "auto" ? "" : agent === "codex" ? "Codex" : "Claude",
-    masterAgent === "claude" ? "Claude master" : "",
-    lane === "quick" ? "Quick" : "",
-  ].filter(Boolean);
-  const ready =
-    (!!text.trim() || !!images.images.length) &&
-    enabled &&
-    !create.isPending &&
-    !images.busy;
-  return (
-    <form
-      className="composer"
-      onPaste={images.paste}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (ready) create.mutate();
-      }}
-    >
-      {context && <p className="composer-context">{context.title}</p>}
-      <textarea
-        ref={field}
-        aria-label={context ? context.title : "What needs doing"}
-        required={!images.images.length}
-        maxLength={8000}
-        rows={2}
-        value={text}
-        placeholder={placeholder}
-        disabled={create.isPending}
-        enterKeyHint={touchTyping() ? "enter" : "send"}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) =>
-          sendOnEnter(event, () => {
-            if (ready) create.mutate();
-          })
-        }
-      />
-      <ScreenshotPreviews draft={images} disabled={create.isPending} />
-      {options && (
-        <div className="composer-fields">
-          <label>
-            Repository
-            <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              disabled={create.isPending}
-            >
-              <option value="">Let Projects choose</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Master
-            <select
-              value={masterAgent}
-              onChange={(e) => {
-                const next = e.target.value === "claude" ? "claude" : "codex";
-                setMasterAgent(next);
-                saveMaster(next);
-              }}
-              disabled={create.isPending}
-            >
-              <option value="codex">Codex</option>
-              <option value="claude">Claude</option>
-            </select>
-          </label>
-          <label>
-            Agent
-            <select
-              value={agent}
-              onChange={(e) => setAgent(e.target.value as RunInput["agent"])}
-              disabled={create.isPending}
-            >
-              <option value="auto">Claude or Codex</option>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
-          </label>
-          <label>
-            Work item
-            <select
-              value={issue}
-              onChange={(e) => setIssue(e.target.value)}
-              disabled={create.isPending}
-            >
-              <option value="">None</option>
-              {issues.map((i) => (
-                <option key={i.number} value={i.number}>
-                  #{i.number} · {clip(i.title, 70)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="composer-check">
-            <input
-              type="checkbox"
-              checked={lane === "quick"}
-              onChange={(e) => setLane(e.target.checked ? "quick" : "standard")}
-              disabled={create.isPending}
-            />
-            Quick task: own slots, no repository changes
-          </label>
-        </div>
-      )}
-      <div className="composer-bar">
-        <ScreenshotButtons draft={images} disabled={create.isPending} />
-        <button
-          type="button"
-          className="options-toggle"
-          aria-label="Activity options"
-          aria-expanded={options}
-          onClick={() => setOptions(!options)}
-        >
-          {chosen.length ? chosen.join(" · ") : "Options"}
-        </button>
-        <span className="composer-submit">
-          {onCancel && (
-            <button
-              type="button"
-              className="btn-quiet"
-              onClick={onCancel}
-              disabled={create.isPending}
-            >
-              Cancel
-            </button>
-          )}
-          <button className="btn" type="submit" disabled={!ready}>
-            {create.isPending ? "Starting…" : submitLabel}
-          </button>
-        </span>
-      </div>
-      {create.error && (
-        <p role="alert" className="error">
-          {errorText(create.error)}
-        </p>
-      )}
-      {!enabled && current.data && (
-        <p className="error">
-          The runner is not active, so work cannot start.
-        </p>
-      )}
-    </form>
-  );
-}
-
+import { sendOnEnter, touchTyping } from "./run-composer";
+export { Composer, sendOnEnter, touchTyping } from "./run-composer";
 
 // The owner's words stay as typed; only HTTPS links (Markdown or bare) become links.
 export function LinkedText({ text }: { text: string }) {
@@ -989,7 +661,7 @@ export function ConversationPage({
   const from =
     run.host ?? (!run.movedFrom && run.progress ? machines[0]?.id : undefined);
   const canMove =
-    !!from &&
+    run.lane !== "investigate" && !!from &&
     !!runners &&
     !present(from) &&
     machines.some((m) => m.id !== from && present(m.id));
@@ -1155,7 +827,7 @@ export function ConversationPage({
           <DocumentList docs={docs} />
         </section>
       )}
-      <ConversationBrowser key={run.id} run={run} />
+      {run.lane !== "investigate" && <ConversationBrowser key={run.id} run={run} />}
       {(!!children.length || !!updates.length || !!run.progress) && (
         <details className="convo-details">
           <summary>Details</summary>
@@ -1192,7 +864,7 @@ export function ConversationPage({
           <p className="subtle">
             {/* The app that coordinated, which differs from the request when
                 that app is not signed in on the machine. */}
-            Master:{" "}
+            {run.lane === "investigate" ? "Investigator" : "Master"}:{" "}
             {(run.progress ? run.progress.masterAgent : run.masterAgent) ===
             "claude"
               ? "Claude"
@@ -1215,7 +887,7 @@ export function ConversationPage({
               )}
             </p>
           )}
-          {run.progress?.masterSessionId && !active && (
+          {run.progress?.masterSessionId && !active && run.lane !== "investigate" && (
             <p className="subtle">
               Coordinating session:{" "}
               <Restart

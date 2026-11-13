@@ -3,7 +3,7 @@
 // and a document waiting to be read.
 import { allowed, signsIn } from "./auth";
 import { attributes, trace } from "./telemetry";
-import type { BrowserSignIn, Lane, RunnerHost } from "../src/run-model";
+import { INVESTIGATE_HEADER, type BrowserSignIn, type Lane, type RunnerHost } from "../src/run-model";
 import { UPKEEP_AUTH_HEADER, upkeepAuthSchema } from "../src/upkeep-model";
 import type { Portfolio } from "./index";
 
@@ -21,7 +21,10 @@ export async function claimed(
 ) {
   const run = await trace("dispatch", {}, async () => {
     const auth = upkeepAuthSchema.safeParse(headers?.get(UPKEEP_AUTH_HEADER)).data;
-    const claimed = await store.claimRun(owner, input.activeRunIds, input.lanes, host, auth);
+    const lanes = input.lanes?.length && headers?.get(INVESTIGATE_HEADER) === "1"
+      ? [...input.lanes, "investigate" as const]
+      : input.lanes;
+    const claimed = await store.claimRun(owner, input.activeRunIds, lanes, host, auth);
     if (claimed) attributes({ runId: claimed.id, generation: claimed.generation });
     return claimed;
   });
@@ -37,7 +40,7 @@ export async function claimed(
     : person && allowed(person.email, env)
       ? "owner"
       : "not_allowed";
-  const activity = run
+  const activity = run && run.lane !== "investigate"
     ? (await store.overview()).map((s) => ({
         host: s.host,
         observedAt: s.collectedAt,

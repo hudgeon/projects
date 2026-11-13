@@ -17,6 +17,7 @@ import { notice } from "../src/run-text";
 import { attributes, observeRequest, trace } from "./telemetry";
 import { BrowserSignIns, browserPath } from "./browser";
 import { claimed } from "./claims";
+import { runCollection, runVisible, updatingScreenshots } from "./run-routes";
 import { People, peopleRoutes } from "./people";
 import { InboxRequests, inboxRoutes, keepInboxes, overviewInboxes } from "./inbox";
 import { Sessions } from "./sessions";
@@ -25,7 +26,7 @@ import { settingsRoutes } from "./settings";
 import { readUpkeepSchedule, saveUpkeepSchedule } from "./upkeep";
 import { DOCUMENT_CSP, MAX_DOCUMENT_BYTES, documentRequestSchema, htmlSource, runnerDocumentSchema, runnerLeaseSchema, type HtmlSource } from "../src/document-model";
 export { Conversation } from "./runs";
-import { startInputSchema, runListSchema, runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
+import { runArchiveSchema, messageInputSchema, runnerClaimSchema, runnerHeartbeatSchema, runnerReportSchema, type Lane, type RunnerHost, type RunInput, type Progress, type RunListOptions } from "../src/run-model";
 import { archiveInputSchema, archiveKey, type ArchiveEntry, type ArchiveTarget } from "../src/archive-model";
 import { telemetry } from "../src/telemetry";
 import { z } from "zod";
@@ -352,7 +353,6 @@ async function runnerOwner(machine: MachineCaller, runnerId: string) {
   const hex = [...hash.slice(0, 16)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-const updatingScreenshots = () => Response.json({error: "Projects is finishing an update. Your screenshot is still in the draft; try sending it again shortly."}, {status: 503});
 const closeRequestSchema = z
   .object({ issue: z.number().int().positive() })
   .strict();
@@ -493,11 +493,13 @@ export async function handle(
       return Response.json({ error: "Machine not found" }, { status: 404 });
     return Response.json({ machines: await store.machineList() });
   }
-  // A browser's own sign-in never reaches a conversation started from an email.
-  const emailRun = async (id: string) => !!browser && !!(await store.getRun(id))?.emailThread;
+  const visibleRun = async (id: string) => {
+    const run = await trace("conversation.read", { runId: id }, () => store.getRun(id));
+    return run && runVisible(run, caller as string, !!browser) ? run : null;
+  };
   const browserRoute = /^\/api\/runs\/([a-f0-9-]{36})\/browser(?:\/(view))?$/.exec(url.pathname);
   if (browserRoute) {
-    if (!(await store.getRun(browserRoute[1])) || (await emailRun(browserRoute[1]))) return new Response("Not found", {status: 404});
+    if (!(await visibleRun(browserRoute[1]))) return new Response("Not found", {status: 404});
     const conversation = env.CONVERSATIONS.getByName(JSON.stringify([env.PORTFOLIO_ID, browserRoute[1]]));
     if (!browserRoute[2] && request.method === "GET") return Response.json(await trace("browser.status", {runId: browserRoute[1]}, () => conversation.browserStatus()));
     if (browserRoute[2] && request.method === "POST") {
@@ -519,77 +521,7 @@ export async function handle(
     const archives = await trace("archive.update", {}, () => store.archive(input.target, input.archived));
     return Response.json(archives ? {archives} : {error: "This item is no longer in the project inventory."}, {status: archives ? 200 : 404});
   }
-  if (url.pathname === "/api/runs" && request.method === "GET") {
-    const options = runListSchema.safeParse(Object.fromEntries(url.searchParams));
-    if (!options.success) return Response.json({error: "Invalid conversation filter"}, {status: 400});
-    const listed = await trace("conversation.list", {}, () => store.listRuns(options.data));
-    const runs = browser ? (options.data.email ? [] : listed.filter((run) => !run.emailThread)) : listed;
-    return Response.json({
-      runs,
-      nextOffset: listed.length === 50 && !options.data.email ? options.data.offset + 50 : null,
-      enabled: await store.runnable(),
-      runners: await store.runners(),
-    });
-  }
-  if (url.pathname === "/api/runs" && request.method === "POST") {
-    if (!(await store.runnable()))
-      return Response.json(
-        { error: "Connect a machine before starting conversations." },
-        { status: 503 },
-      );
-    let input;
-    try {
-      input = startInputSchema.parse(await readJson(request, MESSAGE_REQUEST_BYTES));
-    } catch {
-      return Response.json({ error: "Invalid conversation" }, { status: 400 });
-    }
-    // A browser's own sign-in starts no conversation from an email and reads
-    // none back through a retry.
-    if (browser && input.emailThread)
-      return Response.json({ error: "Sign in with your email code to work on email." }, { status: 403 });
-    const previous = await trace("conversation.read", { runId: input.requestId }, () => store.getRun(input.requestId));
-    attributes({ runId: input.requestId });
-    if (previous)
-      return browser && previous.emailThread
-        ? Response.json({ error: "Invalid conversation" }, { status: 409 })
-        : Response.json({ run: previous });
-    if (input.screenshots?.length && !(await runtimeStatus(store, env, input.requestId)).ready)
-      return updatingScreenshots();
-    // Quick work has its own hourly bound, sized for working through email.
-    if (!(await store.rate(input.lane === "quick" ? `quick-runs:${caller}` : `runs:${caller}`, input.lane === "quick" ? 60 : 30, 3600_000)))
-      return new Response("Try again later", { status: 429 });
-    const snapshots = await store.overview();
-    // Any connected machine may run it, so one machine's old inventory does
-    // not block new work. The claiming runner still checks the project
-    // against its own machine's registry.
-    if (!snapshots.length)
-      return Response.json(
-        { error: "Refresh the project inventory before starting work." },
-        { status: 409 },
-      );
-    if (input.projectId && !snapshots.some((s) => s.projects.some((p) => p.id === input.projectId)))
-      return Response.json(
-        { error: "Project is not registered on any connected machine." },
-        { status: 400 },
-      );
-    if (
-      input.workIssue &&
-      !currentWork(snapshots)?.issues.some((i) => i.number === input.workIssue)
-    )
-      return Response.json({ error: "Unknown work issue." }, { status: 400 });
-    try {
-      const run = await trace("conversation.create", { runId: input.requestId }, () => store.createRun(input, caller as string));
-      // Another sign-in may have saved this request ID since the check above.
-      return browser && run.emailThread
-        ? Response.json({ error: "Invalid conversation" }, { status: 409 })
-        : Response.json({ run });
-    } catch {
-      return Response.json(
-        { error: "Conversation could not be saved. Check the screenshots or active conversation limit." },
-        { status: 409 },
-      );
-    }
-  }
+  if (url.pathname === "/api/runs") return runCollection(request, env, store, caller as string, !!browser);
   // The viewer asks with POST, so no repository or file name enters a URL.
   if (url.pathname === "/api/documents") {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -627,7 +559,7 @@ export async function handle(
   if (imageRoute) {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const [, id, screenshotId] = imageRoute;
-    if (await emailRun(id)) return new Response("Screenshot not found", { status: 404 });
+    if (!(await visibleRun(id))) return new Response("Screenshot not found", { status: 404 });
     const image = await trace("conversation.screenshot", { runId: id }, () => store.screenshot(id, screenshotId));
     return image ? new Response(image.bytes, { headers: {
       "Content-Type": image.metadata.mime,
@@ -641,17 +573,18 @@ export async function handle(
   if (runRoute) {
     const [, id, action] = runRoute;
     attributes({ runId: id });
-    if (await emailRun(id)) return Response.json({ run: null }, { status: 404 });
-    if (request.method === "GET" && !action) {
-      const run = await trace("conversation.read", { runId: id }, () => store.getRun(id));
-      return Response.json({ run, runners: await store.runners() }, { status: run ? 200 : 404 });
-    }
+    const visible = await visibleRun(id);
+    if (!visible) return Response.json({ run: null }, { status: 404 });
+    if (request.method === "GET" && !action)
+      return Response.json({ run: visible, runners: await store.runners() });
     if (request.method !== "POST" || !action)
       return new Response("Method not allowed", { status: 405 });
     if (action === "move") {
       const run = await trace("conversation.move", { runId: id }, async () => await store.moveRun(id));
       if (run === "machine-present")
         return Response.json({ error: "Its machine is back; it continues this conversation." }, { status: 409 });
+      if (run === "single-session")
+        return Response.json({ error: "Investigate stays on the machine that holds its session." }, { status: 409 });
       return Response.json(run ? { run } : { error: "Conversation not found" }, { status: run ? 200 : 404 });
     }
     if (action === "archive") {
@@ -672,9 +605,8 @@ export async function handle(
         );
       const input = messageInputSchema.parse(await readJson(request, MESSAGE_REQUEST_BYTES));
       // A lost-response retry must still return its saved receipt at the rate limit.
-      const existing = await store.getRun(id);
-      if (existing?.messages.some(message => message.id === input.requestId))
-        return Response.json({ run: existing });
+      if (visible.messages.some(message => message.id === input.requestId))
+        return Response.json({ run: visible });
       if (!(await store.rate(`feedback:${caller}`, 120, 3600_000)))
         return Response.json({ error: "Too many follow-ups. Try again later." }, { status: 429 });
       if (input.screenshots?.length && !(await runtimeStatus(store, env, id)).ready)

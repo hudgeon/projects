@@ -8,8 +8,16 @@ import { telemetry, TELEMETRY_LIMIT, type ExecutionEvent } from "../src/telemetr
 import { childResultSchema, deliverySchema, masterDecisionSchema, workRecordSchema, progressSchema, type Progress } from "../src/run-model";
 import { NativeBusyError, Failure, NativeStopError } from "./native";
 import type { EngineOptions } from "./execution";
+import { investigationResultSchema } from "./investigation-result";
 
 const checkpointSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("investigation"),
+    value: investigationResultSchema,
+    collectedAt: z.string(),
+    sources: z.array(z.object({ label: z.string(), url: z.string().nullable() }).strict()),
+    inputIds: z.array(z.string()),
+  }).strict(),
   z
     .object({
       kind: z.literal("master"),
@@ -120,7 +128,7 @@ export async function readJournal(o: EngineOptions, file: string) {
       progress: {
         seq: 1,
         state: "running",
-        summary: "Master is reviewing the request.",
+        summary: o.run.lane === "investigate" ? "Gathering investigation evidence." : "Master is reviewing the request.",
         children: [],
         masterSessionId: null,
       },

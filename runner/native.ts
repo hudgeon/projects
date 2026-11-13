@@ -24,12 +24,12 @@ import {
   parseProgressNote,
   type FileTouch,
 } from "./native-events";
-import { browserArgs, browserTools, hiddenBrowserTools } from "./native-browser";
+import { browserArgs, browserTools } from "./native-browser";
 import { nativeEnv } from "./native-env";
 import { confirmStopped, Failure, NativeStopError, readLines, stopProcess } from "./native-process";
 export { Failure, NativeStopError, nativeProcessStopped } from "./native-process";
 export { nativeEnv } from "./native-env";
-import { fullAccess, codexPermissions, codexFilesystem, claudeTools, CODEX_TIER, claudePermissions } from "./native-access";
+import { fullAccess, codexPermissions, codexFilesystem, claudeArguments, CODEX_TIER } from "./native-access";
 export { browserTools, hiddenBrowserTools } from "./native-browser";
 
 export type SteerInput = { text: string; screenshots?: ScreenshotInput[] };
@@ -54,6 +54,7 @@ export type NativeOptions = {
   sessionId?: string;
   schema: Record<string, unknown>;
   readOnly: boolean;
+  investigation?: boolean;
   fullAccess?: boolean;
   // Hosts a read-only Claude turn may fetch, and no other (native-access.ts).
   web?: string[];
@@ -185,6 +186,9 @@ const userContent = (input: SteerInput, kind: "codex" | "claude") => [
 ];
 export async function nativeTurn(options: NativeOptions): Promise<unknown> {
   options.signal.throwIfAborted();
+  if (options.investigation && (options.agent !== "claude" || !options.readOnly ||
+      options.fullAccess || options.browser || options.connectors || options.web || options.mailbox || options.mailboxToken))
+    throw new Failure("permission_required", "Investigate requires the restricted Claude profile.");
   return options.agent === "codex" ? codexTurn(options) : claudeTurn(options);
 }
 async function codexTurn(o: NativeOptions): Promise<unknown> {
@@ -530,59 +534,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   await o.onSession(session);
   // A stop that arrived while it was saved starts nothing.
   o.signal.throwIfAborted();
-  const connectors = o.connectors?.claude;
-  const unrestricted = fullAccess(o);
-  const claude = claudeTools(o);
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    // Input stays open until the result, so feedback reaches the running turn.
-    "--input-format",
-    "stream-json",
-    "--json-schema",
-    JSON.stringify(o.schema),
-    ...claudePermissions(o),
-    "--tools",
-    claude.enabled,
-    ...(unrestricted ? [] : [
-    "--allowedTools",
-    [
-      ...claude.allowed,
-      ...(o.browser
-        ? browserTools(o.readOnly).map(
-            (tool) => `mcp__projects_browser__${tool}`,
-          )
-        : []),
-      ...(connectors?.allow ?? []),
-    ].join(","),
-    ]),
-    ...(o.browser || connectors?.deny.length
-      ? [
-          "--disallowedTools",
-          [
-            ...(o.browser
-              ? hiddenBrowserTools(o.readOnly).map(
-                  (tool) => `mcp__projects_browser__${tool}`,
-                )
-              : []),
-            ...(connectors?.deny ?? []),
-          ].join(","),
-        ]
-      : []),
-    // Without approved connectors, only this conversation's browser: anything
-    // else would be refused in dontAsk mode and fail the turn. With them,
-    // local MCP servers and blocked connector tools stay hidden.
-    ...(connectors || unrestricted ? [] : ["--strict-mcp-config"]),
-    "--mcp-config",
-    JSON.stringify({
-      mcpServers: o.browser
-        ? { projects_browser: { command: "npx", args: browserArgs(o) } }
-        : {},
-    }),
-    ...(o.sessionId ? ["--resume", session] : ["--session-id", session]),
-  ];
+  const args = claudeArguments(o, session);
   const child = spawn(o.binaries?.claude ?? "claude", args, {
     cwd: o.cwd,
     env: nativeEnv(o.browser, o.person, o.mailbox, o.mailboxToken),
@@ -613,7 +565,7 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
   const tools = new Map<string, NativeActivity["kind"]>();
   // Each request's usage by message: one streamed in parts repeats it.
   const requests = new Map<string, Record<string, unknown>>();
-  let context = 0;
+  let context = 0, profileChecked = false;
   // While the turn runs, its requests so far; once it reports, the result's
   // own count. Never the per-model totals, which on a resumed session include
   // every earlier turn.
@@ -640,8 +592,19 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
     readLines(
       child,
       (message) => {
-        if (message.type === "system" && message.subtype === "init")
+        if (message.type === "system" && message.subtype === "init") {
+          if (o.investigation) {
+            if (!Array.isArray(message.tools) || message.tools.some((name) => name !== "StructuredOutput") ||
+                !Array.isArray(message.mcp_servers) || message.mcp_servers.length) {
+              fail(new Failure("permission_required", "Claude could not confirm its restricted tool profile."));
+              return;
+            }
+            profileChecked = true;
+            if (typeof message.model === "string" && /^[a-zA-Z0-9._:-]{1,100}$/.test(message.model))
+              o.onTiming?.({ model: message.model });
+          }
           o.onActivity?.({ kind: "turn", state: "started" });
+        }
         if (message.type === "system" && message.subtype === "compact_boundary")
           o.onActivity?.({ kind: "compaction", state: "finished" });
         if (message.type === "assistant") {
@@ -675,6 +638,10 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
                 block.type === "tool_use" &&
                 typeof block.id === "string"
               ) {
+                if (o.investigation && block.name !== "StructuredOutput") {
+                  fail(new Failure("permission_required", "Claude requested a tool outside the investigation profile."));
+                  return;
+                }
                 const kind = claudeToolKind(block.name);
                 if (!tools.has(block.id)) {
                   o.onActivity?.({ kind, state: "started" }, block.name === "Bash" ? commandText(object(block.input).command) : undefined);
@@ -705,6 +672,10 @@ async function claudeTurn(o: NativeOptions): Promise<unknown> {
         if (message.subtype === "success" && !message.is_error && message.num_turns === 0) return;
         // Only the first result answers this prompt.
         if (received) return;
+        if (o.investigation && !profileChecked) {
+          fail(new Failure("protocol_error", "Claude did not confirm its restricted tool profile."));
+          return;
+        }
         o.onUsage?.(usage(object(message.usage)));
         subtype = typeof message.subtype === "string" ? message.subtype : "";
         if (message.is_error || message.subtype !== "success") failed = true;

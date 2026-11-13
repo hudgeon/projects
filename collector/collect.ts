@@ -16,6 +16,7 @@ import { githubReaders } from "./github";
 import { command, subprocessEnv } from "./command";
 import { inboxLogins, type Config } from "./config";
 import { readInboxes } from "./inbox-logins";
+import { runnerStateDirectory } from "./friction-runner";
 export type { Config } from "./config";
 export { command, machineSecret, subprocessEnv } from "./command";
 
@@ -451,7 +452,7 @@ async function claude(
         } catch {
           continue;
         }
-        // Match executable as well as PID, to avoid stale files pointing at a reused process.
+        if (row.cwd === path.join(runnerStateDirectory(home), "investigations")) continue;
         const executable = await command("ps", [
           "-p",
           String(row.pid),
@@ -748,7 +749,6 @@ export async function collect(
   ]);
   const sources = { codex: c.source, claude: a.source };
   const projects: Project[] = [];
-  // Bound concurrency across repositories; each subprocess has its own deadline.
   const items = await discover(config);
   const github = await githubReaders([
     ...(config.workRepo ? [config.workRepo] : []),
