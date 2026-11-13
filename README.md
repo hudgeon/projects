@@ -3,11 +3,10 @@
 Projects is a private site for running your software work from a phone or a
 desktop. It shows the repositories on your machines, with their checkouts,
 native Claude Code and Codex sessions, pull requests and health, and it runs
-**conversations**: you state an outcome, a master agent plans it, hands the work
-to native Claude Code or Codex sessions on one of your machines, checks the
-evidence and reports back. Everything runs with your own logins and
-subscriptions on machines you own; the site holds no GitHub, model or mailbox
-credential.
+**conversations**. **Investigate**, the owner's default, answers from supplied
+sources in one read-only Claude session. **Standard** coordinates native Claude
+or Codex sessions for live checks and changes. Both use your machine's logins
+and subscriptions. The site holds no GitHub, model or mailbox credential.
 
 To run your own copy, see [Self-hosting](docs/self-host.md).
 
@@ -79,7 +78,7 @@ runners keep checking in and leave new work for another machine.
 A conversation stays on the machine that claimed it, where its native sessions,
 journal and worktrees live.
 
-While a conversation's machine is away and another is present, the conversation
+When its machine is away and another is present, a Standard conversation
 offers **Continue on another machine**. That releases the claim without
 replaying anything: a step in flight is abandoned with an unknown outcome under
 a new generation, so the away machine's late reports are refused, and the next
@@ -139,7 +138,7 @@ refreshes no expired credentials, changes no login and enables no extra usage.
 An upstream change to the Claude endpoint (a native-client interface, not a
 public API) also shows unavailable until the reader is updated.
 
-Each conversation gives a **master** an outcome. The master is Codex unless you
+Standard gives a **master** an outcome. The master is Codex unless you
 choose Claude in the composer (remembered per device); on a machine without
 Codex it is Claude. When its app declines the conversation, reaches its usage
 limit, is signed out or fails twice in a row, the other app takes over for the

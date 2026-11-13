@@ -337,8 +337,8 @@ export class Runs {
       if (!lanes.length) return null;
       const investigate = lanes.includes("investigate") ? 1 : 0;
       const slot = this.storage.sql
-        .exec<{ id: string }>(
-          `SELECT runner_slots.id FROM runner_slots
+        .exec<Pick<IndexRow, "id" | "owner" | "payload">>(
+          `SELECT runner_slots.id,conversation_index.owner,payload FROM runner_slots
           LEFT JOIN conversation_index USING (id)
           WHERE runner_slots.owner=? AND (?=1 OR COALESCE(json_extract(payload,'$.lane'),'standard')!='investigate')`,
           owner,
@@ -346,8 +346,10 @@ export class Runs {
         )
         .toArray()[0];
       // Investigations require a compatible runner even during recovery.
-      // Unclaimed work also respects earlier machines' offers.
-      const unclaimedLanes = this.machines.newWorkLanes(host, lanes, now);
+      // For unclaimed investigations, only offers from machines with the
+      // selected repository compete. Existing claims keep their machine.
+      const unclaimedLanes = this.machines.newWorkLanes(host, lanes.filter(lane => lane !== "investigate"), now);
+      if (investigate) unclaimedLanes.push("investigate");
       const rows = this.storage.sql
         .exec<IndexRow>(
           `SELECT * FROM conversation_index WHERE (?=1 OR COALESCE(json_extract(payload,'$.lane'),'standard')!='investigate') AND (
@@ -365,14 +367,19 @@ export class Runs {
           owner,
         )
         .toArray();
-      const ids = [
-        ...new Set([...(slot ? [slot.id] : []), ...rows.map((row) => row.id)]),
-      ];
+      const candidates = new Map(rows.map(row => [row.id, row]));
+      const ids = new Set([...(slot ? [slot.id] : []), ...candidates.keys()]);
       for (const id of ids) {
         // A runner acknowledges running conversations in its next serial claim.
         // Do not dispatch them twice. An ambiguous reply is absent from this
         // list, so its durable reservation is retried before taking more work.
         if (activeRunIds.includes(id)) continue;
+        const row = id === slot?.id ? slot : candidates.get(id);
+        if (row?.owner === null && row.payload) {
+          const {lane, projectId} = JSON.parse(row.payload) as RunSummary;
+          if (lane === "investigate" &&
+              (!projectId || this.machines.investigationHost(projectId, now) !== host)) continue;
+        }
         // Reserve before RPC. On ambiguous delivery, the same runner visits this
         // same conversation first. The conversation enforces exclusive ownership.
         this.storage.sql.exec(

@@ -124,6 +124,16 @@ export class Machines {
     }
     return [...available];
   }
+  // An investigation needs its repository on the machine that first claims it.
+  investigationHost(projectId: string, now: number) {
+    return this.storage.sql.exec<{id: string}>(
+      `SELECT machines.id FROM machines JOIN snapshots ON snapshots.host=machines.id
+       WHERE EXISTS (SELECT 1 FROM json_each(snapshots.payload,'$.projects')
+         WHERE json_extract(value,'$.id')=?)
+       ORDER BY machines.position,machines.created`,
+      projectId,
+    ).toArray().find(({id}) => this.offer(id, now).lanes.includes("investigate"))?.id;
+  }
   runnerAway(host: string, now = Date.now()) {
     return !this.present("runner_contact", host, FALLBACK_AFTER_MS, now);
   }

@@ -11,14 +11,15 @@ import type { Portfolio } from "./index";
 import { options, start } from "./miniflare-fixtures";
 import { archiveSnapshot } from "./snapshot-fixtures";
 
-test("Investigate is opt-in, private and requires a capable runner on first claim and recovery", async () => {
+test("Investigate is private and requires a capable runner on first claim and recovery", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "projects-investigate-test-"));
   const script = path.join(dir, "worker.mjs");
-  const runner = "r".repeat(64), owner = "owner@example.com", other = "other@example.com";
+  const runner = "r".repeat(64), otherRunner = "s".repeat(64);
+  const owner = "owner@example.com", other = "other@example.com";
   const origin = "https://example.com", runnerId = randomUUID();
   await build({entryPoints: ["worker/index.ts"], bundle: true, format: "esm", platform: "browser", external: ["cloudflare:workers", "node:*"], outfile: script});
   const mf = await start(await options(script, dir, {
-    ALLOWED_EMAILS: [owner, other].join(","), OWNER_EMAIL: owner, RUNNER_TOKEN: runner,
+    ALLOWED_EMAILS: [owner, other].join(","), OWNER_EMAIL: owner, RUNNER_TOKEN: runner, LAPTOP_RUNNER_TOKEN: otherRunner,
   }));
   try {
     const ns = await mf.getDurableObjectNamespace("PORTFOLIOS");
@@ -34,9 +35,9 @@ test("Investigate is opt-in, private and requires a capable runner on first clai
     const get = (route: string, headers = signed) => mf.dispatchFetch(origin + route, {headers});
     const post = (route: string, data: unknown, headers: Record<string, string> = signed) =>
       mf.dispatchFetch(origin + route, {method: "POST", headers: {"Content-Type": "application/json", ...headers}, body: JSON.stringify(data)});
-    const claim = async (supports: boolean, lanes = ["standard"], activeRunIds: string[] = []) => {
+    const claim = async (supports: boolean, lanes = ["standard"], activeRunIds: string[] = [], bearer = runner) => {
       const response = await post("/api/runner/claim", {runnerId, lanes, activeRunIds}, {
-        Authorization: `Bearer ${runner}`, ...(supports ? {[INVESTIGATE_HEADER]: "1"} : {}),
+        Authorization: `Bearer ${bearer}`, ...(supports ? {[INVESTIGATE_HEADER]: "1"} : {}),
       });
       assert.equal(response.status, 200);
       return (await response.json() as {run: Run | null}).run;
@@ -72,6 +73,24 @@ test("Investigate is opt-in, private and requires a capable runner on first clai
     assert.equal((await claim(false))?.id, standard.requestId, "a reserved investigation does not stop ordinary claims");
     assert.equal((await claim(true, ["standard"], [standard.requestId]))?.id, input.requestId);
     assert.equal((await store.getRun(standard.requestId))?.lane, undefined);
+
+    // The earlier machine can offer Investigate even when it lacks this repository.
+    // A later machine with the repository must still be able to claim it.
+    const laptop = archiveSnapshot("laptop");
+    const projectId = "acme/other";
+    await store.publish({...laptop, projects: [{...laptop.projects[0], id: projectId}]});
+    const otherRequest = {...input, requestId: randomUUID(), projectId, screenshots: []};
+    assert.equal((await post("/api/runs", otherRequest)).status, 200);
+    assert.equal(await claim(true, ["standard"], [standard.requestId, input.requestId]), null);
+    const laptopClaim = await claim(true, ["standard"], [], otherRunner);
+    assert.equal(laptopClaim?.id, otherRequest.requestId);
+    assert.equal(laptopClaim?.host, "laptop");
+
+    await store.publish({...laptop, collectedAt: laptop.collectedAt + 1});
+    const shared = {...input, requestId: randomUUID(), screenshots: []};
+    assert.equal((await post("/api/runs", shared)).status, 200);
+    assert.equal(await claim(true, ["standard"], [otherRequest.requestId], otherRunner), null);
+    assert.equal((await claim(true, ["standard"], [standard.requestId, input.requestId]))?.id, shared.requestId);
   } finally {
     await mf.dispose();
     await rm(dir, {recursive: true, force: true});

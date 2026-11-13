@@ -2,9 +2,8 @@
 
 Projects is a private site you run on your own Cloudflare account. It shows your
 repositories and lets you start conversations from a phone or desktop. The
-actual work runs on one or more machines you own: a master agent hands each
-task to Claude Code or Codex sessions there, and those sessions use your own
-logins and subscriptions. The site never holds a GitHub, model or mailbox credential.
+work runs on machines you own, using your Claude Code or Codex logins and
+subscriptions. The site never holds a GitHub, model or mailbox credential.
 
 This repository receives one commit per release. Nothing in it names a
 deployment: your copy supplies its own values below. It is MIT licensed.
@@ -275,8 +274,10 @@ away. The services need you logged in after a restart.
 ## 6. Use it
 
 Open your site, sign in with an allowlisted address, and start a conversation.
-In the composer choose Claude as the master once; the site remembers it on each
-device, and a machine without Codex runs Claude regardless. Conversations carry
+The owner's default mode is **Investigate**. Select a repository to start one
+read-only session on a machine with a compatible Claude runner. Choose
+**Standard** for live checks and changes. Its Claude master setting is saved
+per device, and a machine without Codex uses Claude. Conversations carry
 the name of whoever started them, and Today lists yours until you switch it to
 everyone's; conversations from before profiles existed are the owner's
 (`PROJECTS_OWNER_EMAIL`). A conversation's machine is told whose it is: its

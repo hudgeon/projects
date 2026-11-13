@@ -92,9 +92,11 @@ export function Composer({
     [agent, setAgent] = useState<RunInput["agent"]>("auto"),
     [masterAgent, setMasterAgent] = useState<Agent>(savedMaster),
     [issue, setIssue] = useState(initialIssue ? String(initialIssue) : ""),
-    [lane, setLane] = useState<Lane>(initialLane),
+    [chosenLane, setLane] = useState<Lane>(),
     [options, setOptions] = useState(false);
+  const lane = mayInvestigate ? chosenLane ?? "investigate" : chosenLane === "quick" ? "quick" : initialLane;
   const investigating = lane === "investigate";
+  const investigateHelp = React.useId();
   const images = useScreenshots();
   const field = useRef<HTMLTextAreaElement>(null);
   // An ambiguous network response must not create a second conversation.
@@ -121,7 +123,7 @@ export function Composer({
           ? [words || "Review the attached screenshots.", context.detail].join("\n\n")
           : words || "Review the attached screenshots.",
         screenshots: images.images,
-        projectId: projectId || null,
+        projectId: project?.id ?? null,
         agent: investigating ? "claude" : agent,
         ...(investigating || masterAgent === "claude" ? { masterAgent: "claude" } : {}),
         workIssue: issue ? Number(issue) : null,
@@ -139,7 +141,7 @@ export function Composer({
     onSuccess: async (result) => {
       attempt.current = null;
       setText("");
-      setLane(initialLane);
+      setLane(undefined);
       images.clear();
       client.setQueryData(["run", result.run.id], result);
       onStarted?.(result.run);
@@ -160,16 +162,35 @@ export function Composer({
       !isArchived(archives, { kind: "project", projectId: p.id }),
   );
   const issues = currentWork(snapshots)?.issues.filter((i) => i.open) ?? [];
+  const project = projects.find((p) => p.id === projectId);
+  const repository = (
+    <label>
+      Repository
+      <select
+        value={project?.id ?? ""}
+        onChange={(e) => setProjectId(e.target.value)}
+        disabled={create.isPending}
+        required={investigating}
+      >
+        <option value="">{investigating ? "Choose a repository" : "Let Projects choose"}</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   const chosen = [
-    projects.find((p) => p.id === projectId)?.name,
+    !mayInvestigate && project?.name,
     issue ? (issues.find(i => i.number === Number(issue))?.title ?? `Work #${issue}`) : "",
     investigating ? "" : agent === "auto" ? "" : agent === "codex" ? "Codex" : "Claude",
     !investigating && masterAgent === "claude" ? "Claude master" : "",
-    investigating ? "Investigate" : lane === "quick" ? "Quick" : "",
+    !mayInvestigate && lane === "quick" ? "Quick" : "",
   ].filter(Boolean);
   const ready =
     (!!text.trim() || !!images.images.length) &&
-    (!investigating || !!projectId) &&
+    (!investigating || !!project) &&
     enabled &&
     !create.isPending &&
     !images.busy;
@@ -201,37 +222,27 @@ export function Composer({
         }
       />
       <ScreenshotPreviews draft={images} disabled={create.isPending} />
-      {options && (
+      {mayInvestigate && (
         <div className="composer-fields">
-          {mayInvestigate && (
-            <label>
-              Mode
-              <select
-                value={lane}
-                onChange={(e) => setLane(e.target.value as Lane)}
-                disabled={create.isPending}
-              >
-                <option value="standard">Standard</option>
-                <option value="investigate">Investigate</option>
-                <option value="quick">Quick task</option>
-              </select>
-            </label>
-          )}
           <label>
-            Repository
+            Mode
             <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
+              value={lane}
+              onChange={(e) => setLane(e.target.value as Lane)}
               disabled={create.isPending}
+              aria-describedby={investigating ? investigateHelp : undefined}
             >
-              <option value="">{investigating ? "Choose a repository" : "Let Projects choose"}</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              <option value="investigate">Investigate</option>
+              <option value="standard">Standard</option>
+              <option value="quick">Quick task</option>
             </select>
           </label>
+          {repository}
+        </div>
+      )}
+      {options && (
+        <div className="composer-fields">
+          {!mayInvestigate && repository}
           {!investigating && <label>
             Master
             <select
@@ -286,7 +297,7 @@ export function Composer({
         </div>
       )}
       {investigating && (
-        <p className="subtle">One read-only Claude session uses the selected repository, linked work record and attachments.</p>
+        <p id={investigateHelp} className="subtle">One read-only Claude session. Choose Standard for live checks or changes.</p>
       )}
       <div className="composer-bar">
         <ScreenshotButtons draft={images} disabled={create.isPending} />
