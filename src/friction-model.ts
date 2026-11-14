@@ -65,7 +65,7 @@ export const FRICTION_DAYS = 14;
 // Session weight: the tokens a session's first model call carried (its start)
 // and the most any call carried (its peak), as medians over the sessions of
 // one app and one source, the way a session was launched. "all" is every
-// measured session of the app.
+// measured session of the app, scripted runs included.
 export const WEIGHT_SOURCES = {
   desktop: "desktop app",
   cli: "command line",
@@ -75,6 +75,14 @@ export const WEIGHT_SOURCES = {
   all: "all sessions",
 } as const;
 export type WeightSource = keyof typeof WEIGHT_SOURCES;
+// Whether a session's client, as its transcript names it, is a desktop app or
+// an interactive terminal (Claude Code's `cli`, the Codex TUI). Scripted runs
+// (`claude -p`, the SDKs, `codex exec`) and other clients are neither.
+export function clientKind(client: unknown): "desktop" | "cli" | undefined {
+  if (typeof client !== "string") return undefined;
+  if (/desktop/i.test(client)) return "desktop";
+  return ["cli", "codex-tui", "codex_cli_rs"].includes(client) ? "cli" : undefined;
+}
 export const WEIGHT_KEYS = Object.keys(WEIGHT_SOURCES) as WeightSource[];
 const weightRow = {
   app: frictionAppSchema,

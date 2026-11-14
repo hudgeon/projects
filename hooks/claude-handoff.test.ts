@@ -11,7 +11,7 @@ const row = (sessionId: string, tokens: number, entrypoint = "claude-desktop", i
     input_tokens: 1, cache_creation_input_tokens: 1_000, cache_read_input_tokens: tokens - 1_001,
   } } }) + "\n";
 
-test("Claude Desktop advises a handoff before the 150k target and keeps the user's association", async (t) => {
+test("an interactive Claude session advises a handoff before the 150k target and keeps the user's association", async (t) => {
   const home = await realpath(await mkdtemp(path.join(tmpdir(), "claude-handoff-")));
   t.after(() => rm(home, { recursive: true, force: true }));
   const folder = path.join(home, ".claude", "projects", "fixture");
@@ -28,9 +28,14 @@ test("Claude Desktop advises a handoff before the 150k target and keeps the user
   assert.match(advised[0].hookSpecificOutput!.additionalContext, /leave this session untracked[\s\S]*read-only request/);
   assert.equal((await handleHook(input, "Claude", home)).systemMessage, undefined);
   assert.equal((await readAssociations(home)).associations.length, 2);
+  // A terminal session is advised as the desktop app's is.
+  const cli = path.join(folder, "cli.jsonl");
+  await writeFile(cli, row("cli", 150_000, "cli"));
+  const terminal = await handleHook({ ...input, session_id: "cli", transcript_path: cli }, "Claude", home);
+  assert.match(terminal.systemMessage ?? "", /150k context target/);
 });
 
-test("the handoff hook skips CLI, invalid transcript paths and pre-compaction usage", async (t) => {
+test("the handoff hook skips -p and SDK runs, invalid transcript paths and pre-compaction usage", async (t) => {
   const home = await realpath(await mkdtemp(path.join(tmpdir(), "claude-handoff-")));
   t.after(() => rm(home, { recursive: true, force: true }));
   const folder = path.join(home, ".claude", "projects", "fixture");
@@ -45,8 +50,10 @@ test("the handoff hook skips CLI, invalid transcript paths and pre-compaction us
   await symlink(outside, transcript);
   assert.equal(await check(transcript), undefined);
   await rm(transcript);
-  await writeFile(transcript, row("desktop", 180_000, "cli"));
-  assert.equal(await check(transcript), undefined);
+  for (const scripted of ["sdk-cli", "sdk-ts", "sdk-py"]) {
+    await writeFile(transcript, row("desktop", 180_000, scripted));
+    assert.equal(await check(transcript), undefined, scripted);
+  }
   await writeFile(transcript, row("desktop", 180_000) + JSON.stringify({ sessionId: "desktop", type: "system", subtype: "compact_boundary" }) + "\n" + row("desktop", 180_000).trimEnd());
   assert.equal(await check(transcript), undefined);
 });

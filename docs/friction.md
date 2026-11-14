@@ -43,8 +43,8 @@ and source, the way a session was launched:
 | desktop app | the session's client names a desktop app |
 | Projects coordinators, Projects helpers | the runner's journal named the session as one; kept on the receipt once seen, since a journal forgets a coordinator that handed over |
 | Projects, role not recorded | a Codex session the runner started that no journal named while the collector looked |
-| command line | everything else, scripted `-p` runs included |
-| all sessions | every measured session of the app |
+| command line | an interactive terminal session: Claude Code's `cli` client, the Codex TUI (`codex-tui`, formerly `codex_cli_rs`) |
+| all sessions | every measured session of the app, including scripted runs (`claude -p`, the SDKs, `codex exec`) and other clients, which have no row of their own |
 
 A session with no model call has no weight and is not in the medians. A
 session counts on the day of its last activity, as its friction does, so a
@@ -53,12 +53,13 @@ weight was read is counted again from the start of its transcript, within the
 scan's budget, so a machine's first hours on a new collector show medians of
 the sessions read so far.
 
-On the first Claude desktop prompt after a model call reaches 140,000 input
+On the first prompt of an interactive Claude Code session, desktop or terminal
+(never a `-p` or SDK run), after a model call reaches 140,000 input
 tokens, the installed work hook asks for a handoff at the next safe phase
 boundary. Use the existing issue, plan or worktree pointers to start a fresh
 Claude Code session for the next phase. A read-only task can leave its
 pointers in the reply. The notice is advisory and appears once per session.
-It uses the newest complete desktop usage record in a bounded local
+It uses the newest complete usage record in a bounded local
 transcript tail. An unavailable reading or a later compaction skips it. The
 warning leaves room before the 150,000-token target. One long turn can still
 cross that target before the next prompt.

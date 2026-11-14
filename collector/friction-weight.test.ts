@@ -34,8 +34,13 @@ test("a session's source is the runner's role for it, else what its client says"
   const source = (more: Partial<Receipt>) => weightSource(receipt("Claude", "a", now, null, more));
   assert.equal(source({ client: "claude-desktop" }), "desktop");
   assert.equal(source({ client: "Codex Desktop" }), "desktop");
-  assert.equal(source({ client: "sdk-cli" }), "cli", "a scripted run nobody's journal names");
-  assert.equal(source({}), "cli");
+  assert.equal(source({ client: "codex_work_desktop" }), "desktop");
+  assert.equal(source({ client: "cli" }), "cli", "Claude Code in a terminal");
+  assert.equal(source({ client: "codex-tui" }), "cli", "Codex in a terminal");
+  assert.equal(source({ client: "codex_cli_rs" }), "cli", "an older Codex in a terminal");
+  for (const other of ["sdk-cli", "sdk-ts", "codex_exec", "claude-vscode"])
+    assert.equal(source({ client: other }), undefined, `${other} is a scripted run or another client`);
+  assert.equal(source({}), undefined);
   assert.equal(source({ client: "sdk-cli", role: "helper" }), "helper");
   assert.equal(source({ client: "projects_runner", role: "coordinator" }), "coordinator");
   assert.equal(source({ client: "projects_runner" }), "projects", "the runner's, its role no longer on record");
@@ -46,6 +51,9 @@ test("weight is the median start and peak of measured sessions by day, app and s
       receipt("Claude", "a", now - hour, w(80_000, 300_000), { client: "claude-desktop" }),
       receipt("Claude", "b", now - 2 * hour, w(90_000, 100_000), { client: "claude-desktop" }),
       receipt("Claude", "c", now - 3 * hour, w(40_000, 60_000), { client: "sdk-cli", role: "helper" }),
+      receipt("Claude", "t", now - 4 * hour, w(30_000, 150_000), { client: "cli" }),
+      receipt("Claude", "p", now - 4 * hour, w(10_000, 20_000), { client: "sdk-cli" }),
+      receipt("Codex", "u", now - 24 * hour, w(15_000, 40_000), { client: "codex-tui" }),
       receipt("Claude", "unmeasured", now - hour, null, { client: "claude-desktop" }),
       receipt("Claude", "uncounted", now - hour, undefined, { client: "claude-desktop" }),
       receipt("Codex", "d", now - 24 * hour, w(20_000, 50_000), { client: "projects_runner", role: "coordinator" }),
@@ -59,23 +67,27 @@ test("weight is the median start and peak of measured sessions by day, app and s
     [
       ["2026-10-12", "Codex", "desktop", 1, 10_000, 500_000],
       ["2026-10-12", "Codex", "all", 1, 10_000, 500_000],
+      ["2026-10-19", "Codex", "cli", 1, 15_000, 40_000],
       ["2026-10-19", "Codex", "coordinator", 1, 20_000, 50_000],
-      ["2026-10-19", "Codex", "all", 1, 20_000, 50_000],
+      ["2026-10-19", "Codex", "all", 2, 17_500, 45_000],
       ["2026-10-20", "Claude", "desktop", 2, 85_000, 200_000],
+      ["2026-10-20", "Claude", "cli", 1, 30_000, 150_000],
       ["2026-10-20", "Claude", "helper", 1, 40_000, 60_000],
-      ["2026-10-20", "Claude", "all", 3, 80_000, 100_000],
+      ["2026-10-20", "Claude", "all", 5, 40_000, 100_000],
     ],
   );
   assert.deepEqual(
     weight.week.map((d) => [d.app, d.source, d.sessions]),
     [
       ["Claude", "desktop", 2],
+      ["Claude", "cli", 1],
       ["Claude", "helper", 1],
-      ["Claude", "all", 3],
+      ["Claude", "all", 5],
+      ["Codex", "cli", 1],
       ["Codex", "coordinator", 1],
-      ["Codex", "all", 1],
+      ["Codex", "all", 2],
     ],
-    "the session of eight days ago is in its day and not in the seven",
+    "the session of eight days ago is in its day and not in the seven; the scripted run is only in all",
   );
   assert.equal(weightLine(weight.week[0]), "Claude desktop app: start 85k, peak 200k (2 sessions)");
   const friction = { observedAt: now, versions: {}, days: [], weight, state: "ok", message: "" };
@@ -108,7 +120,8 @@ test("a scan measures sessions, keeps the runner's role for one, recounts receip
   const first = await collectFriction(home, ["claude"], now);
   assert.deepEqual(
     first.weight?.week.map((d) => [d.source, d.sessions, d.start, d.peak]),
-    [["cli", 1, 12_000, 12_000], ["helper", 1, 30_000, 70_000], ["all", 2, 21_000, 41_000]],
+    [["helper", 1, 30_000, 70_000], ["all", 2, 21_000, 41_000]],
+    "the scripted run nobody's journal names is only in all",
   );
   assert.deepEqual(JSON.parse(await readFile(weightFile(dir), "utf8")), { observedAt: now, ...first.weight });
   // The conversation moves on and its journal no longer names the helper.

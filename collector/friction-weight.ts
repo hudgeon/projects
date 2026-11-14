@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  clientKind,
   FRICTION_DAYS,
   utcDate,
   WEIGHT_KEYS,
@@ -30,13 +31,13 @@ export async function noteRoles(dir: string, home: string, receipts: Receipt[]) 
   }
 }
 // How a session was launched: by the runner (its journal's role, or the
-// client name its Codex sessions carry), from a desktop app, or otherwise
-// from a command line, which is where a session that names no client counts.
-export function weightSource(receipt: Receipt): Exclude<WeightSource, "all"> {
+// client name its Codex sessions carry), from a desktop app or in an
+// interactive terminal. A scripted run or another client has no source of its
+// own and counts only in "all".
+export function weightSource(receipt: Receipt): Exclude<WeightSource, "all"> | undefined {
   if (receipt.role) return receipt.role;
-  const client = receipt.client ?? "";
-  if (client === "projects_runner") return "projects";
-  return /desktop/i.test(client) ? "desktop" : "cli";
+  if (receipt.client === "projects_runner") return "projects";
+  return clientKind(receipt.client);
 }
 const median = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b),
@@ -47,6 +48,7 @@ function rows(receipts: Receipt[]): WeightRow[] {
   const groups = new Map<string, Receipt[]>();
   for (const receipt of receipts)
     for (const source of [weightSource(receipt), "all"] as const) {
+      if (!source) continue;
       const key = `${receipt.app}|${source}`;
       groups.set(key, [...(groups.get(key) ?? []), receipt]);
     }
